@@ -433,9 +433,9 @@ class NLLBBackend(InferenceBackend):
                 else ""
             )
             in_tok = (
-                len(batch.input_ids[i])
-                if hasattr(batch, 'input_ids') and i < len(batch.input_ids)
-                else 0
+                int(batch.attention_mask[i].sum().item())
+                if hasattr(batch, 'attention_mask') and i < len(batch.attention_mask)
+                else (len(batch.input_ids[i]) if hasattr(batch, 'input_ids') and i < len(batch.input_ids) else 0)
             )
 
             generations.append(GenerationOutput(
