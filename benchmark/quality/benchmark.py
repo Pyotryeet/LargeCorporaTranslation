@@ -225,40 +225,13 @@ def _build_batch(
                     )
 
             if prompt is None and strategy in (None, "structured"):
-                # strategy is None → probing fallback from above
-                # strategy is "structured" → cached but failed *this* time; fall through
-                try:
-                    # Fall back to plain-text prompt (works with SmolLM, LLaMA, etc.).
-                    fallback_msgs = [{
-                        "role": "user",
-                        "content": f"Translate the following English text to Turkish. "
-                                   f"Output only the translation, nothing else:\n\n{text}",
-                    }]
-                    result = tokenizer.apply_chat_template(
-                        fallback_msgs, tokenize=False, add_generation_prompt=True,
-                    )
-                    prompt = result if isinstance(result, str) else "".join(result)
-                    if strategy is None:
-                        strategy = "plain"
-                        _strategy_cache[cache_key] = strategy
-                        logger.debug(
-                            "Translation prompting: plain-text template succeeded "
-                            "(structured unavailable)"
-                        )
-                except Exception as exc:
-                    if strategy is None:
-                        strategy = "raw"
-                        _strategy_cache[cache_key] = strategy
-                        logger.warning(
-                            "Translation prompting: all chat templates failed for "
-                            "tokenizer %s (%s) — using raw EN→TR prefix. "
-                            "This may produce poor translations.",
-                            type(tokenizer).__name__, exc, exc_info=True,
-                        )
-
-            if prompt is None:
-                # Last resort: no template wrapping.
+                # Structured template failed — use plain text prefix directly.
+                # SmolLM2 (GPT2TokenizerFast) cannot handle list-of-dict "content"
+                # in Jinja templates. Skip the second chat template attempt entirely.
                 prompt = f"Translate English to Turkish:\n{text}"
+                if strategy is None:
+                    strategy = "plain"
+                    _strategy_cache[cache_key] = strategy
 
             prompted_sources.append(prompt)
     else:
