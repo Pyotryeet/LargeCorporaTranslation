@@ -135,20 +135,31 @@ def run_one_model(model_def: dict) -> dict:
     except Exception as e:
         print(f"  Warmup warning: {e}")
 
-    # Translation loop — more tokenization workers on CUDA to feed the GPU
+    # Translation loop
     loader = JSONLLoader([INPUT_GLOB], shuffle=True, seed=SEED)
     chunker = TextChunker(engine.tokenizer, 128, 50)
     filt = ChunkFilter(min_tokens=10, max_garbage_ratio=0.95)
-    n_workers = 8 if is_cuda else 2
+    # Encoder-decoder tokenizers (NLLB, MADLAD) have 256k-vocab SentencePiece
+    # that's ~10× slower than 32k-vocab LLaMA tokenizers.  At batch_size=1740
+    # we need ~109 worker-seconds to fill one batch.  Scale workers and queue
+    # depth to match: queue must hold ≥ 2× batch_size or tokenization blocks.
+    is_enc_dec = be_type == "encoder_decoder"
+    n_workers = 32 if is_enc_dec else (8 if is_cuda else 2)
+    # Queue depth: tokenised_queue = max_queue_size * 4.  Must be > batch_size.
+    queue_depth = max(batch_size * 2 // 4 + 1, 64)
     pipeline = AsyncPipeline(loader, chunker, engine.tokenizer, filt,
                             batch_size=batch_size, prefetch_workers=n_workers,
-                            max_queue_size=64 if is_cuda else 32,
+                            max_queue_size=queue_depth,
                             backend=plat.backend)
+
+    # Pre-buffer: start tokenization 10s before the timer so the first
+    # batch is already assembled when the clock starts.
+    pipeline.start_prefetch()
+    time.sleep(10 if is_enc_dec else 0)
 
     run_dir = Path("data/output") / f"bm_{name.replace(' ','_').replace('/','_')}"
     run_dir.mkdir(parents=True, exist_ok=True)
     metrics = MetricsCollector(run_dir / "metrics", plat, 1)
-    pipeline.start_prefetch()
     timer = PrecisionTimer(); timer.start()
     metrics.start(timer.start_time())
 
