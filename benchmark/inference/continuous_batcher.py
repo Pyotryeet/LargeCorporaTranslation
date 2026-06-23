@@ -69,7 +69,11 @@ from benchmark.config.constants import END_OF_TURN_TOKEN_ID
 logger = logging.getLogger(__name__)
 
 # ── Activation thresholds ────────────────────────────────────────────────────
-MIN_BATCH_SIZE_FOR_CONTINUOUS = 8  # below this, static batching is faster
+# Continuous batching activates at batch >= 2 so small workloads benefit from
+# dynamic scheduling.  Chunked prefill (batched padding) is only used at batch >= 4;
+# below that, single-sequence prefill avoids padding waste.
+MIN_BATCH_SIZE_FOR_CONTINUOUS = 2  # activate continuous batching at 2
+MIN_BATCH_FOR_CHUNKED_PREFILL = 4  # only batch-pad prefills at 4+ sequences
 
 
 @dataclass
@@ -124,7 +128,12 @@ class ContinuousBatcher:
         # ── Batch order: seq IDs in the order they appear in the batch ──
         # This eliminates the dict-iteration-order bug — we always build
         # batch tensors from this list, not from _running.values().
+        #
+        # Set-based companion for O(1) membership and atomic rollback.
+        # The list is the authoritative ordering; the set is a fast
+        # membership check used during removal and rollback.
         self._active_order: list[int] = []
+        self._active_set: set[int] = set()
 
         # ── Sequence ID counter ──
         self._next_seq_id: int = 0
@@ -194,12 +203,27 @@ class ContinuousBatcher:
                 new_seqs.append(seq)
 
             t0 = time.monotonic()
-            self._prefill_batch(new_seqs)
-            self.total_prefill_ms += (time.monotonic() - t0) * 1000.0
+            try:
+                self._prefill_batch(new_seqs)
+                self.total_prefill_ms += (time.monotonic() - t0) * 1000.0
+            except Exception:
+                # ── Atomic rollback on prefill failure ──
+                # Free any KV blocks that were allocated for sequences
+                # that succeeded before the failure.  Re-enqueue all
+                # new_seqs to _waiting so they can be retried later.
+                for seq in new_seqs:
+                    try:
+                        self._paged_kv.free(seq.seq_id)
+                    except KeyError:
+                        pass  # block was never allocated — fine
+                    seq.current_position = 0
+                    self._waiting.insert(0, seq)
+                raise
 
             for seq in new_seqs:
                 self._running[seq.seq_id] = seq
                 self._active_order.append(seq.seq_id)
+                self._active_set.add(seq.seq_id)
 
         if not self._running:
             return []
@@ -246,18 +270,17 @@ class ContinuousBatcher:
         # ── 4a. Remove completed sequences ──
         for seq_id in completed_ids:
             self._running.pop(seq_id, None)
-            self._active_order.remove(seq_id)
+            self._active_set.discard(seq_id)
             # Free paged blocks immediately.
             self._paged_kv.free(seq_id)
-
-        # ── 4b. Rebuild PagedCache only when completions changed _active_order ──
-        # When new sequences joined, _prefill_batch already rebuilt the
-        # PagedCache.  We only need to rebuild here when sequences completed
-        # and were removed from _active_order (size/composition changed).
-        # Rebuilding unconditionally wastes GPU time and allocator pressure.
+            # Incrementally drop from PagedCache (avoids full rebuild).
+            self._paged_cache.remove_sequence(seq_id)
         if completed_ids:
-            from benchmark.inference.paged_attention import PagedCache
-            self._paged_cache = PagedCache(self._paged_kv, list(self._active_order))
+            # Rebuild _active_order without the completed seq_ids (list
+            # comprehension preserves order of survivors for determinism).
+            completed_set = set(completed_ids)
+            self._active_order = [sid for sid in self._active_order
+                                  if sid not in completed_set]
 
         return newly_completed
 
@@ -341,6 +364,9 @@ class ContinuousBatcher:
         With PagedKVCache, each sequence gets its own blocks — no padding
         to a shared max length, no KV concatenation.  The PagedCache handles
         variable-length sequences natively.
+
+        Raises on any failure — the caller (``step()``) is responsible for
+        atomic rollout of ``_running`` / ``_active_order`` / ``_active_set``.
         """
         from benchmark.inference.paged_attention import PagedCache
 
@@ -348,14 +374,13 @@ class ContinuousBatcher:
             return
 
         n_new = len(sequences)
-        device = self.device
 
         # ── Prefill each sequence individually ──
         # Batching prefills would require padding prompts to the same length,
         # which defeats the purpose of paged memory.  Individual prefill is
         # slightly slower for latency but saves memory and simplifies block
-        # management.  When n_new >= 4, we batch by padding.
-        if n_new >= 4:
+        # management.  Batched padding only above MIN_BATCH_FOR_CHUNKED_PREFILL.
+        if n_new >= MIN_BATCH_FOR_CHUNKED_PREFILL:
             self._prefill_batch_padded(sequences)
         else:
             for seq in sequences:
@@ -428,7 +453,8 @@ class ContinuousBatcher:
                     )
         except Exception:
             # Prefill failure — free blocks allocated so far in this batch
-            # to prevent paged-block leak.
+            # to prevent paged-block leak, then re-raise so the caller
+            # (step()) can atomically roll back _running / _active_order.
             for sid in allocated_ids:
                 self._paged_kv.free(sid)
             raise
@@ -490,10 +516,16 @@ class ContinuousBatcher:
         device = self.device
 
         # ── Validate consistency between _active_order and _running ──
-        active_set = set(self._active_order)
+        # Use the pre-maintained _active_set instead of building on every call.
+        active_set = self._active_set
         running_set = set(self._running.keys())
         only_in_active = active_set - running_set
         only_in_running = running_set - active_set
+        # Defensive: _active_set and _active_order must agree on membership.
+        assert len(active_set) == len(self._active_order), (
+            f"_active_set ({len(active_set)}) and _active_order "
+            f"({len(self._active_order)}) diverged — scheduler bug"
+        )
         if only_in_active:
             raise RuntimeError(
                 f"ContinuousBatcher state corruption: seq_ids {only_in_active} "
@@ -560,6 +592,7 @@ class ContinuousBatcher:
                 drained.append(seq)
                 self._paged_kv.free(seq_id)
         self._active_order.clear()
+        self._active_set.clear()
         self._paged_cache = None
         return drained
 

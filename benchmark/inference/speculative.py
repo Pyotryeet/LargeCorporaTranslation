@@ -314,6 +314,46 @@ def _expand_cache_for_batch_fn(past_kv, target_batch_size: int):
     return cache
 
 
+def _safe_crop_kv(past_kv, target_length: int):
+    """Crop a KV-cache to *target_length* sequence positions.
+
+    Falls back to manual tensor slicing when ``.crop()`` is unavailable
+    (pre-4.45 transformers, tuple-of-tuples from tiny test models, etc.)
+    instead of a costly full-model re-forward.
+    """
+    try:
+        from transformers.cache_utils import DynamicCache
+    except ImportError:
+        DynamicCache = None
+
+    # DynamicCache with .crop() support (transformers >= 4.45)
+    if DynamicCache is not None and isinstance(past_kv, DynamicCache):
+        past_kv.crop(target_length)
+        return past_kv
+
+    # Tuple-of-tuples: ((k0,v0), (k1,v1), ...) — older transformers or
+    # tiny test models.  Manually slice each (k,v) to [..., :target_length, :].
+    if isinstance(past_kv, tuple) and len(past_kv) > 0 and isinstance(past_kv[0], tuple):
+        cropped = tuple(
+            (k[..., :target_length, :], v[..., :target_length, :])
+            for k, v in past_kv
+        )
+        return cropped
+
+    # EncoderDecoderCache — crop only the self-attention cache, leaving
+    # cross-attention KV intact.
+    if hasattr(past_kv, 'self_attention_cache') and past_kv.self_attention_cache is not None:
+        past_kv.self_attention_cache = _safe_crop_kv(
+            past_kv.self_attention_cache, target_length,
+        )
+        return past_kv
+
+    # Last resort: .crop() may exist on a custom object — try and let it
+    # raise if not available (caller still handles the exception).
+    past_kv.crop(target_length)
+    return past_kv
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # Self-Speculative Decoder — zero extra VRAM, always tokenizer-compatible
 # ═════════════════════════════════════════════════════════════════════════════
@@ -641,23 +681,11 @@ class SelfSpeculativeDecoder(SpeculativeDecoder):
                     # accepted tokens and use it as the new past_kv.  This
                     # avoids a wasteful full-model re-forward.
                     if n_accepted_this_round > 0:
-                        try:
-                            # Crop to prefill_len + accepted count.
-                            new_len = prefill_len + len(generated_ids)
-                            verify_kv.crop(new_len)
-                            past_kv = verify_kv
-                        except Exception:
-                            # Fallback: re-run on accepted tokens if crop fails.
-                            accepted_ids = generated_ids[-n_accepted_this_round:]
-                            accepted_t = torch.tensor(
-                                [accepted_ids], device=device, dtype=torch.long,
-                            )
-                            reforward_out = backend.model(
-                                input_ids=accepted_t,
-                                past_key_values=past_kv,
-                                use_cache=True,
-                            )
-                            past_kv = reforward_out.past_key_values
+                        # Crop verify_kv to only the accepted tokens — avoids
+                        # a wasteful full-model re-forward.  Falls back to
+                        # manual tensor slicing when .crop() is unavailable.
+                        new_len = prefill_len + len(generated_ids)
+                        past_kv = _safe_crop_kv(verify_kv, new_len)
 
                     if generated_ids and generated_ids[-1] == eos_id:
                         break
@@ -978,24 +1006,8 @@ class DraftModelSpeculativeDecoder(SpeculativeDecoder):
                     # Update KV-cache: crop verify output to only accepted
                     # tokens to prevent cache pollution from unaccepted drafts.
                     if n_accepted_this_round > 0:
-                        try:
-                            new_len = (
-                                seq_ids.shape[1] + len(generated_ids)
-                            )
-                            verify_kv.crop(new_len)
-                            past_kv = verify_kv
-                        except Exception:
-                            # Fallback: re-run on accepted tokens if crop fails.
-                            accepted_ids = generated_ids[-n_accepted_this_round:]
-                            accepted_t = torch.tensor(
-                                [accepted_ids], device=device, dtype=torch.long,
-                            )
-                            reforward_out = backend.model(
-                                input_ids=accepted_t,
-                                past_key_values=past_kv,
-                                use_cache=True,
-                            )
-                            past_kv = reforward_out.past_key_values
+                        new_len = seq_ids.shape[1] + len(generated_ids)
+                        past_kv = _safe_crop_kv(verify_kv, new_len)
 
                     if generated_ids and generated_ids[-1] == eos_id:
                         break
