@@ -24,20 +24,23 @@ KV_CACHE_KV_FACTOR = 2        # K + V tensors
 KV_CACHE_MAX_SEQ_LEN = 512
 KV_CACHE_HEAD_DIM = DEFAULT_HEAD_DIM  # per-head dimension, NOT hidden_size
 KV_CACHE_NUM_KV_HEADS = DEFAULT_NUM_KV_HEADS
-MEMORY_USABLE_FRACTION = 0.3
+MEMORY_USABLE_FRACTION = 0.75   # for GPU memory > 80 GB (H200-class)
+MEMORY_USABLE_FRACTION_SMALL = 0.30  # for GPU memory ≤ 80 GB
 DEFAULT_SAFETY_MARGIN = 0.15
-DEFAULT_MAX_CUDA = 256
+DEFAULT_MAX_CUDA = 2048          # H200-class: 2× 143 GB — go big
+DEFAULT_MAX_CUDA_SMALL = 128     # ≤ 80 GB GPU — conservative
 DEFAULT_MAX_MPS = 32
 DEFAULT_MAX_INPUT_TOKENS = 512
 TEST_SENTENCE_MULTIPLIER = 10
 TEST_GENERATION_TOKENS = 10
 PIN_MEMORY_BACKEND = "cuda"
 BYTES_PER_KB = 1024
-BYTES_PER_MB = BYTES_PER_KB * BYTES_PER_KB  # 1,048,576 — convert bytes → MB
+BYTES_PER_MB = BYTES_PER_KB * BYTES_PER_KB  # 1,048,576
 MIN_BATCH_SIZE = 1
 BINARY_SEARCH_DIVISOR = 2
 FALLBACK_PAD_TOKEN_ID = 0
 TRANSFORMERS_VERBOSITY_ERROR = "error"
+LARGE_GPU_THRESHOLD_GB = 80     # per-GPU threshold for "large" GPU
 
 # MPS OOM error class (exists in PyTorch 2.1-2.4, removed in 2.5+).
 # When absent, use a broader catch that handles RuntimeError variants
@@ -61,29 +64,79 @@ _MPS_OOM_MESSAGES = (
 class BatchSizeTuner:
     def __init__(self, safety_margin: float = DEFAULT_SAFETY_MARGIN, max_cuda: int = DEFAULT_MAX_CUDA, max_mps: int = DEFAULT_MAX_MPS):
         self.safety_margin = safety_margin
-        self.max_cuda = max_cuda
-        self.max_mps = max_mps
+        # max_cuda/max_mps are initial defaults; tune() may override for large GPUs.
+        self._default_max_cuda = max_cuda
+        self._default_max_mps = max_mps
 
     def tune(self, model: nn.Module, tokenizer, device: torch.device, backend: str, max_input_tokens: int = DEFAULT_MAX_INPUT_TOKENS) -> int:
-        cap = self.max_cuda if backend == "cuda" else self.max_mps
-
-        # ── Performance-model initial guess ──
+        # Detect per-GPU memory to classify GPU tier.
         if backend == "cuda":
             try:
-                total_mem = sum(
+                # Use the FIRST GPU's memory for tier detection (not total across GPUs).
+                # accelerate may split the model across GPUs, but KV-cache is per-GPU.
+                single_gpu_mem_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+                total_mem_gb = sum(
                     torch.cuda.get_device_properties(i).total_memory
                     for i in range(torch.cuda.device_count())
+                ) / (1024**3)
+            except (RuntimeError, torch.cuda.CudaError, AttributeError):
+                single_gpu_mem_gb = 0
+                total_mem_gb = 0
+
+            if single_gpu_mem_gb >= LARGE_GPU_THRESHOLD_GB:
+                # H200-class: 141 GB per GPU — use high cap, high memory fraction.
+                cap = DEFAULT_MAX_CUDA  # 2048
+                mem_frac = MEMORY_USABLE_FRACTION  # 0.75
+                logger.info(
+                    "Large GPU detected: %.0f GB per GPU (%.0f GB total) — "
+                    "batch cap=%d, memory fraction=%.0f%%",
+                    single_gpu_mem_gb, total_mem_gb, cap, mem_frac * 100,
                 )
+            else:
+                cap = DEFAULT_MAX_CUDA_SMALL  # 128
+                mem_frac = MEMORY_USABLE_FRACTION_SMALL  # 0.30
+                logger.info(
+                    "Standard GPU: %.0f GB per GPU — batch cap=%d, memory fraction=%.0f%%",
+                    single_gpu_mem_gb, cap, mem_frac * 100,
+                )
+
+            # ── Performance-model initial guess ──
+            # Try to read actual model config for accurate KV-cache estimate.
+            try:
+                cfg = getattr(model, "config", None)
+                n_layers = getattr(cfg, "num_hidden_layers", None) or getattr(cfg, "decoder_layers", None) or KV_CACHE_NUM_LAYERS
+                n_kv_heads = getattr(cfg, "num_key_value_heads", None) or getattr(cfg, "num_attention_heads", None) or KV_CACHE_NUM_KV_HEADS
+                h_dim = getattr(cfg, "head_dim", None) or getattr(cfg, "d_model", None)
+                if h_dim is None and hasattr(cfg, "hidden_size"):
+                    n_attn = getattr(cfg, "num_attention_heads", None) or n_kv_heads
+                    h_dim = cfg.hidden_size // max(n_attn, 1)
+                h_dim = h_dim or KV_CACHE_HEAD_DIM
+
+                kv_per_seq = (n_layers * KV_CACHE_KV_FACTOR *
+                              n_kv_heads * h_dim *
+                              KV_CACHE_MAX_SEQ_LEN * KV_CACHE_BYTES_PER_ELEM)
+                usable_mem = total_mem_gb * (1024**3) * mem_frac
+                est = int(usable_mem / kv_per_seq) if kv_per_seq > 0 else cap
+                cap = min(cap, max(est, MIN_BATCH_SIZE))
+                logger.info(
+                    "Performance model (from config): n_layers=%d n_kv_heads=%d head_dim=%d "
+                    "→ kv_per_seq=%.1fMB → est_cap=%d",
+                    n_layers, n_kv_heads, h_dim, kv_per_seq / BYTES_PER_MB, cap,
+                )
+            except Exception:
+                # Fallback to hardcoded defaults.
                 kv_per_seq = (KV_CACHE_NUM_LAYERS * KV_CACHE_KV_FACTOR *
                               KV_CACHE_NUM_KV_HEADS * KV_CACHE_HEAD_DIM *
                               KV_CACHE_MAX_SEQ_LEN * KV_CACHE_BYTES_PER_ELEM)
-                usable_mem = total_mem * MEMORY_USABLE_FRACTION
+                usable_mem = total_mem_gb * (1024**3) * mem_frac
                 est = int(usable_mem / kv_per_seq) if kv_per_seq > 0 else cap
                 cap = min(cap, max(est, MIN_BATCH_SIZE))
-                logger.info("Performance model: kv_per_seq=%.1fMB, est_cap=%d",
-                            kv_per_seq / BYTES_PER_MB, cap)
-            except (RuntimeError, torch.cuda.CudaError, AttributeError):
-                pass
+                logger.info(
+                    "Performance model (defaults): kv_per_seq=%.1fMB, est_cap=%d",
+                    kv_per_seq / BYTES_PER_MB, cap,
+                )
+        else:
+            cap = self._default_max_mps
 
         logger.info("Tuning batch size for %s (cap=%d, max_input=%d)", backend, cap, max_input_tokens)
 
