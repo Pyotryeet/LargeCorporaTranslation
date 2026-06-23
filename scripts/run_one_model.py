@@ -83,12 +83,16 @@ def run_one_model(model_def: dict) -> dict:
     t0 = time.monotonic()
 
     try:
+        is_enc_dec = be_type == "encoder_decoder"
         engine = InferenceEngine(
             model_path=path, tokenizer_path="",
             device_info=plat,
             decoding_params=DecodingParams(max_new_tokens=128, temperature=0.0),
             use_flash_attention=is_cuda,
-            use_torch_compile=is_cuda,  # CUDA: compile ON, MPS/CPU: OFF
+            # torch.compile pointless for encoder-decoder: model.generate()
+            # handles its own graph optimisation.  compile introduces
+            # shape-dependent recompilation stalls (minutes) at large batch.
+            use_torch_compile=is_cuda and not is_enc_dec,
             max_input_tokens=128,
             backend_type=be_type,
             extra=extra,

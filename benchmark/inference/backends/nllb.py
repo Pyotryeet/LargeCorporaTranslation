@@ -344,8 +344,16 @@ class NLLBBackend(InferenceBackend):
         ]
         warmup_texts = (base_texts * ((warmup_bs + 1) // 2))[:warmup_bs]
 
-        enc = self.tokenizer(warmup_texts, return_tensors="pt", padding=True,
-                             truncation=True, max_length=self.max_input_tokens).to(device)
+        # padding='max_length' forces every sequence to max_input_tokens (128),
+        # matching the exact (batch, max_length) shape torch.compile captured.
+        # Without this, padding=True pads to the longest text in the batch
+        # (~25 tokens for short warmup sentences), producing a different shape
+        # than production, which triggers a full recompile stall.
+        enc = self.tokenizer(
+            warmup_texts, return_tensors="pt",
+            padding="max_length",
+            truncation=True, max_length=self.max_input_tokens,
+        ).to(device)
 
         gen_kwargs = self._generate_kwargs()
         ws = time.monotonic()
