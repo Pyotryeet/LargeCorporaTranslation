@@ -149,12 +149,25 @@ def _build_batch(
         logger.warning("Could not determine model_type from engine: %s", e)
         mt = None
     if mt in ("encoder_decoder", "encoder-decoder"):
-        # Build simple "translate: source → target" prefixes.
-        # NLLB uses forced decoder language tokens set in generate(),
-        # so just tokenize source as-is with a translation prefix.
-        prompted_sources: list[str] = []
-        for text in sources:
-            prompted_sources.append(f"English: {text}\nTurkish:")
+        # Detect MADLAD-400 tokenizer: uses <2tr> prefix for target language.
+        _is_madlad = False
+        try:
+            _is_madlad = "<2tr>" in tokenizer.get_vocab()
+        except (AttributeError, TypeError):
+            pass
+
+        if _is_madlad:
+            # MADLAD-400: <2tr> prefix sets target language to Turkish.
+            prompted_sources: list[str] = [
+                f"<2tr> {text}" for text in sources
+            ]
+        else:
+            # Build simple "translate: source → target" prefixes.
+            # NLLB uses forced decoder language tokens set in generate(),
+            # so just tokenize source as-is with a translation prefix.
+            prompted_sources: list[str] = []
+            for text in sources:
+                prompted_sources.append(f"English: {text}\nTurkish:")
         enc = tokenizer(
             prompted_sources,
             padding=True,

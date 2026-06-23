@@ -493,14 +493,26 @@ class AsyncPipeline:
           Uses the tokenizer's native chat template to instruct the model
           that this is an en→tr translation task.
 
-        For encoder-decoder models (NLLB, M2M100):
-          Returns the raw text — the tokenizer is pre-configured with
-          ``src_lang`` and automatically prepends the language token
-          (e.g., ``eng_Latn The weather is nice.``).
+        For encoder-decoder models (NLLB, M2M100, MADLAD-400):
+          Returns the raw text with language-control prefix where needed.
+          NLLB/M2M100 tokenizers have ``src_lang`` set and handle the
+          language prefix automatically.  MADLAD-400 uses a ``<2tr>``
+          prefix token to indicate the target language.
         """
-        # NLLB / encoder-decoder: tokenizer handles language prefix via src_lang.
+        # NLLB / M2M100: tokenizer handles language prefix via src_lang.
         if hasattr(tokenizer, 'src_lang') and tokenizer.src_lang is not None:
             return text
+
+        # MADLAD-400: T5-based encoder-decoder.  Language is indicated by
+        # a ``<2xx>`` token prepended to the source text (ISO 639-2 code
+        # mapped to a T5 sentinel token).  ``<2tr>`` = Turkish.
+        # Detection: MADLAD's tokenizer has ``<2tr>`` in its vocabulary.
+        try:
+            vocab = tokenizer.get_vocab()
+            if "<2tr>" in vocab:
+                return "<2tr> " + text
+        except (AttributeError, TypeError):
+            pass
 
         # Decoder-only: try the translation chat template first.
         msgs = [{

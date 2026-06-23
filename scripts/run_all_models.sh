@@ -35,6 +35,8 @@ PYTHON_MODELS=(
     "nllb_600m"
     "nllb_1.3b"
     "nllb_3.3b"
+    "madlad_3b"
+    "madlad_10b"
     "smollm2"
     "translategemma"
 )

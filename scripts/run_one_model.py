@@ -193,7 +193,9 @@ def run_one_model(model_def: dict) -> dict:
             # Translate reference source texts
             from benchmark.quality.benchmark import _build_batch
             MB = type("_MiniBatch", (), {})
-            iids, amask, _ = _build_batch(srcs, engine.tokenizer, engine.devices[0])
+            iids, amask, _ = _build_batch(
+                srcs, engine.tokenizer, engine.devices[0], engine=engine,
+            )
             mb = MB(); mb.input_ids = iids; mb.attention_mask = amask
             mb.raw_texts = srcs; mb.batch_id = 0
             tres = engine.translate(mb)
@@ -373,6 +375,20 @@ if __name__ == "__main__":
             "path": "facebook/nllb-200-3.3B",
             "backend_type": "encoder_decoder",
             "extra": {"nllb_source_lang": "eng_Latn", "nllb_target_lang": "tur_Latn", "num_beams": 1},
+        },
+        # MADLAD-400 family (T5-based encoder-decoder, 450-language MT)
+        # Uses <2tr> prefix token for Turkish — added by pipeline, not forced_bos.
+        "madlad_3b": {
+            "name": "MADLAD-400-3B-MT",
+            "path": "google/madlad400-3b-mt",
+            "backend_type": "encoder_decoder",
+            "extra": {"num_beams": 1},
+        },
+        "madlad_10b": {
+            "name": "MADLAD-400-10B-MT",
+            "path": "google/madlad400-10b-mt",
+            "backend_type": "encoder_decoder",
+            "extra": {"num_beams": 1},
         },
         # Autoregressive (proven translators)
         "smollm2": {

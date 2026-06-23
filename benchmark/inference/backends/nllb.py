@@ -137,12 +137,17 @@ class NLLBBackend(InferenceBackend):
         self.precision_config = get_precision_config(self.backend_name)
         dtype = self.precision_config.master_dtype
 
-        # ── Tokenizer (with source language) ──
+        # ── Tokenizer (with source language for NLLB, plain for MADLAD) ──
+        _is_madlad = "madlad" in self.tokenizer_path.lower()
+        _tok_kwargs: dict = {"trust_remote_code": False, **_local_kwargs(self.tokenizer_path)}
+        if not _is_madlad:
+            # NLLB/M2M100: src_lang tells the tokenizer which language prefix
+            # to prepend (e.g., "eng_Latn").  MADLAD-400 uses explicit <2tr>
+            # prefix tokens added by the data pipeline instead.
+            _tok_kwargs["src_lang"] = self.src_lang
         self.tokenizer = AutoTokenizer.from_pretrained(
             self.tokenizer_path,
-            src_lang=self.src_lang,
-            trust_remote_code=False,
-            **_local_kwargs(self.tokenizer_path),
+            **_tok_kwargs,
         )
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token

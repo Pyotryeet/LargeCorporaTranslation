@@ -273,9 +273,11 @@ class ModelRegistry:
 
         name_lower = model_path.lower()
 
-        # ── Name-based heuristics: NLLB ──
-        if "nllb" in name_lower:
-            logger.info("NLLB encoder-decoder model detected via name: '%s'", model_path)
+        # ── Name-based heuristics: NLLB / MADLAD-400 ──
+        if "nllb" in name_lower or "madlad" in name_lower:
+            logger.info(
+                "Encoder-decoder model detected via name: '%s'", model_path,
+            )
             result = ModelType.ENCODER_DECODER
             _CONFIG_CACHE[cache_key] = result
             return result
