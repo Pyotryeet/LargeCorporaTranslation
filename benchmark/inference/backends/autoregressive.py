@@ -911,19 +911,59 @@ class AutoregressiveBackend(InferenceBackend):
         _MIN_USABLE_BYTES = 4 * 1024 ** 3  # smallest acceptable budget
 
         if self.backend_name == "cuda":
-            max_memory = {}
             n_devs = self.device_info.num_devices if self.device_info else 1
-            for i in range(n_devs):
-                total = torch.cuda.get_device_properties(i).total_memory
-                usable = max(int(total * GPU_MEMORY_BUDGET_FRACTION) - GPU_MEMORY_RESERVE_BYTES, _MIN_USABLE_BYTES)
-                max_memory[i] = usable  # integer bytes — accelerate 1.14+ requires this
-            self.model = AutoModelForCausalLM.from_pretrained(
-                self.model_path,
-                dtype=dtype, trust_remote_code=False,
-                low_cpu_mem_usage=True,
-                device_map="auto", max_memory=max_memory,
-                **_local_kwargs(self.model_path),
-            )
+
+            # ── Single-GPU vs multi-GPU dispatch ──
+            # device_map="auto" splits even a 1.7B-param model across 2 GPUs,
+            # adding NCCL cross-device overhead for every attention layer.
+            # For models that fit on one GPU, load onto a single device to
+            # eliminate per-layer NCCL communication (~10-20 % throughput tax).
+            _single_gpu = False
+            if n_devs > 1:
+                try:
+                    from transformers import AutoConfig as _AutoConfig
+                    _cfg = _AutoConfig.from_pretrained(
+                        self.model_path, trust_remote_code=False,
+                        **_local_kwargs(self.model_path),
+                    )
+                    _h = getattr(_cfg, "hidden_size", 0) or getattr(_cfg, "d_model", 2048)
+                    _n = getattr(_cfg, "num_hidden_layers", 0) or getattr(_cfg, "decoder_layers", 24)
+                    _v = getattr(_cfg, "vocab_size", 32000)
+                    # Rough param estimate: 12 × h² × n (Q/K/V/O × 4 × layers)
+                    _est_bytes = (12 * _h * _h * _n + _v * _h) * 2  # BF16
+                    single_gpu_mem = torch.cuda.get_device_properties(0).total_memory
+                    _single_gpu = _est_bytes < single_gpu_mem * 0.10  # < 10 % of GPU
+                    if _single_gpu:
+                        logger.info(
+                            "Single-GPU mode: model ~%.0f MB fits on one GPU "
+                            "(%.0f GB free)",
+                            _est_bytes / (1024**2), single_gpu_mem / (1024**3),
+                        )
+                except Exception:
+                    _single_gpu = False
+
+            if _single_gpu:
+                self.model = AutoModelForCausalLM.from_pretrained(
+                    self.model_path,
+                    torch_dtype=dtype, trust_remote_code=False,
+                    low_cpu_mem_usage=True,
+                    device_map=None,  # no sharding → single GPU
+                    **_local_kwargs(self.model_path),
+                )
+                self.model = self.model.to(self.devices[0])
+            else:
+                max_memory = {}
+                for i in range(n_devs):
+                    total = torch.cuda.get_device_properties(i).total_memory
+                    usable = max(int(total * GPU_MEMORY_BUDGET_FRACTION) - GPU_MEMORY_RESERVE_BYTES, _MIN_USABLE_BYTES)
+                    max_memory[i] = usable  # integer bytes — accelerate 1.14+ requires this
+                self.model = AutoModelForCausalLM.from_pretrained(
+                    self.model_path,
+                    torch_dtype=dtype, trust_remote_code=False,
+                    low_cpu_mem_usage=True,
+                    device_map="auto", max_memory=max_memory,
+                    **_local_kwargs(self.model_path),
+                )
         elif self.backend_name == "mps":
             # device_map={"": "mps"} (dict with STRING value) triggers
             # safetensors' safe_open(file, device="mps") which loads
