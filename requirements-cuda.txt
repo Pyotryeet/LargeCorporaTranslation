@@ -1,0 +1,14 @@
+# CUDA-specific dependencies (NVIDIA H200 production)
+# Install with: pip install -r requirements-cuda.txt
+# These require CUDA 12.4+ and are NOT compatible with Apple Silicon / MPS.
+
+# FP8 acceleration via Transformer Engine — NVIDIA Hopper (SM90) required
+# Build requires CPATH set to nvidia-* include dirs (see setup.sh).
+# Installed with: pip install transformer-engine[pytorch] --no-build-isolation
+transformer-engine[pytorch]>=2.14.0
+
+# GPU telemetry — nvidia-ml-py replaces the deprecated pynvml package
+nvidia-ml-py>=13.0
+
+# Fused attention kernels — CUDA-only, requires compute capability 8.0+
+flash-attn>=2.6.0

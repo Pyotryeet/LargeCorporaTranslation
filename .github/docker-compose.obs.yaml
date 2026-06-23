@@ -1,0 +1,58 @@
+# Docker Compose — TR Benchmark + Prometheus + Grafana observability stack.
+# Usage: docker-compose -f .github/docker-compose.obs.yaml up -d
+
+version: "3.8"
+
+services:
+  benchmark:
+    image: tr-benchmark:3.6
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 2
+              capabilities: [gpu]
+    volumes:
+      - ./data:/data
+      - ./config.yaml:/app/config.yaml:ro
+    command: ["--config", "/app/config.yaml"]
+    ipc: host
+    ulimits:
+      memlock: -1
+    ports:
+      - "9091:9090"    # Prometheus metrics from the benchmark
+    restart: "no"
+
+  prometheus:
+    image: prom/prometheus:v2.54.0
+    volumes:
+      - ./.github/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.enable-lifecycle'
+    ports:
+      - "9090:9090"
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_INSTALL_PLUGINS=grafana-clock-panel
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./.github/grafana/dashboard.json:/etc/grafana/provisioning/dashboards/tr_benchmark.json:ro
+      - ./.github/grafana/provisioning.yaml:/etc/grafana/provisioning/dashboards/default.yaml:ro
+    ports:
+      - "3000:3000"
+    restart: unless-stopped
+    depends_on:
+      - prometheus
+
+volumes:
+  prometheus_data:
+  grafana_data:

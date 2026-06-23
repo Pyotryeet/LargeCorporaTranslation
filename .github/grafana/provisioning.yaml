@@ -1,0 +1,27 @@
+# =============================================================================
+# Grafana Dashboard Provisioning for TR Benchmark
+# =============================================================================
+# Drop this file in /etc/grafana/provisioning/dashboards/
+# alongside a Prometheus datasource configured to scrape the benchmark's
+# :9090/metrics endpoint.
+#
+# Usage:
+#   1. Start Prometheus with tr_benchmark job:
+#      scrape_configs:
+#        - job_name: tr_benchmark
+#          static_configs:
+#            - targets: ['localhost:9090']
+#          scrape_interval: 2s
+#
+#   2. Start Grafana pointing to Prometheus.
+#   3. Import this dashboard via JSON or provisioning.
+# =============================================================================
+
+apiVersion: 1
+
+providers:
+  - name: TR Benchmark
+    folder: Translation
+    type: file
+    options:
+      path: /etc/grafana/dashboards/tr_benchmark.json

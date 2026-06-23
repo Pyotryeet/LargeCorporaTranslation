@@ -1,0 +1,55 @@
+# =============================================================================
+# Turkish Corpus Translation Benchmark — MPS / Local Development Configuration
+# =============================================================================
+# TranslateGemma 4B or Ministral 3B on Apple Silicon (MPS) or CUDA.
+#
+# The codebase handles model dispatch automatically:
+#   - MPS: BF16 native, direct-to-Metal weight loading via safetensors
+#   - CUDA: FP8 via Transformer Engine (default); falls back to BF16
+#   - Quantization: use the "quantization" field (bf16 | int8 | int4)
+#
+# Run modes:
+#   ./run.sh --dry-run                   60s smoke test
+#   ./run.sh --quick                     5-minute evaluation
+#   ./run.sh --full                      2-hour production
+#   ./run.sh --quantization int8         8-bit quantized model
+#   ./run.sh --model ministral-3b        Ministral 3B
+# =============================================================================
+
+backend: "auto"
+
+model:
+  model_path: "google/translategemma-4b-it"
+  tokenizer_path: ""
+  quantization: "bf16"           # bf16 (unquantized) | int8 | int4
+  max_input_tokens: 512
+  max_new_tokens: 512
+  temperature: 0.0               # Greedy decoding
+  do_sample: false
+  num_beams: 1
+  dtype: "auto"                  # auto on MPS → BF16, CUDA → BF16/FP8
+  tensor_parallel_size: 1        # Single GPU
+  use_flash_attention: true      # Flash SDPA on CUDA; native SDPA on MPS
+
+runtime:
+  target_duration_seconds: 7200  # 2 hours
+  checkpoint_interval_seconds: 300
+  heartbeat_interval_seconds: 10
+  metrics_sample_rate_hz: 1
+  seed: 42
+
+data:
+  input_paths:
+    - "./data/input/*.jsonl.gz"
+  output_dir: "./output"
+  reference_set_path: "./data/references/golden_en_tr.jsonl"
+  shard_size_mb: 100
+  prefetch_workers: 4
+  shuffle: true
+  min_chunk_tokens: 10
+  max_garbage_ratio: 0.95
+  chunk_overlap_tokens: 50
+
+extrapolation:
+  total_clearnet_non_tr_tokens: 6230000000000
+  gpu_cost_per_hour_usd: null

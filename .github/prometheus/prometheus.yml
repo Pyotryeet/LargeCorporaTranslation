@@ -1,0 +1,85 @@
+# =============================================================================
+# Prometheus scrape configuration for TR Benchmark
+# =============================================================================
+# Add this to your prometheus.yml scrape_configs section.
+#
+# The benchmark exposes metrics at localhost:9090/metrics when started with
+# --observability-port 9090.
+# =============================================================================
+
+scrape_configs:
+  - job_name: tr_benchmark
+    scrape_interval: 2s
+    scrape_timeout: 1s
+    static_configs:
+      - targets:
+          - 'localhost:9090'
+        labels:
+          service: 'tr-corpus-benchmark'
+          team: 'translation'
+
+  # For multi-node clusters, use file-based service discovery:
+  # - job_name: tr_benchmark_cluster
+  #   scrape_interval: 2s
+  #   file_sd_configs:
+  #     - files:
+  #         - '/etc/prometheus/tr_benchmark_targets.json'
+  #       refresh_interval: 30s
+
+# ── Alerting rules (add to rule_files in prometheus.yml) ────────────────
+
+groups:
+  - name: tr_benchmark_alerts
+    rules:
+      - alert: LowThroughput
+        expr: tr_benchmark_throughput_tokens_per_second < 10
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Throughput dropped below 10 tok/s"
+          description: "Current throughput: {{ $value }} tok/s"
+
+      - alert: HighDataStarvation
+        expr: tr_benchmark_data_starvation_percent > 30
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "GPU data starvation above 30%"
+          description: "GPU is idle {{ $value }}% of the time waiting for data"
+
+      - alert: HighGPUTemperature
+        expr: tr_benchmark_gpu_temperature_celsius > 85
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "GPU temperature critical ({{ $value }}°C)"
+          description: "Thermal throttling likely — check cooling"
+
+      - alert: GPUOutOfMemory
+        expr: (tr_benchmark_gpu_memory_used_bytes / tr_benchmark_gpu_memory_total_bytes) > 0.95
+        for: 30s
+        labels:
+          severity: critical
+        annotations:
+          summary: "GPU memory > 95% — OOM risk"
+          description: "GPU {{ $labels.device }} at {{ $value | humanizePercentage }}"
+
+      - alert: QualityRegression
+        expr: tr_benchmark_quality_comet < 0.65
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "COMET score dropped below 0.65"
+          description: "Translation quality may have degraded"
+
+      - alert: BenchmarkStalled
+        expr: rate(tr_benchmark_batches_total[5m]) == 0 and tr_benchmark_tokens_translated_total > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Benchmark appears stalled — no progress in 5 minutes"

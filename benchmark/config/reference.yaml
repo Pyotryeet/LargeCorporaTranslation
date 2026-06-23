@@ -1,0 +1,55 @@
+# =============================================================================
+# Turkish Corpus Translation Benchmark — Reference Configuration
+# =============================================================================
+# All parameters with their defaults and descriptions.
+# Copy this file and modify for your environment.
+
+# --- Backend selection ---
+# auto | cuda | mps | cpu
+# "auto" detects the best available backend at startup.
+backend: "auto"
+
+model:
+  # Path to TranslateGemma 4B checkpoint
+  # CUDA (H200): FP8 checkpoint
+  #   e.g., "kaitchup/translategemma-4b-it-FP8-Dynamic"
+  # MPS (Apple Silicon): BF16 checkpoint
+  #   e.g., "google/translategemma-4b-it"
+  model_path: "google/translategemma-4b-it"
+  tokenizer_path: ""              # Empty = use model_path's tokenizer
+  max_input_tokens: 512           # Max tokens per input chunk (1-4096)
+  max_new_tokens: 512             # Max tokens to generate per chunk (1-2048)
+  temperature: 0.0                # 0 = greedy decoding
+  do_sample: false                # False = deterministic greedy decode
+  num_beams: 1                    # 1 = no beam search
+  dtype: "auto"                   # auto | float8_e4m3fn | bfloat16 | float16 | float32
+  tensor_parallel_size: 1         # Single GPU (MPS/CPU)
+  use_flash_attention: true       # FlashAttention on CUDA; native SDPA on MPS
+  # Quantization: bf16 = unquantized, int8 = 8-bit bitsandbytes, int4 = 4-bit NF4
+  quantization: "bf16"
+
+runtime:
+  target_duration_seconds: 7200   # 2 hours (7200s)
+  checkpoint_interval_seconds: 300  # Save progress every 5 minutes
+  heartbeat_interval_seconds: 30  # Status line every 30 seconds
+  metrics_sample_rate_hz: 1       # Hardware metrics sampling frequency
+  seed: 42                        # Random seed for reproducibility
+
+data:
+  input_paths:
+    - "./data/input/sample_en_*.jsonl.gz"
+  output_dir: "./output"          # Root output directory
+  reference_set_path: "./data/references/golden_en_tr.jsonl"
+  shard_size_mb: 100              # Max output shard size
+  prefetch_workers: 4             # Background tokenisation threads
+  shuffle: true                   # Shuffle input documents
+  min_chunk_tokens: 10            # Minimum chunk size (tokens)
+  max_garbage_ratio: 0.95         # Max fraction of non-ASCII chars
+  chunk_overlap_tokens: 50        # Token overlap between chunks
+
+extrapolation:
+  # Total non-Turkish tokens in target corpus
+  # 6.23T is CulturaX non-TR tokens (conservative lower bound)
+  # FineWeb-scale corpora suggest up to ~15T
+  total_clearnet_non_tr_tokens: 6230000000000
+  gpu_cost_per_hour_usd: null     # Set to estimate compute cost (optional)

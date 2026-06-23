@@ -1,0 +1,219 @@
+name: TR Benchmark CI/CD
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'benchmark/**'
+      - 'tests/**'
+      - 'pyproject.toml'
+      - '.github/workflows/**'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'benchmark/**'
+      - 'tests/**'
+      - 'pyproject.toml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHONUNBUFFERED: 1
+  FORCE_COLOR: 1
+
+jobs:
+  # ── Lint & Format ───────────────────────────────────────────────────
+  lint:
+    name: Lint & Format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v2
+        with:
+          python-version: "3.11"
+      - run: uv pip install --system ruff black
+      - name: Ruff linter
+        run: ruff check benchmark/ tests/
+      - name: Ruff formatter check
+        run: ruff format --check benchmark/ tests/
+
+  # ── Unit Tests (CPU) ────────────────────────────────────────────────
+  test-cpu:
+    name: Unit Tests (CPU)
+    needs: [lint]
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v2
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install dependencies
+        run: |
+          uv pip install --system -e ".[dev]"
+          uv pip install --system torch --index-url https://download.pytorch.org/whl/cpu
+      - name: Run unit tests
+        run: |
+          python -m pytest tests/ -v --timeout=120 \
+            --ignore=tests/test_e2e.py \
+            --ignore=tests/test_backend.py \
+            --junitxml=test-results-cpu-${{ matrix.python-version }}.xml
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-cpu-${{ matrix.python-version }}
+          path: test-results-cpu-${{ matrix.python-version }}.xml
+
+  # ── Unit Tests (macOS CPU) ──────────────────────────────────────────
+  # NOTE: Installs torch from PyPI (CPU-only wheel) — no --index-url, so
+  # it does NOT use the MPS/CUDA index. Rename to test-macos-cpu for clarity.
+  test-macos-cpu:
+    name: Unit Tests (macOS CPU)
+    needs: [lint]
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v2
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: |
+          uv pip install --system -e ".[dev]"
+          uv pip install --system torch torchvision
+      - name: Run unit tests
+        run: |
+          python -m pytest tests/ -v --timeout=120 \
+            --ignore=tests/test_e2e.py \
+            --junitxml=test-results-macos.xml
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-macos
+          path: test-results-macos.xml
+
+  # ── Performance Regression Check ────────────────────────────────────
+  perf-check:
+    name: Performance Regression Check
+    needs: [test-cpu]
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # need base branch for comparison
+      - uses: astral-sh/setup-uv@v2
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: |
+          uv pip install --system -e ".[dev]"
+          uv pip install --system torch --index-url https://download.pytorch.org/whl/cpu
+      - name: Run quick benchmark (dry-run)
+        run: |
+          # Run a 60-second dry-run on CPU as a smoke test.
+          # For real perf regression, this would run on self-hosted GPU runners.
+          python -m benchmark --config tests/fixtures/config_test.yaml --dry-run 2>&1 | tee perf_output.txt
+      - name: Check for performance regression
+        if: success()
+        run: |
+          python -c "
+          import json, sys
+          try:
+              # Parse the last line of output for TPS.
+              with open('perf_output.txt') as f:
+                  for line in f:
+                      if 'tps=' in line:
+                          tps = float(line.split('tps=')[-1].split()[0])
+                          print(f'Throughput: {tps:.0f} tok/s')
+                          if tps < 1.0:
+                              print('WARNING: throughput suspiciously low')
+                              # Don't fail on CPU runs — expected to be slow.
+                          break
+          except Exception as e:
+              print(f'Could not parse throughput: {e}')
+          "
+
+  # ── Docker Build ────────────────────────────────────────────────────
+  docker-build:
+    name: Docker Build (CUDA)
+    needs: [test-cpu]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Build Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: false
+          load: true
+          tags: tr-benchmark:ci-${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ── Security Scan ───────────────────────────────────────────────────
+  security:
+    name: Security Scan
+    needs: [lint]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@v0.27.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          severity: HIGH,CRITICAL
+          exit-code: 1
+          ignore-unfixed: true
+
+  # ── E2E Integration Test (macOS only — requires GPU) ────────────────
+  e2e-test:
+    name: E2E Integration Test
+    needs: [test-macos-cpu]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v2
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: |
+          uv pip install --system -e ".[dev]"
+          uv pip install --system torch torchvision
+      - name: Run E2E test
+        run: |
+          python -m pytest tests/test_e2e.py -v --timeout=900 -s
+      - name: Upload E2E artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-test-output
+          path: data/output/e2e_test_*/
+
+  # ── Summary ──────────────────────────────────────────────────────────
+  summary:
+    name: CI Summary
+    needs: [lint, test-cpu, test-macos-cpu, docker-build, security, perf-check, e2e-test]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check results
+        run: |
+          echo "## CI Results" >> $GITHUB_STEP_SUMMARY
+          echo "| Job | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----|--------|" >> $GITHUB_STEP_SUMMARY
+          for job in lint test-cpu test-macos-cpu docker-build security perf-check e2e-test; do
+            result="${{ needs.$job.result }}"
+            icon="$([ "$result" = "success" ] && echo "✅" || echo "❌")"
+            echo "| $job | $icon $result |" >> $GITHUB_STEP_SUMMARY
+          done

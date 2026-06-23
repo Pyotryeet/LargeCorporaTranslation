@@ -1,0 +1,257 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": { "type": "grafana", "uid": "-- Grafana --" },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "liveNow": true,
+  "panels": [
+    {
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "id": 1,
+      "title": "Throughput (tok/s)",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "tr_benchmark_throughput_tokens_per_second",
+          "legendFormat": "throughput",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "tok/s",
+          "color": { "mode": "palette-classic" },
+          "custom": { "lineInterpolation": "smooth", "fillOpacity": 15 }
+        }
+      }
+    },
+    {
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "id": 2,
+      "title": "Tokens Translated",
+      "type": "stat",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "tr_benchmark_tokens_translated_total",
+          "legendFormat": "",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "blue", "value": null },
+              { "color": "green", "value": 1000000 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 8 },
+      "id": 3,
+      "title": "GPU Utilization (%)",
+      "type": "gauge",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "tr_benchmark_gpu_utilization_percent",
+          "legendFormat": "GPU {{device}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "orange", "value": 30 },
+              { "color": "green", "value": 70 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 8 },
+      "id": 4,
+      "title": "GPU Temperature (°C)",
+      "type": "gauge",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "tr_benchmark_gpu_temperature_celsius",
+          "legendFormat": "GPU {{device}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "celsius",
+          "min": 0,
+          "max": 100,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 70 },
+              { "color": "red", "value": 85 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 8 },
+      "id": 5,
+      "description": "GPU memory gauge using $max_memory template variable (default: 141 GiB for NVIDIA H200). Adjust $max_memory for other GPUs: e.g. A100=80, H100=80, B200=192.",
+      "title": "GPU Memory Used",
+      "type": "gauge",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "tr_benchmark_gpu_memory_used_bytes",
+          "legendFormat": "GPU {{device}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "decgbytes",
+          "min": 0,
+          "max": "$max_memory",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 100 },
+              { "color": "red", "value": 130 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "id": 6,
+      "title": "Batch Latency (ms)",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "rate(tr_benchmark_batch_latency_seconds_sum[1m]) / rate(tr_benchmark_batch_latency_seconds_count[1m]) * 1000",
+          "legendFormat": "p50 latency",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "custom": { "lineInterpolation": "smooth" }
+        }
+      }
+    },
+    {
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "id": 7,
+      "title": "Quality Scores",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "tr_benchmark_quality_bleu",
+          "legendFormat": "BLEU",
+          "refId": "A"
+        },
+        {
+          "expr": "tr_benchmark_quality_chrf",
+          "legendFormat": "chrF++",
+          "refId": "B"
+        },
+        {
+          "expr": "tr_benchmark_quality_comet * 100",
+          "legendFormat": "COMET×100",
+          "refId": "C"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "custom": { "lineInterpolation": "smooth" }
+        }
+      }
+    },
+    {
+      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 24 },
+      "id": 8,
+      "title": "Pipeline Health",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "tr_benchmark_data_starvation_percent",
+          "legendFormat": "Data starvation %",
+          "refId": "A"
+        },
+        {
+          "expr": "tr_benchmark_queue_depth",
+          "legendFormat": "Queue depth",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "lineInterpolation": "smooth", "fillOpacity": 10 }
+        }
+      }
+    }
+  ],
+  "refresh": "2s",
+  "schemaVersion": 38,
+  "style": "dark",
+  "tags": ["tr-benchmark", "translation", "turkey"],
+  "templating": {
+    "list": [
+      {
+        "current": { "selected": false, "text": "141", "value": "141" },
+        "hide": 0,
+        "label": "Max GPU Memory (GiB)",
+        "name": "max_memory",
+        "query": "141",
+        "skipUrlSync": false,
+        "type": "textbox"
+      }
+    ]
+  },
+  "time": { "from": "now-5m", "to": "now" },
+  "timepicker": {},
+  "timezone": "utc",
+  "title": "🇹🇷 TR Corpus Translation Benchmark",
+  "uid": "tr-benchmark-dashboard",
+  "version": 1,
+  "weekStart": ""
+}

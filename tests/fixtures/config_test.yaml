@@ -1,0 +1,19 @@
+backend: cpu
+data:
+  input_paths:
+  - /Users/baydogan/Documents/ComputerScience/Projects/H200Research/tests/fixtures/sample_input.jsonl
+  output_dir: /Users/baydogan/Documents/ComputerScience/Projects/H200Research/tests/fixtures/output
+  prefetch_workers: 1
+  reference_set_path: /Users/baydogan/Documents/ComputerScience/Projects/H200Research/tests/fixtures/golden_en_tr.jsonl
+  shuffle: false
+model:
+  dtype: float32
+  max_input_tokens: 128
+  max_new_tokens: 64
+  model_path: google/translategemma-12b-it
+  tensor_parallel_size: 0
+runtime:
+  checkpoint_interval_seconds: 30
+  heartbeat_interval_seconds: 5
+  seed: 42
+  target_duration_seconds: 60
