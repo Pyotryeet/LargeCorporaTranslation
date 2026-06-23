@@ -758,7 +758,18 @@ class AutoregressiveBackend(InferenceBackend):
         # inlined by inductor as part of the compiled graph.  If compile
         # runs first, the fused ops are injected into an already-compiled
         # model and each call incurs a graph break + dispatcher overhead.
-        if self._use_fused_kernels and self.backend_name == "cuda":
+        #
+        # SKIP when torch.compile is active — inductor's own Triton fusion
+        # pass (coordinated through torch._inductor) handles RMSNorm+residual
+        # and SwiGLU fusion natively, and manual kernel injection creates
+        # kernel compilation conflicts (NameError: tl is not defined) because
+        # the manually-injected Triton kernels use a different import path
+        # than inductor's own codegen.
+        if (
+            self._use_fused_kernels
+            and self.backend_name == "cuda"
+            and not self.use_torch_compile
+        ):
             self._inject_fused_kernels()
 
         # ── 8. torch.compile + max-autotune (EXTREME) ──
@@ -1245,14 +1256,21 @@ class AutoregressiveBackend(InferenceBackend):
         # On MPS short sequences create throwaway MPSGraph compilations that
         # waste IOAccelerator memory (3-5 GB) with no benefit.
         if self.backend_name != "mps":
+            # FP8 Transformer Engine requires leading tensor dims to be
+            # multiples of 8.  With batch=1 and a short warmup sentence
+            # (~12-20 tokens), the product 1×12=12 fails the constraint.
+            # Use batch=8 as a minimum so all warmup paths are FP8-compatible.
+            warmup_bs_short = 8 if self.backend_name == "cuda" else 1
             logger.info(
-                "AR warmup Phase 1: short sequences — warming CUDA allocator "
+                "AR warmup Phase 1: short sequences (bs=%d) — warming CUDA allocator "
                 "(kernel compilation, memory pool growth, cuBLAS autotuning). "
                 "Forward outputs are discarded; these passes exist only to drive "
-                "the CUDA stack into a steady state before measured work begins."
+                "the CUDA stack into a steady state before measured work begins.",
+                warmup_bs_short,
             )
             txt = "This is a warm-up sentence for translation benchmarking."
-            ids = self.tokenizer.encode(txt, return_tensors="pt").to(device)
+            ids_single = self.tokenizer.encode(txt, return_tensors="pt").to(device)
+            ids = ids_single.repeat(warmup_bs_short, 1)
             mask = torch.ones_like(ids).to(device)
             for _ in range(max(batches // 2, WARMUP_SHORT_BATCHES)):
                 with torch.no_grad(), self._fp8_context():
@@ -1267,6 +1285,11 @@ class AutoregressiveBackend(InferenceBackend):
         if self.backend_name == "mps":
             warmup_bs = max(warmup_bs, 1)
             n_iters = 2  # one compile + one verify — more adds no benefit on MPS
+        elif self.backend_name == "cuda":
+            # FP8 TE Linear: batch×seq must be multiple of 8.
+            # Floor to 8 for safety; the real batch (100+) is much larger.
+            warmup_bs = max(warmup_bs, 8)
+            n_iters = max(batches // 2, WARMUP_LONG_BATCHES)
         else:
             warmup_bs = 1
             n_iters = max(batches // 2, WARMUP_LONG_BATCHES)
