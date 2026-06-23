@@ -1,4 +1,15 @@
-"""Tests for tensor parallelism configuration."""
+"""Tests for tensor parallelism configuration.
+
+NOTE: These tests validate the TensorParallelConfig logic at the Python
+level. They intentionally use hardcoded tp_size values (1, 2) rather than
+probing the host's actual GPU count. This ensures the tests are deterministic
+and runnable on any machine — including single-GPU developer laptops and CI
+runners. Multi-GPU correctness is validated via logit-identity end-to-end
+tests on dedicated multi-GPU hardware, not in this file.
+
+The layer partition arithmetic, global attention layer selection, and KV-cache
+size estimation are independent of the number of physical GPUs available.
+"""
 
 from benchmark.hardware.parallelism import (
     TensorParallelConfig,

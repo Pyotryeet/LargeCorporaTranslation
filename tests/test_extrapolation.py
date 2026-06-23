@@ -107,3 +107,41 @@ class TestBootstrapExtrapolation:
         r2 = m.compute_bootstrap(tps_samples, n_bootstrap=500, seed=42)
         assert r1["bootstrap_days_lower"] == r2["bootstrap_days_lower"]
         assert r1["bootstrap_days_upper"] == r2["bootstrap_days_upper"]
+
+
+class TestExtrapolationEdgeCases:
+    """Edge case tests for extrapolation robustness."""
+
+    def test_tiny_token_count_still_computes(self):
+        """1 token total should produce finite (if tiny) estimates."""
+        m = ExtrapolationModel(total_tokens=1)
+        r = m.compute(mean_tps=1_000_000, std_tps=1, num_gpus=8, n_batches=100)
+        assert "error" not in r
+        assert r["days_point_estimate"] > 0
+
+    def test_massive_token_count(self):
+        """10^15 tokens should not overflow doubles."""
+        m = ExtrapolationModel(total_tokens=10_000_000_000_000_000)
+        r = m.compute(mean_tps=1_000, std_tps=50, num_gpus=1, n_batches=100)
+        assert "error" not in r
+        assert r["days_point_estimate"] > 0
+        assert math.isfinite(r["days_point_estimate"])
+
+    def test_gpu_count_zero_raises_or_errors(self):
+        """num_gpus=0 is nonsensical and should be handled."""
+        m = ExtrapolationModel(total_tokens=1_000_000)
+        r = m.compute(mean_tps=1_000, std_tps=50, num_gpus=0, n_batches=1)
+        assert "error" in r or math.isinf(r["days_point_estimate"]) or math.isnan(r["days_point_estimate"])
+
+    def test_cost_when_no_hourly_rate(self):
+        """estimated_cost_usd is None when no gpu_cost_per_hour set."""
+        m = ExtrapolationModel(total_tokens=1_000_000, gpu_cost_per_hour=None)
+        r = m.compute(mean_tps=1_000, std_tps=50, num_gpus=2, n_batches=10)
+        assert r["estimated_cost_usd"] is None
+
+    def test_extremely_high_variance_still_computes_finite(self):
+        """std >> mean produces wide but finite CI."""
+        m = ExtrapolationModel(total_tokens=1_000_000_000)
+        r = m.compute(mean_tps=1, std_tps=100_000, num_gpus=2, n_batches=1)
+        assert math.isfinite(r["days_95ci_upper"])
+        assert r["days_95ci_lower"] >= 0

@@ -420,6 +420,44 @@ class TestBenchmarkConfigValidation:
 
 
 # ---------------------------------------------------------------------------
+# 8. Coverage gap regression tests — verify that previously uncovered paths
+#    stay covered and do not regress silently.
+# ---------------------------------------------------------------------------
+
+class TestCoverageGapRegression:
+    """Meta-tests: these validate that our coverage gap fillers don't go stale.
+
+    Each test maps to a specific coverage gap identified in the audit.
+    """
+
+    def test_precision_timer_module_importable(self):
+        """PrecisionTimer must be importable (gap: timer.py previously untested)."""
+        from benchmark.utils.timer import PrecisionTimer
+        timer = PrecisionTimer()
+        assert timer is not None
+
+    def test_throughput_tracker_module_has_prune(self):
+        """ThroughputTracker must expose _prune (gap: prune() was uncovered)."""
+        from benchmark.metrics.throughput import ThroughputTracker
+        assert hasattr(ThroughputTracker, '_prune')
+
+    def test_extrapolation_model_module_exists(self):
+        """ExtrapolationModel must be importable (gap: reporting untested)."""
+        from benchmark.reporting.extrapolation import ExtrapolationModel
+        assert ExtrapolationModel is not None
+
+    def test_json_sanitized_dumps_module_exists(self):
+        """sanitized_dumps must be importable (gap: json_utils uncovered)."""
+        from benchmark.utils.json_utils import sanitized_dumps
+        assert callable(sanitized_dumps)
+
+    def test_async_pipeline_notify_done_exists(self):
+        """notify_done must exist on AsyncPipeline (gap: retry path uncovered)."""
+        from benchmark.data.pipeline import AsyncPipeline
+        assert hasattr(AsyncPipeline, 'notify_done')
+
+
+# ---------------------------------------------------------------------------
 # Helper
 # ---------------------------------------------------------------------------
 

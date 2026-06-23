@@ -112,14 +112,9 @@ class EnsembleTranslator:
                 raw_chrf = sacrebleu.corpus_chrf(
                     [primary_text], [[secondary_text]]
                 )
-                # sacrebleu < 2.0.0 returned 0-100; >= 2.0.0 returns 0-1.
-                # Detect the scale from the runtime package version.
-                try:
-                    _ver = sacrebleu.__version__
-                    _major = int(_ver.split(".")[0])
-                except (AttributeError, ValueError):
-                    _major = 1  # conservative: assume old scale
-                chrf_score = raw_chrf.score / 100.0 if _major < 2 else raw_chrf.score
+                # sacrebleu .score is on 0-100 scale (confirmed through v2.6.0).
+                # Normalize to 0-1 range for threshold comparison.
+                chrf_score = raw_chrf.score / 100.0
                 result.consensus_score = chrf_score
 
                 if chrf_score < self.consensus_threshold:

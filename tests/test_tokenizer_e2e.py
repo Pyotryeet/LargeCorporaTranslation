@@ -9,13 +9,19 @@ import tempfile
 import time
 from pathlib import Path
 
-import numpy as np
 import pytest
 
 from benchmark.data.loader import JSONLLoader
 from benchmark.data.chunker import NullChunker
 from benchmark.data.filters import ChunkFilter
 from benchmark.data.pipeline import AsyncPipeline
+
+# numpy is needed only for TokenIdConversion tests — import is guarded so
+# the test file remains importable even in minimal environments.
+try:
+    import numpy as np
+except ImportError:
+    np = None  # type: ignore
 
 
 class TestPipelineHandlesRealTokenizer:
@@ -76,6 +82,8 @@ class TestTokenIdConversion:
 
     def test_numpy_int32_converts_to_python_int(self):
         """int() on numpy.int32 must produce native Python int."""
+        pytest.importorskip("numpy")
+        import numpy as np
         ids = [np.int32(42), np.int32(0), np.int32(256_000)]
         native = [int(t) for t in ids]
         assert all(isinstance(t, int) for t in native)
@@ -83,6 +91,8 @@ class TestTokenIdConversion:
 
     def test_numpy_int64_converts_to_python_int(self):
         """int() on numpy.int64 must produce native Python int."""
+        pytest.importorskip("numpy")
+        import numpy as np
         ids = [np.int64(2**40), np.int64(2**50)]
         native = [int(t) for t in ids]
         assert all(isinstance(t, int) for t in native)
@@ -90,6 +100,8 @@ class TestTokenIdConversion:
 
     def test_mixed_numpy_and_python_ints(self):
         """Mixed list of numpy and Python ints must all convert to Python int."""
+        pytest.importorskip("numpy")
+        import numpy as np
         ids = [np.int32(10), 20, np.int64(30), np.int32(40)]
         native = [int(t) for t in ids]
         assert native == [10, 20, 30, 40]

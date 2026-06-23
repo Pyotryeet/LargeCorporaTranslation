@@ -191,7 +191,18 @@ class SignalHandler:
             sys.exit(128 + (self.signal_number or signal.SIGTERM))
 
     def restore(self) -> None:
-        """Restore original signal handlers."""
-        signal.signal(signal.SIGINT, self._orig_sigint)
-        signal.signal(signal.SIGTERM, self._orig_sigterm)
-        atexit.unregister(self._atexit_cleanup)
+        """Restore original signal handlers.
+
+        Handles all possible return values from :func:`signal.getsignal`:
+        ``SIG_DFL``, ``SIG_IGN``, a callable, or ``None`` (meaning no
+        Python-level handler was installed — default to ``SIG_DFL``).
+        """
+        for sig, orig in ((signal.SIGINT, self._orig_sigint),
+                          (signal.SIGTERM, self._orig_sigterm)):
+            # signal.getsignal can return None (no Python handler installed),
+            # which is not a valid argument to signal.signal().
+            signal.signal(sig, orig if orig is not None else signal.SIG_DFL)
+        try:
+            atexit.unregister(self._atexit_cleanup)
+        except Exception:
+            pass

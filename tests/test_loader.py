@@ -320,6 +320,29 @@ class TestJSONLLoader:
         assert mem_texts == ext_texts
         assert len(mem_texts) > 0
 
+    def test_doc_ids_are_monotonic(self, sample_jsonl_path):
+        """Document IDs increment monotonically in sequential mode."""
+        loader = JSONLLoader([sample_jsonl_path], shuffle=False)
+        doc_ids = [doc_id for doc_id, _, _ in loader.iter_documents()]
+        assert len(doc_ids) > 1, "Need multiple documents for monotonic check"
+        for i in range(1, len(doc_ids)):
+            assert doc_ids[i] == doc_ids[i - 1] + 1, (
+                f"doc_id gap: {doc_ids[i-1]} -> {doc_ids[i]}"
+            )
+
+    def test_file_names_consistent(self, sample_jsonl_path):
+        """All documents from a single file report the same file_name."""
+        loader = JSONLLoader([sample_jsonl_path], shuffle=False)
+        file_names = {fname for _, fname, _ in loader.iter_documents()}
+        assert len(file_names) == 1, f"Expected 1 file, got {len(file_names)}"
+
+    def test_texts_non_empty(self, sample_jsonl_path):
+        """No document has empty text."""
+        loader = JSONLLoader([sample_jsonl_path], shuffle=False)
+        for _, _, text in loader.iter_documents():
+            assert isinstance(text, str), f"Expected str, got {type(text)}"
+            assert len(text.strip()) > 0, f"Empty text found"
+
     def test_external_shuffle_multi_pass_merge(self, tmp_path):
         """Multi-pass merge works when runs > SHUFFLE_MAX_OPEN_RUNS.
 

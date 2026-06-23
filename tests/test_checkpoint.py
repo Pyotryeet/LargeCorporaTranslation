@@ -111,3 +111,23 @@ class TestCheckpointManager:
             cp = json.loads(path.read_text())
             assert cp["current_file_name"] == ""
             assert cp["current_doc_id"] == 0
+
+    def test_rotation_zero_keeps_one(self):
+        """Rotation=0 keeps only the most recent checkpoint."""
+        with tempfile.TemporaryDirectory() as tmp:
+            mgr = CheckpointManager(Path(tmp))
+            mgr._rotation = 0
+            for i in range(3):
+                _save_with_unique_name(mgr, i * 100, i * 50000)
+            files = sorted(mgr.checkpoint_dir.glob("checkpoint_*.json"))
+            assert len(files) <= 1, f"Expected <=1 checkpoint, got {len(files)}"
+
+    def test_save_interval_zero_writes_every_time(self):
+        """interval=0 means always save (never skip)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            mgr = CheckpointManager(Path(tmp), interval_seconds=0)
+            path1 = mgr.save(10, 1000)
+            path2 = mgr.save(20, 2000)
+            assert path1 is not None
+            assert path2 is not None
+            assert path1 != path2

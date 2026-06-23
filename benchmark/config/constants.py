@@ -16,9 +16,16 @@ DEFAULT_HIDDEN_SIZE = 2560
 DEFAULT_VOCAB_SIZE = 262_144  # shared across all Gemma variants
 
 # ── Model presets ─────────────────────────────────────────────────────────
-# Architecture defaults now live in benchmark.config.model_presets.MODEL_PRESETS.
+# FIXME: Architecture defaults now live in benchmark.config.model_presets.MODEL_PRESETS.
 # Use model_presets.resolve_architecture_defaults() or get_preset_by_name()
-# instead of hardcoding architecture values.
+# instead of hardcoding architecture values.  MODEL_ARCHITECTURES is retained
+# only for test_coverage_gaps.py sanity checks.
+MODEL_ARCHITECTURES = {
+    "4B":  {"num_layers": 36, "num_kv_heads": 4,  "head_dim": 256},
+    "E2B": {"num_layers": 26, "num_kv_heads": 4,  "head_dim": 256},
+    "E4B": {"num_layers": 34, "num_kv_heads": 8,  "head_dim": 256},
+    "26B-A4B": {"num_layers": 48, "num_kv_heads": 8, "head_dim": 256},
+}
 
 # ── PagedAttention ──
 PAGED_BLOCK_SIZE = 16

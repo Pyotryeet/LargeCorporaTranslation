@@ -31,13 +31,12 @@ dependencies = [
 
 [project.optional-dependencies]
 cuda = [
-    # flash-attn and transformer-engine have known compatibility issues with
-    # certain CUDA/driver combinations. Before upgrading, consult:
-    # https://docs.nvidia.com/deeplearning/transformer-engine/user-guide/installation.html#compatibility
+    # flash-attn is installed separately by setup.sh with --no-build-isolation
+    # because it requires torch at build time and pip's default build isolation
+    # sandbox does not include the already-installed torch.  Do NOT add it here.
     # https://github.com/Dao-AILab/flash-attention?tab=readme-ov-file#installation-and-features
     "transformer-engine>=2.0.0",
     "pynvml>=11.550",
-    "flash-attn>=2.6.0",
     "triton>=2.3.0",
 ]
 tensorrt = [

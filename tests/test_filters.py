@@ -62,3 +62,35 @@ class TestFilterStats:
     def test_rejected_sum(self):
         s = FilterStats(rejected_too_short=3, rejected_garbage=2, rejected_language=1)
         assert s.rejected == 6
+
+    # ── Edge case tests ──
+
+    def test_empty_chunk_sentinel_token_count(self):
+        """A zero-length input with token_count=0 should be rejectable."""
+        f = ChunkFilter(min_tokens=1)
+        assert f.should_keep("", 0) is False
+        assert f.stats.rejected_too_short == 1
+
+    def test_filter_with_default_constructor_accepts_all(self):
+        """ChunkFilter() with defaults accepts text with sufficient tokens."""
+        f = ChunkFilter()
+        # Default min_tokens=10 — text with >=10 tokens should pass.
+        assert f.should_keep("anything at all", 10) is True
+
+    def test_max_garbage_ratio_zero_allows_pure_ascii_only(self):
+        """max_garbage_ratio=0 rejects any text with non-ASCII chars."""
+        f = ChunkFilter(min_tokens=1, max_garbage_ratio=0.0)
+        assert f.should_keep("PureASCII", 5) is True
+        # Text with non-ASCII chars should be rejected when ratio is 0.
+        assert f.should_keep("\U00010000 extra text padding padding", 10) is False
+
+    def test_stats_reset(self):
+        """reset_stats zeros all counters."""
+        f = ChunkFilter(min_tokens=5)
+        f.should_keep("hello world test", 10)
+        f.should_keep("x", 1)
+        assert f.stats.total_chunks == 2
+        f.reset_stats()
+        assert f.stats.total_chunks == 0
+        assert f.stats.passed == 0
+        assert f.stats.rejected == 0

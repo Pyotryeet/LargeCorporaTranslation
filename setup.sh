@@ -264,25 +264,73 @@ fi
 # CUDA extras.
 if [ "$MODE" = "cuda" ]; then
     info "Installing CUDA extras..."
-    $PYTHON_BIN -m pip install -e ".[cuda]" --quiet --no-cache-dir || {
-        warn "cuda extras failed — some may not be available (Triton is Linux-only)"
-    }
+    # flash-attn's build system imports torch at wheel-build time, so pip's
+    # default build isolation sandbox fails (torch isn't in the sandbox).
+    # Install CUDA deps WITHOUT build isolation and split flash-attn out
+    # so pip can handle it specifically.
+    $PYTHON_BIN -m pip install pynvml triton --quiet --no-cache-dir || true
+    # flash-attn MUST be installed with --no-build-isolation so the build
+    # can see the already-installed torch.  Binary wheels exist for most
+    # CUDA 12.x + Python 3.10-3.12 combos on x86_64, so the build path
+    # is only hit when no pre-built wheel matches.
+    $PYTHON_BIN -m pip install 'flash-attn>=2.6.0' --no-build-isolation --quiet --no-cache-dir 2>/dev/null || \
+        warn "flash-attn build failed — standard attention will be used instead"
     ok "CUDA extras installed"
 
     # ── Transformer Engine (FP8 on Hopper) ────────────────────────────
-    # TE requires cuDNN and NCCL dev headers, shipped inside nvidia-*
-    # pip packages.  Set CPATH so the C++ build finds them.
+    # TE compiles C++ CUDA kernels against the installed PyTorch + cuDNN +
+    # NCCL headers.  Three prerequisites must be met:
+    #   1. nvcc is in PATH (checked in Step 2)
+    #   2. nvidia-cudnn-cu12 and nvidia-nccl-cu12 are installed (they ship
+    #      both the shared libraries AND the C++ headers TE needs)
+    #   3. CPATH and LIBRARY_PATH point at the nvidia include/lib dirs
+    #
+    # The nvidia-* wheels install into site-packages/nvidia/{cudnn,nccl}/
+    # with include/ and lib/ subdirectories.
     info "Installing Transformer Engine (FP8 acceleration)..."
-    VENV_SITE="$VENV_DIR/lib/python*/site-packages"
-    SITE_DIR=$(echo $VENV_SITE 2>/dev/null | head -1)
-    if [ -n "$SITE_DIR" ] && [ -d "$SITE_DIR/nvidia/cudnn/include" ]; then
-        export CPATH="$SITE_DIR/nvidia/cudnn/include:$SITE_DIR/nvidia/nccl/include:$SITE_DIR/torch/include"
-        export LIBRARY_PATH="$SITE_DIR/nvidia/cudnn/lib:$SITE_DIR/nvidia/nccl/lib"
-        $PYTHON_BIN -m pip install 'transformer-engine[pytorch]>=2.14.0' --no-build-isolation --quiet --no-cache-dir 2>/dev/null && \
-            ok "Transformer Engine installed (FP8 ready)" || \
-            warn "Transformer Engine build failed — FP8 will use BF16"
+    TE_OK=false
+    if command -v nvcc &>/dev/null; then
+        # Ensure nvidia header packages are present (PyTorch wheels pull them
+        # as transitive deps but may be missing with --index-url installs).
+        $PYTHON_BIN -m pip install \
+            'nvidia-cudnn-cu12>=9.0' \
+            'nvidia-nccl-cu12>=2.21' \
+            --quiet --no-cache-dir 2>/dev/null || true
+
+        # Locate nvidia include dirs via Python — far more reliable than
+        # glob-matching the venv lib/python*/site-packages pattern.
+        NVIDIA_DIRS=$($PYTHON_BIN -c "
+import site, pathlib, sys
+for sp in site.getsitepackages():
+    cudnn_inc = pathlib.Path(sp) / 'nvidia' / 'cudnn' / 'include'
+    nccl_inc = pathlib.Path(sp) / 'nvidia' / 'nccl' / 'include'
+    torch_inc = pathlib.Path(sp) / 'torch' / 'include'
+    cudnn_lib = pathlib.Path(sp) / 'nvidia' / 'cudnn' / 'lib'
+    nccl_lib = pathlib.Path(sp) / 'nvidia' / 'nccl' / 'lib'
+    if cudnn_inc.is_dir() and torch_inc.is_dir():
+        print(f'{cudnn_inc}:{nccl_inc}:{torch_inc}')
+        print(f'{cudnn_lib}:{nccl_lib}')
+        break
+" 2>/dev/null)
+        if [ -n "$NVIDIA_DIRS" ]; then
+            CPATH="$(echo "$NVIDIA_DIRS" | head -1)"
+            LIBRARY_PATH="$(echo "$NVIDIA_DIRS" | tail -1)"
+            export CPATH
+            export LIBRARY_PATH
+            info "  nvidia headers: $CPATH"
+            $PYTHON_BIN -m pip install \
+                'transformer-engine[pytorch]>=2.14.0' \
+                --no-build-isolation --quiet --no-cache-dir 2>/dev/null && TE_OK=true
+        else
+            warn "nvidia-* headers not found in site-packages — install nvidia-cudnn-cu12 and nvidia-nccl-cu12"
+        fi
     else
-        warn "nvidia-* headers not found — TE build skipped"
+        warn "nvcc not in PATH — TE requires CUDA toolkit"
+    fi
+    if $TE_OK; then
+        ok "Transformer Engine installed (FP8 ready)"
+    else
+        warn "Transformer Engine build failed — FP8 will use BF16"
     fi
 fi
 

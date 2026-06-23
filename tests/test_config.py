@@ -69,3 +69,51 @@ class TestBenchmarkConfig:
             assert cfg.backend == "cpu"
             assert cfg.runtime.seed == 42
             assert cfg.runtime.target_duration_seconds == 60
+
+    def test_empty_input_paths_raises(self):
+        """Empty input_paths list should be rejected."""
+        with pytest.raises(ValueError, match="input_paths"):
+            BenchmarkConfig(
+                backend="cuda",
+                data={"input_paths": [], "output_dir": "/tmp"},
+            )
+
+    def test_negative_max_tokens_raises(self):
+        """Negative max_new_tokens should be rejected."""
+        with pytest.raises(ValueError):
+            BenchmarkConfig(
+                backend="cuda",
+                model={"max_new_tokens": -1, "max_input_tokens": -1},
+            )
+
+    def test_temperature_range(self):
+        """Temperature must be >= 0.0."""
+        with pytest.raises(ValueError):
+            BenchmarkConfig(
+                backend="cuda",
+                model={"temperature": -0.5},
+            )
+
+    def test_safe_mode_disables_dangerous_options(self):
+        """Safe mode overrides optimization flags."""
+        cfg = BenchmarkConfig(
+            backend="cuda",
+            model={"safe_mode": True, "use_cuda_graph": True},
+        )
+        # safe_mode should be reflected in ModelConfig.
+        assert cfg.model.safe_mode is True
+
+    def test_load_config_nonexistent_file(self):
+        """load_config on a nonexistent file raises FileNotFoundError."""
+        with pytest.raises(FileNotFoundError):
+            load_config("/nonexistent/benchmark_config.yaml")
+
+    def test_data_config_chunk_overlap_bounds(self):
+        """chunk_overlap_tokens must be non-negative."""
+        with pytest.raises(ValueError):
+            DataConfig(chunk_overlap_tokens=-1)
+
+    def test_runtime_zero_duration_raises(self):
+        """target_duration_seconds=0 should be rejected."""
+        with pytest.raises(ValueError):
+            RuntimeConfig(target_duration_seconds=0)

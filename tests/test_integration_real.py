@@ -14,9 +14,19 @@ import gzip
 import time
 from pathlib import Path
 
-import numpy as np
 import pytest
-import torch
+
+# Optional heavy dependencies — tests requiring these skip gracefully when
+# they are absent so the test file remains importable even in minimal envs.
+try:
+    import numpy as np
+except ImportError:
+    np = None  # type: ignore
+
+try:
+    import torch
+except ImportError:
+    torch = None  # type: ignore
 
 from benchmark.data.loader import JSONLLoader
 from benchmark.data.chunker import TextChunker, NullChunker
@@ -806,6 +816,8 @@ class TestRealBatchAssembly:
 
     def test_assemble_from_tokenized_chunks(self, real_tokenizer):
         """Assemble pre-tokenized chunks into a padded tensor batch."""
+        pytest.importorskip("torch")
+        import torch
         texts = [
             "Hello world, this is a test.",
             "A shorter one.",
@@ -835,6 +847,8 @@ class TestRealBatchAssembly:
 
     def test_assemble_all_same_length(self, real_tokenizer):
         """When all sequences have the same length, no padding needed."""
+        pytest.importorskip("torch")
+        import torch
         texts = ["Hello world.", "Good morning.", "Testing now."]
         items = []
         for text in texts:
@@ -861,6 +875,8 @@ class TestRealModelInference:
 
     @pytest.fixture(scope="class")
     def _require_gpu(self):
+        pytest.importorskip("torch")
+        import torch
         if not torch.cuda.is_available() and not torch.backends.mps.is_available():
             pytest.skip("no GPU available — cannot run model inference tests")
 

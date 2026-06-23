@@ -98,13 +98,42 @@ class CheckpointManager:
 
         # Try checkpoints newest-first until one loads successfully.
         last_error = None
+        recent_corrupt = False
         for f in reversed(files):
             try:
                 with open(f) as fh:
                     cp = json.load(fh)
-            except (json.JSONDecodeError, OSError) as e:
+            except json.JSONDecodeError as e:
                 last_error = e
-                logger.warning("Checkpoint %s corrupt, trying older: %s", f.name, e)
+                # Flag the most-recent checkpoint corruption as a potential
+                # data-loss event — the newest file is what resume would pick.
+                if not recent_corrupt:
+                    recent_corrupt = True
+                    logger.warning(
+                        "Most recent checkpoint %s is corrupt (JSON decode error): %s. "
+                        "Falling back to older checkpoint — some progress may be lost.",
+                        f.name, e,
+                    )
+                else:
+                    logger.warning(
+                        "Checkpoint %s corrupt (JSON decode error), trying older: %s",
+                        f.name, e,
+                    )
+                continue
+            except OSError as e:
+                last_error = e
+                if not recent_corrupt:
+                    recent_corrupt = True
+                    logger.warning(
+                        "Most recent checkpoint %s is unreadable (OS error): %s. "
+                        "Falling back to older checkpoint — some progress may be lost.",
+                        f.name, e,
+                    )
+                else:
+                    logger.warning(
+                        "Checkpoint %s unreadable (OS error), trying older: %s",
+                        f.name, e,
+                    )
                 continue
 
             # Version check.

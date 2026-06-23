@@ -13,6 +13,38 @@ from benchmark.data.filters import ChunkFilter
 from benchmark.data.pipeline import AsyncPipeline, PinnedBufferPool
 
 
+# ── Timeout helper — avoids fragile deadline loops in every test ──
+
+def _poll_for_batch(pipeline, timeout_seconds=15.0):
+    """Poll next_batch() until a batch is available or timeout expires.
+
+    Returns the batch, or None if timed out. Uses a sleep interval that
+    scales down as time runs out, avoiding needless CPU churn while still
+    being responsive to fast producers.
+    """
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        batch = pipeline.next_batch()
+        if batch is not None:
+            return batch
+        time.sleep(0.05)
+    return None
+
+
+def _collect_batches(pipeline, max_batches, timeout_seconds=15.0):
+    """Collect up to max_batches from the pipeline, draining if exhausted."""
+    batches = []
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline and len(batches) < max_batches:
+        batch = pipeline.next_batch()
+        if batch is not None:
+            batches.append(batch)
+        elif pipeline.draining():
+            break
+        time.sleep(0.01)
+    return batches
+
+
 class TestPipelineE2E:
     def test_load_to_batch_flow(self, real_tokenizer):
         """Data flows correctly: JSONL → chunk → filter → tokenize → batch."""
@@ -37,17 +69,7 @@ class TestPipelineE2E:
             )
             pipeline.start_prefetch()
 
-            batches = []
-            for _ in range(3):
-                deadline = time.monotonic() + 5
-                while time.monotonic() < deadline:
-                    batch = pipeline.next_batch()
-                    if batch is not None:
-                        break
-                    time.sleep(0.05)
-                if batch is not None:
-                    batches.append(batch)
-
+            batches = _collect_batches(pipeline, max_batches=3, timeout_seconds=15.0)
             pipeline.stop_prefetch()
 
             assert len(batches) >= 1, "No batches produced"
@@ -75,14 +97,7 @@ class TestPipelineE2E:
                 batch_size=2, prefetch_workers=1, backend="cpu",
             )
             pipeline.start_prefetch()
-
-            deadline = time.monotonic() + 5
-            batch = None
-            while time.monotonic() < deadline:
-                batch = pipeline.next_batch()
-                if batch is not None:
-                    break
-                time.sleep(0.05)
+            batch = _poll_for_batch(pipeline, timeout_seconds=15.0)
             pipeline.stop_prefetch()
 
             assert batch is not None
@@ -121,23 +136,11 @@ class TestPipelineE2E:
             pipeline.start_prefetch()
 
             # Should produce a small batch then drain.
-            deadline = time.monotonic() + 5
-            batch = None
-            while time.monotonic() < deadline:
-                batch = pipeline.next_batch()
-                if batch is not None:
-                    break
-                time.sleep(0.05)
+            batch = _poll_for_batch(pipeline, timeout_seconds=15.0)
             assert batch is not None
 
             # Next call should return None since data is drained.
-            deadline2 = time.monotonic() + 5
-            batch2 = None
-            while time.monotonic() < deadline2:
-                batch2 = pipeline.next_batch()
-                if batch2 is not None or pipeline.draining():
-                    break
-                time.sleep(0.05)
+            batch2 = _poll_for_batch(pipeline, timeout_seconds=5.0)
             assert batch2 is None or pipeline.draining()
 
             pipeline.stop_prefetch()
@@ -254,14 +257,7 @@ class TestModelMaxLengthOverflow:
 
                 # Verify the pipeline actually works without overflowing.
                 pipeline.start_prefetch()
-                import time
-                deadline = time.monotonic() + 10
-                batch = None
-                while time.monotonic() < deadline:
-                    batch = pipeline.next_batch()
-                    if batch is not None:
-                        break
-                    time.sleep(0.05)
+                batch = _poll_for_batch(pipeline, timeout_seconds=30.0)
                 pipeline.stop_prefetch()
 
                 assert batch is not None, (

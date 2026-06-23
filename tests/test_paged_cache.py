@@ -291,6 +291,92 @@ class TestPagedCache:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
+# Concurrent access tests — basic thread safety for PagedKVCache
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+class TestConcurrentAccess:
+    """Verify PagedKVCache does not crash under concurrent access.
+
+    These are basic correctness tests, not stress tests. They verify that
+    multiple threads can allocate, write, read, and free without corrupting
+    shared state.
+    """
+
+    def test_multi_thread_allocate_and_free(self):
+        """Multiple threads each allocating+freeing sequences should not crash."""
+        import threading
+
+        cache = PagedKVCache(
+            num_layers=2, num_kv_heads=2, head_dim=32,
+            block_size=16, num_blocks=128,
+            dtype=torch.float32, device="cpu",
+        )
+
+        errors = []
+
+        def worker(worker_id):
+            try:
+                for _ in range(10):
+                    seq_id = worker_id * 100 + _
+                    table = cache.allocate(seq_id, num_tokens=8)
+                    assert table.num_blocks >= 1
+                    # Write to layer 0
+                    k = torch.randn(2, 8, 32)
+                    v = torch.randn(2, 8, 32)
+                    cache.write(seq_id, 0, slice(0, 8), k, v)
+                    cache.free(seq_id)
+            except Exception as e:
+                errors.append(f"worker {worker_id}: {e}")
+
+        threads = [threading.Thread(target=worker, args=(i,)) for i in range(4)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=5.0)
+
+        assert len(errors) == 0, f"Concurrent errors: {errors}"
+
+    def test_multi_thread_read_without_contention(self):
+        """Multiple threads reading without writing should be safe."""
+        import threading
+
+        cache = PagedKVCache(
+            num_layers=2, num_kv_heads=2, head_dim=32,
+            block_size=16, num_blocks=64,
+            dtype=torch.float32, device="cpu",
+        )
+
+        # Pre-allocate and write one sequence.
+        cache.allocate(seq_id=0, num_tokens=16)
+        k = torch.ones(2, 16, 32)
+        v = torch.ones(2, 16, 32) * 2
+        cache.write(0, 0, slice(0, 16), k, v)
+
+        results = []
+        errors = []
+
+        def reader():
+            try:
+                k_out, v_out = cache.read(0, 0)
+                results.append(k_out.mean().item())
+            except Exception as e:
+                errors.append(str(e))
+
+        threads = [threading.Thread(target=reader) for _ in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=5.0)
+
+        assert len(errors) == 0, f"Reader errors: {errors}"
+        assert len(results) == 8
+        # All readers should see the same data.
+        for r in results:
+            assert abs(r - 1.0) < 0.01, f"Unexpected KV value: {r}"
+
+
+# ═════════════════════════════════════════════════════════════════════════════
 # E2E correctness — PagedCache vs DynamicCache output identity
 # ═════════════════════════════════════════════════════════════════════════════
 
