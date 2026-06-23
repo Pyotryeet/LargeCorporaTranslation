@@ -27,6 +27,12 @@ from benchmark.config.constants import (
 
 logger = logging.getLogger(__name__)
 
+# ── Per-tokenizer warning suppression ──────────────────────────────────────────
+# _build_translation_prompt falls back to a plain text prefix when the
+# chat template fails (e.g. SmolLM2's tokenizer doesn't know source_lang_code).
+# Warn once per tokenizer identity instead of per chunk (which would flood).
+_TEMPLATE_WARNED: set[str] = set()
+
 # ── Module-level constants (imported from central constants) ─────────────────
 _LOADER_JOIN_TIMEOUT = LOADER_JOIN_TIMEOUT
 _WORKER_JOIN_TIMEOUT = WORKER_JOIN_TIMEOUT
@@ -532,13 +538,17 @@ class AsyncPipeline:
             # Fallback: plain text with translation prefix.
             # Works for SmolLM2, LLaMA 3, and other models without
             # Gemma-specific chat template fields.
-            logger.warning(
-                "_build_translation_prompt: chat template failed for model '%s' "
-                "— falling back to plain text prefix. Translation quality may "
-                "degrade significantly; ensure the tokenizer is configured "
-                "with a proper chat template.",
-                getattr(tokenizer, 'name_or_path', 'unknown'),
-            )
+            # Warn once per tokenizer (id-based; thread-safe since CPython
+            # dict writes are atomic for small keys).
+            _model = getattr(tokenizer, 'name_or_path', '') or str(id(tokenizer))
+            if _model not in _TEMPLATE_WARNED:
+                _TEMPLATE_WARNED.add(_model)
+                logger.warning(
+                    "_build_translation_prompt: chat template failed for model "
+                    "'%s' — falling back to plain text prefix. Only tracing "
+                    "once; subsequent failures are suppressed.",
+                    _model,
+                )
             return f"Translate English to Turkish:\n{text}"
 
     def _tokeniser_loop(self) -> None:
