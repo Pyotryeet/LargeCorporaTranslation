@@ -89,15 +89,18 @@ def run_one_model(model_def: dict) -> dict:
 
     try:
         is_enc_dec = be_type == "encoder_decoder"
+        # torch.compile disabled for autoregressive models on PyTorch 2.11:
+        # inductor cudagraph_trees crashes on KV-cache accumulation with
+        # "CUDAGraphs tensor overwritten by a subsequent run" even when
+        # warmup and production share the same batch size.  The compile
+        # path was tested on PyTorch 2.6 (H200 setup docs) but 2.11 has
+        # a regression.  Disable until the cudagraph_trees fix lands.
         engine = InferenceEngine(
             model_path=path, tokenizer_path="",
             device_info=plat,
             decoding_params=DecodingParams(max_new_tokens=128, temperature=0.0),
             use_flash_attention=is_cuda,
-            # torch.compile pointless for encoder-decoder: model.generate()
-            # handles its own graph optimisation.  compile introduces
-            # shape-dependent recompilation stalls (minutes) at large batch.
-            use_torch_compile=is_cuda and not is_enc_dec,
+            use_torch_compile=False,
             max_input_tokens=128,
             backend_type=be_type,
             extra=extra,
