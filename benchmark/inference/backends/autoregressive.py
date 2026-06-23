@@ -72,8 +72,6 @@ from benchmark.inference.backends.protocol import (
 # ── Lazy imports for GPU-only dependencies (guarded so tests don't crash on CPU) ──
 bnb = None
 triton = None
-tl = None
-AutoAWQForCausalLM = None
 CUDAGraphDecoder = None
 CUDAGraphPool = None
 precompile_all_kernels = None

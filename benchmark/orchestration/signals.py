@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 # Module-level registry of cleanup callbacks.
 _cleanup_callbacks: list[tuple[str, Callable[..., Any]]] = []
 _cleanup_lock = threading.Lock()
+_cleanup_run = False
 
 
 def register_cleanup(name: str, fn: Callable[..., Any]) -> None:
@@ -47,8 +48,15 @@ def _run_cleanup() -> None:
     which is not yet implemented.  The final call to
     :func:`logging.shutdown` in the caller ensures log handlers are
     flushed before ``sys.exit``.
+
+    Idempotent — subsequent calls are no-ops.  This prevents the atexit
+    handler from racing with the explicit cleanup() call.
     """
+    global _cleanup_run
     with _cleanup_lock:
+        if _cleanup_run:
+            return
+        _cleanup_run = True
         callbacks = list(_cleanup_callbacks)
         _cleanup_callbacks.clear()
 

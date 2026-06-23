@@ -8,12 +8,20 @@ TESTS_DIR = Path(__file__).parent
 FIXTURE_DIR = TESTS_DIR / "fixtures"
 
 # ---------------------------------------------------------------------------
-# Strict fixtures mode — set TR_STRICT_FIXTURES=1 to fail tests when real
-# data is unavailable, instead of silently falling back to auto-generated
-# synthetic garbage that produces green CI with zero signal.
+# Strict fixtures mode — TR_STRICT_FIXTURES is ON by default to prevent
+# tests from silently passing on auto-generated synthetic data that produces
+# green CI with zero signal.  Set TR_ACCEPT_SYNTHETIC=1 to opt out of strict
+# mode when running in environments where real data is unavailable and
+# synthetic fallback is acceptable (e.g., offline CI without data artifacts).
 # ---------------------------------------------------------------------------
-_STRICT_FIXTURES = os.environ.get("TR_STRICT_FIXTURES", "").lower() in (
+_TR_ACCEPT_SYNTHETIC = os.environ.get("TR_ACCEPT_SYNTHETIC", "").lower() in (
     "1", "true", "yes", "on",
+)
+_STRICT_FIXTURES = (
+    not _TR_ACCEPT_SYNTHETIC
+    and os.environ.get("TR_STRICT_FIXTURES", "1").lower() not in (
+        "0", "false", "no", "off",
+    )
 )
 
 # ---------------------------------------------------------------------------

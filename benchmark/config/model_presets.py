@@ -301,10 +301,11 @@ MODEL_PRESETS: dict[str, ModelPreset] = {
         eos_token_id=1,
         end_of_turn_token_id=106,
         max_seq_len=2048,
-        # DiffusionGemma is a large diffusion model — MPS can only run it if
-        # the active params (~4B) fit in unified memory.  Set to True but
-        # expect OOM on machines with < 48 GB unified memory.
-        supports_mps=True,
+        # DiffusionGemma is a large diffusion model (26B total, ~4B active MoE)
+        # that requires ~48+ GB unified memory for MPS inference.  MPS is
+        # disabled by default — enable it explicitly only on machines with
+        # sufficient unified memory.
+        supports_mps=False,
         supports_cuda=True,
         supports_fp8=True,
         recommended_batch_size=1,
