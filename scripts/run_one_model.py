@@ -4,9 +4,14 @@ import json, os, sys, time, gc, warnings
 from datetime import datetime, timezone
 from pathlib import Path
 
+# Suppress all third-party noise BEFORE any imports.
 os.environ.setdefault("TRANSFORMERS_VERBOSITY", "error")
 os.environ["PYTHONUNBUFFERED"] = "1"
+os.environ["PYTHONWARNINGS"] = "ignore::FutureWarning"
 warnings.filterwarnings("ignore")
+# torch._dynamo sprays "recompile_limit" warnings during warmup when
+# accelerate hooks change tensor shapes — normal, suppress.
+os.environ.setdefault("TORCH_LOGS", "-dynamo")
 
 import torch
 import logging as _logging
