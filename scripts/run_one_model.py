@@ -117,14 +117,14 @@ def run_one_model(model_def: dict) -> dict:
         tuner = BatchSizeTuner()
         batch_size = tuner.tune(engine.model, engine.tokenizer,
                                plat.device, plat.backend, 128)
-        if is_enc_dec and is_cuda:
-            # Encoder-decoder models (NLLB, MADLAD) use 256k-vocab SentencePiece
-            # tokenizers that bottleneck at ~15 chunks/sec under GIL.  At bs=1740
-            # the first batch takes >120s to assemble — the entire benchmark window
-            # is consumed by tokenization, GPU sits idle, and the while-loop guard
-            # silently discards the batch after timer.elapsed() exceeds RUN_DURATION.
-            # Cap at 512 — fills in ~34s, leaves 86s for actual translation.
-            batch_size = min(batch_size, 512)
+        if is_cuda:
+            # Autoregressive models with large vocab (Gemma: 262k) OOM on
+            # lm_head projection at high batch × seq_len.  1740 × 128 × 262k
+            # × 2 bytes ≈ 117 GB for logits alone — exceeds 140 GB GPU.
+            # Encoder-decoder models need cap for tokenization throughput
+            # (256k-vocab SentencePiece ≤ ~15 chunks/sec).
+            cap = 256 if is_enc_dec else 512
+            batch_size = min(batch_size, cap)
         elif not is_cuda:
             batch_size = min(batch_size, 4)
     except Exception:
