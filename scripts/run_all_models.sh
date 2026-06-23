@@ -36,15 +36,15 @@ PYTHON_MODELS=(
     "madlad_10b"
 )
 
-# Phase 2: Google Gemma models (autoregressive + QAT variants)
+# Phase 2: Google Gemma models (QAT first, then autoregressive)
 PYTHON_MODELS+=(
-    "translategemma"
     "gemma_e2b_qat_w4a16_ct"
     "gemma_e4b_qat_w4a16_ct"
     "gemma_e2b_qat_mobile_transformers"
     "gemma_e4b_qat_mobile_transformers"
     "gemma_e2b_qat_mobile_ct"
     "gemma_e4b_qat_mobile_ct"
+    "translategemma"
 )
 
 # Phase 3: NLLB family (Meta/Facebook encoder-decoder, proven EN→TR)
