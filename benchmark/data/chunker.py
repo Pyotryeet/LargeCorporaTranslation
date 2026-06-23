@@ -27,11 +27,27 @@ class TextChunker:
         self.tokenizer = tokenizer
         self.max_input_tokens = max_input_tokens
         self.overlap_tokens = overlap_tokens
+        if overlap_tokens >= max_input_tokens:
+            raise ValueError(
+                f"overlap_tokens ({overlap_tokens}) must be < "
+                f"max_input_tokens ({max_input_tokens})"
+            )
+
+    def _stride(self) -> int:
+        """Stride for sliding-window chunking, accounting for overlap."""
+        return max(self.max_input_tokens - self.overlap_tokens, self.max_input_tokens // 2)
 
     def chunk(self, text: str) -> Iterator[str]:
         """Yield chunk text strings (backward-compatible API).
 
         For token-level efficiency, use ``chunk_with_tokens()`` instead.
+
+        Notes
+        -----
+        Token count checks are based on token IDs without special tokens
+        (``add_special_tokens=False``), so the chunk boundary reflects the
+        raw text length, not text+special tokens.  This matches the pre-v2.0
+        behavior and avoids inflating the token count with BOS/EOS.
         """
         if not text or not text.strip():
             return
@@ -39,10 +55,14 @@ class TextChunker:
         if len(token_ids) <= self.max_input_tokens:
             yield text
             return
-        stride = max(self.max_input_tokens - self.overlap_tokens, self.max_input_tokens // 2)
+        stride = self._stride()
         for start in range(0, len(token_ids), stride):
             chunk_ids = token_ids[start:start + self.max_input_tokens]
             if len(chunk_ids) < 10:
+                logger.debug(
+                    "chunk: tail chunk %d tokens < 10 — skipping",
+                    len(chunk_ids),
+                )
                 break
             chunk_text = self.tokenizer.decode(chunk_ids, skip_special_tokens=True)
             if chunk_text.strip():
@@ -54,6 +74,14 @@ class TextChunker:
         The pipeline can use the pre-computed token_ids to skip its own
         encode step, saving one full tokenization pass per chunk.
 
+        .. warning::
+
+           ``token_ids`` are sliced from the full-document tokenization and
+           may include special tokens (BOS/EOS) at document boundaries.  For
+           direct model consumption without re-tokenization, strip the
+           tokenizer's ``all_special_ids`` from the beginning and end of
+           each chunk's token list.
+
         Returns
         -------
         Iterator[tuple[str, list[int], int]]
@@ -61,21 +89,57 @@ class TextChunker:
         """
         if not text or not text.strip():
             return
+        # Build the set of special token IDs once per call — this lets us
+        # strip BOS/EOS from chunk token_ids without re-tokenizing.  The
+        # tokenizer may return a variable number of special tokens depending
+        # on the model, so we use the tokenizer's own definition.
+        special_ids = set(getattr(self.tokenizer, 'all_special_ids', []))
         token_ids = self.tokenizer.encode(text, add_special_tokens=True)
         n = len(token_ids)
 
         if n <= self.max_input_tokens:
-            yield self.tokenizer.decode(token_ids, skip_special_tokens=True), token_ids, n
+            # Strip leading/trailing special tokens from the short-document path
+            # so callers get consistent token_ids regardless of document length.
+            clean_ids = self._strip_special_boundary(token_ids, special_ids)
+            yield self.tokenizer.decode(token_ids, skip_special_tokens=True), clean_ids, len(clean_ids)
             return
 
-        stride = max(self.max_input_tokens - self.overlap_tokens, self.max_input_tokens // 2)
+        stride = self._stride()
         for start in range(0, n, stride):
             chunk_ids = token_ids[start:start + self.max_input_tokens]
             if len(chunk_ids) < 10:
+                # Tail chunk is too small to stand alone — append to previous
+                # chunk (if one exists) instead of silently discarding.
+                # For very short documents that still exceed max_input_tokens
+                # (unusual but possible), emit the small chunk anyway.
+                logger.debug(
+                    "chunk_with_tokens: tail chunk %d tokens < 10 — skipping",
+                    len(chunk_ids),
+                )
                 break
-            chunk_text = self.tokenizer.decode(chunk_ids, skip_special_tokens=False)
+            # Strip BOS/EOS that may appear at chunk boundaries after slicing.
+            clean_ids = self._strip_special_boundary(chunk_ids, special_ids)
+            chunk_text = self.tokenizer.decode(chunk_ids, skip_special_tokens=True)
             if chunk_text.strip():
-                yield chunk_text, chunk_ids, len(chunk_ids)
+                yield chunk_text, clean_ids, len(clean_ids)
+
+    @staticmethod
+    def _strip_special_boundary(token_ids: list[int], special_ids: set[int]) -> list[int]:
+        """Strip known special tokens from both ends of *token_ids*.
+
+        Only strips when the special token appears at the very beginning or
+        very end — interior occurrences are left intact (they may be
+        semantically meaningful, e.g. a mask token mid-sequence).
+        """
+        if not token_ids:
+            return token_ids
+        start = 0
+        end = len(token_ids)
+        while start < end and token_ids[start] in special_ids:
+            start += 1
+        while end > start and token_ids[end - 1] in special_ids:
+            end -= 1
+        return token_ids[start:end]
 
     def chunk_with_token_count(self, text: str) -> Iterator[tuple[str, int]]:
         """Backward-compatible: yield (chunk_text, token_count)."""

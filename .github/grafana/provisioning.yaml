@@ -24,4 +24,4 @@ providers:
     folder: Translation
     type: file
     options:
-      path: /etc/grafana/dashboards/tr_benchmark.json
+      path: /etc/grafana/provisioning/dashboards

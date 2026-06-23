@@ -4,22 +4,21 @@ Import from here instead of hardcoding values.  When a model or hardware
 changes, update these constants in one place.
 """
 
-# ── Model architecture defaults (Gemma 3 12B) ──
-# Note: These values are specific to the 12B model.  Other Gemma 3 sizes differ:
-DEFAULT_NUM_LAYERS = 48
-DEFAULT_NUM_KV_HEADS = 8
+# ── Model architecture defaults (TranslateGemma 4B) ──
+# These align with the default model in schema.py: google/translategemma-4b-it
+# head_dim=256 and vocab_size=262_144 are shared across all Gemma 3/4 family sizes.
+# Reference for 12B Gemma 3 variant (not used as default):
+#   num_layers=48, hidden_size=3840, num_kv_heads=8
+DEFAULT_NUM_LAYERS = 36
+DEFAULT_NUM_KV_HEADS = 4
 DEFAULT_HEAD_DIM = 256
-DEFAULT_HIDDEN_SIZE = 3840
-DEFAULT_VOCAB_SIZE = 262_144  # actual Gemma 3 12B vocab size
+DEFAULT_HIDDEN_SIZE = 2560
+DEFAULT_VOCAB_SIZE = 262_144  # shared across all Gemma variants
 
-MODEL_ARCHITECTURES = {
-    "4B":  {"num_layers": 36, "num_kv_heads": 4,  "head_dim": 256},
-    # Gemma 4 — next-generation architecture with QAT variants.
-    "E2B": {"num_layers": 26, "num_kv_heads": 4,  "head_dim": 256},
-    "E4B": {"num_layers": 34, "num_kv_heads": 8,  "head_dim": 256},
-    # DiffusionGemma — 26B total with ~4B active params (MoE).
-    "26B-A4B": {"num_layers": 48, "num_kv_heads": 8, "head_dim": 256},
-}
+# ── Model presets ─────────────────────────────────────────────────────────
+# Architecture defaults now live in benchmark.config.model_presets.MODEL_PRESETS.
+# Use model_presets.resolve_architecture_defaults() or get_preset_by_name()
+# instead of hardcoding architecture values.
 
 # ── PagedAttention ──
 PAGED_BLOCK_SIZE = 16
@@ -56,7 +55,9 @@ QUALITY_BATCH_SIZE = 32
 QUALITY_BLEU_TARGET = 25
 QUALITY_CHRF_TARGET = 54
 QUALITY_COMET_TARGET = 0.72
+QUALITY_BERTSORE_TARGET = 0.55
 COMET_BATCH_SIZE = 8
+# ── Tokenizer ──
 # Use "intl" tokenizer instead of "13a" because "13a" strips all non-ASCII
 # characters, destroying Turkish-specific characters (s-cedilla, g-breve,
 # u/o-umlaut, c-cedilla, dotted/dotless I).  "intl" preserves these characters
@@ -122,22 +123,12 @@ DIFFUSION_KEYWORDS = [
     "diffusiongemma",
 ]
 
-# ── QAT / Gemma 4 model paths (v3.4) ─────────────────────────────────────────
-# Canonical HuggingFace model IDs for the Gemma 4 QAT family.
+# ── QAT model detection keywords ──────────────────────────────────────────
+# Keywords for detecting QAT models (checked against model_path by the
+# autoregressive backend).  Model paths are resolved through MODEL_PRESETS
+# in model_presets.py.
 
-GEMMA4_QAT_MODEL_PATHS: dict[str, str] = {
-    # Quantization-Aware Trained (QAT) — standard BF16/FP16 weights
-    # that were trained with QAT for better post-training quantization.
-    "E2B-QAT-CT": "google/gemma-4-E2B-it-qat-mobile-ct",
-    "E4B-QAT-CT": "google/gemma-4-E4B-it-qat-mobile-ct",
-    # Q4_0 quantized variants — shipped as pre-quantised 4-bit weights
-    # in HuggingFace-compatible format.
-    "E2B-Q4_0": "google/gemma-4-E2B-it-qat-mobile-transformers",
-    "E4B-Q4_0": "google/gemma-4-E4B-it-qat-mobile-transformers",
-}
-
-# Keywords for detecting QAT models (checked against model_path).
-QAT_MODEL_KEYWORDS: tuple[str, ...] = (
+QAT_MODEL_KEYWORDS: tuple[str, str, str] = (
     "qat", "qat-mobile", "q4_0",
 )
 

@@ -3,9 +3,9 @@
 import glob
 import logging
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 import yaml
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, model_validator
 
 from benchmark.config.constants import (
     DEFAULT_DIFFUSION_STEPS,
@@ -42,7 +42,7 @@ class ModelConfig(BaseModel):
     target_length_multiplier: float = Field(default=DEFAULT_TARGET_LENGTH_MULTIPLIER, ge=1.0, le=4.0)
     # v3.0: Custom plugin name (when backend_type=custom).
     plugin_name: str = ""
-    plugin_config: dict = Field(default_factory=dict)
+    plugin_config: dict[str, Any] = Field(default_factory=dict, description="Custom plugin key-value settings. Values must be JSON-serializable primitives (str, int, float, bool, list, dict) — no arbitrary objects.")
 
     # v3.3: TensorRT engine optimization (CUDA only).
     use_tensorrt: bool = False
@@ -64,10 +64,8 @@ class ModelConfig(BaseModel):
     use_continuous_batching: bool = False
 
     # v3.4: QAT / Quantized model settings.
-    use_qat_model: bool = False
-    """Set to True to enable QAT-aware loading for Gemma 4 QAT models.
-    Auto-detected from model_path when set to 'auto' (default string)."""
-    qat_precision: str = "auto"  # auto | bf16 | fp16 | q4_0
+    # QAT model detection happens automatically in the autoregressive backend
+    # via QAT_MODEL_KEYWORDS (constants.py) — no manual config field needed.
 
     # v3.6: Model quantization level (for bitsandbytes loading).
     quantization: Literal["bf16", "fp16", "int8", "int4"] = "bf16"
@@ -76,15 +74,12 @@ class ModelConfig(BaseModel):
     nllb_source_lang: str = "eng_Latn"
     nllb_target_lang: str = "tur_Latn"
 
-    @field_validator("tokenizer_path")
-    @classmethod
-    def normalize_tokenizer_path(cls, v, info):
-        if not v:
-            return info.data.get("model_path", "")
-        return v
-
     @model_validator(mode="after")
     def validate_model_config(self):
+        # 0) Default tokenizer_path to model_path when empty
+        if not self.tokenizer_path:
+            object.__setattr__(self, "tokenizer_path", self.model_path)
+
         # 1) do_sample=True with temperature=0.0 is meaningless
         if self.do_sample and self.temperature == 0.0:
             raise ValueError(
@@ -97,6 +92,19 @@ class ModelConfig(BaseModel):
             raise ValueError(
                 "backend_type='diffusion' and use_tensorrt=True are mutually exclusive."
             )
+
+        # 2a) Validate tensorrt_cache_dir when TensorRT is enabled
+        if self.use_tensorrt and self.tensorrt_cache_dir:
+            cache_path = Path(self.tensorrt_cache_dir)
+            if not cache_path.exists():
+                try:
+                    cache_path.mkdir(parents=True, exist_ok=True)
+                    logger.info("Created TensorRT cache directory: %s", cache_path)
+                except OSError as exc:
+                    raise ValueError(
+                        f"tensorrt_cache_dir='{self.tensorrt_cache_dir}' does not exist "
+                        f"and could not be created: {exc}"
+                    ) from exc
 
         # 3) FP8 TensorRT requires H200/Hopper (SM 9.0+)
         if self.use_tensorrt and self.tensorrt_precision == "fp8":
@@ -113,8 +121,30 @@ class ModelConfig(BaseModel):
                     logger.debug(
                         "Skipping FP8 GPU capability check: CUDA is not initialized."
                     )
-            except Exception as e:
+            except (ImportError, RuntimeError, AttributeError) as e:
                 logger.debug("Skipping FP8 GPU capability check: %s", e)
+
+        # 3a) Diffusion params are only meaningful for diffusion backends
+        if self.backend_type != "diffusion":
+            diffusion_defaults = {
+                "diffusion_steps": DEFAULT_DIFFUSION_STEPS,
+                "guidance_scale": DEFAULT_GUIDANCE_SCALE,
+                "noise_schedule": DEFAULT_NOISE_SCHEDULE,
+                "target_length_multiplier": DEFAULT_TARGET_LENGTH_MULTIPLIER,
+            }
+            non_default_diffusion = []
+            for field_name, default_val in diffusion_defaults.items():
+                current_val = getattr(self, field_name)
+                if current_val != default_val:
+                    non_default_diffusion.append(
+                        f"{field_name}={current_val} (default: {default_val})"
+                    )
+            if non_default_diffusion:
+                logger.warning(
+                    "Non-default diffusion parameters set on a non-diffusion backend "
+                    "(backend_type='%s'): %s. These parameters will be ignored.",
+                    self.backend_type, ", ".join(non_default_diffusion),
+                )
 
         # 4) speculative_mode='draft_model' requires speculative_draft_model
         if self.use_speculative and self.speculative_mode == "draft_model" and not self.speculative_draft_model:
@@ -200,15 +230,16 @@ class BenchmarkConfig(BaseModel):
                 for p in data.input_paths:
                     found.extend(glob.glob(p, recursive=True))
                 if not found:
-                    logger.warning(
-                        "No files matched by data.input_paths=%s. ",
-                        data.input_paths,
+                    raise ValueError(
+                        f"No files matched by data.input_paths={data.input_paths}. "
+                        "Either fix the glob pattern or set input_paths to a valid path. "
+                        "Local paths must resolve to at least one file."
                     )
 
         # 4) Ensure data.reference_set_path exists (local only)
         ref_path = Path(data.reference_set_path)
         if not ref_path.exists():
-            logger.debug(
+            logger.warning(
                 "data.reference_set_path='%s' does not exist — "
                 "quality benchmark will be skipped.",
                 data.reference_set_path,
@@ -224,6 +255,10 @@ def load_config(path: str | Path) -> BenchmarkConfig:
     with open(path, "r") as f:
         raw = yaml.safe_load(f)
     if raw is None:
+        logger.warning(
+            "Config file '%s' is empty or contains only comments — "
+            "falling back to all defaults.", path
+        )
         raw = {}
     config = BenchmarkConfig(**raw)
     logger.info(f"Loaded config from {path}")

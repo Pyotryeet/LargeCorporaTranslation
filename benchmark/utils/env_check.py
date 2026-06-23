@@ -26,19 +26,28 @@ def run_preflight_checks(config, device_info, dry_run: bool = False) -> None:
         if per_device < 80:
             logger.warning(f"Per-GPU memory ({per_device:.0f}GB) is below H200 minimum (80GB)")
     elif device_info.backend == "mps":
-        if total_mem < 32:
-            issues.append(f"MPS requires >=32GB unified memory (found {total_mem:.0f}GB)")
+        if total_mem < 16:
+            logger.warning(
+                f"MPS: unified memory is {total_mem:.0f}GB — 16GB+ recommended for "
+                f"small models (4B); larger models may require 32GB+."
+            )
     output_dir = Path(config.data.output_dir)
     try:
         free = shutil.disk_usage(output_dir if output_dir.exists() else Path.cwd()).free / (1024**3)
-        # On MPS dev, 5GB is enough. On CUDA production, 20GB.
-        required = 5 if device_info.backend in ("mps", "cpu") else 20
+        # Disk estimates account for model weights + tokenizer + output data.
+        # MPS/CPU: models can be 2-30+ GB on disk depending on size (4B to 12B+).
+        # CUDA: larger models (7B+) can be 15-30 GB.
+        required = 10 if device_info.backend in ("mps", "cpu") else 20
         if dry_run:
-            required = 5  # Dry-run needs almost nothing
+            required = 10  # Dry-run needs almost nothing
         if free < required:
             issues.append(f"Insufficient disk space: {free:.0f}GB free, need {required}GB")
     except OSError:
-        pass
+        logger.warning(
+            "Could not check disk usage — skipping disk space check. "
+            "Ensure at least 10 GB of free space is available or the run may fail "
+            "with 'No space left on device'.",
+        )
     model_path = str(config.model.model_path)
     if not Path(model_path).exists() and not _is_huggingface_hub_id(model_path):
         issues.append(f"Model path not found: {config.model.model_path}")

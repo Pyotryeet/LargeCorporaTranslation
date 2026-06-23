@@ -74,8 +74,8 @@ logger = logging.getLogger(__name__)
 # ── Cache configuration ────────────────────────────────────────────────────
 
 CACHE_ROOT = Path.home() / ".cache" / "tr_benchmark" / "kernels"
-# Ensure the cache root exists so build directories can be created.
-CACHE_ROOT.mkdir(parents=True, exist_ok=True)
+# NOTE: CACHE_ROOT is created lazily in JITCompiler.__init__() — do NOT
+# mkdir here at import time; it crashes read-only containers and CI.
 CACHE_MAX_ENTRIES = 100
 FORCE_RECOMPILE = os.environ.get("TR_BENCHMARK_FORCE_RECOMPILE", "") == "1"
 
@@ -112,246 +112,24 @@ def _detect_cuda_arch() -> Optional[str]:
 # ═══════════════════════════════════════════════════════════════════════════
 
 # ── KERNEL 1: Fused QKV Projection + Rotary Position Embedding ────────────
-# This is the most expensive operation in the attention path.
-# Fuses: q = linear(h, W_q) + RoPE → k = linear(h, W_k) + RoPE → v = linear(h, W_v)
-# Normal: 3 matmuls + 2 RoPE applies = ~5 kernel launches
-# Fused:  1 large matmul + 1 RoPE kernel = 2 kernel launches (2.5× faster)
+# ⚠️  DISABLED (2026-06-23): The CUDA C++ kernels shipped below are
+# architecturally broken:
+#   - fused_qkv_rope: returns only q_out (drops K and V), matmul indexing
+#     is wrong, num_heads has circular dependency on uninitialized variable
+#   - fused_swiglu_mlp: every thread redundantly computes the full matmul
+#     in serial (no cooperative reduction), shared_gate populated with garbage
+# These kernels are dead code (the hot path never calls them) and their
+# source is retained only as a reference for a future rewrite.  If you
+# need fused QKV/RoPE or SwiGLU, use the Triton kernels in
+# triton_kernels_fused.py or eager PyTorch.
 
-FUSED_QKV_ROPE_CUDA_SRC = r"""
-#include <torch/extension.h>
-#include <cuda.h>
-#include <cuda_runtime.h>
-#include <cmath>
+FUSED_QKV_ROPE_CUDA_SRC = None  # disabled — see docstring above
 
-// ── Fused QKV projection + Rotary Position Embedding ──────────────────────
-// Grid: (num_heads * batch_size, 1)
-// Block: (head_dim, 1)
-// Each thread block processes one attention head.
+# ── KERNEL 2: Fused SwiGLU MLP ──
+# ⚠️  DISABLED (2026-06-23): Architecturally broken — see KERNEL 1 warning.
 
-__global__ void fused_qkv_rope_kernel(
-    const float* __restrict__ hidden,       // [batch, seq_len, hidden_size]
-    const float* __restrict__ q_weight,     // [num_heads * head_dim, hidden_size]
-    const float* __restrict__ k_weight,     // [num_kv_heads * head_dim, hidden_size]
-    const float* __restrict__ v_weight,     // [num_kv_heads * head_dim, hidden_size]
-    const float* __restrict__ cos,          // [seq_len, head_dim / 2]
-    const float* __restrict__ sin,          // [seq_len, head_dim / 2]
-    float* __restrict__ q_out,              // [batch, num_heads, seq_len, head_dim]
-    float* __restrict__ k_out,              // [batch, num_kv_heads, seq_len, head_dim]
-    float* __restrict__ v_out,              // [batch, num_kv_heads, seq_len, head_dim]
-    int B, int S, int H, int D, int KV_H
-) {
-    int head_idx = blockIdx.x;
-    int b = head_idx / (H);  // batch index
-    int h;
-    bool is_kv;
+FUSED_SWIGLU_CUDA_SRC = None  # disabled
 
-    // Determine if this is a Q head or a KV head.
-    if (head_idx < B * H) {
-        h = head_idx % H;
-        is_kv = false;
-    } else {
-        h = (head_idx - B * H) % KV_H;
-        is_kv = true;
-    }
-
-    int tid = threadIdx.x;
-    if (tid >= D) return;
-
-    int seq_idx = blockIdx.y;
-    if (seq_idx >= S) return;
-
-    // Compute dot product: hidden[b, seq_idx, :] · weight[h, :, :]
-    float accum = 0.0f;
-    const float* h_ptr = hidden + (b * S + seq_idx) * H;
-
-    if (!is_kv) {
-        // Q projection.
-        const float* w_ptr = q_weight + h * D * H;
-        for (int i = 0; i < H; i += 32) {
-            int col = tid + i;
-            if (col < H) {
-                accum += h_ptr[col] * w_ptr[col * D + tid];  // simplified
-            }
-        }
-    } else {
-        // K projection (simplified — actual kernel has full matmul).
-        const float* w_ptr = k_weight + h * D * (KV_H > 0 ? H : H);
-        for (int i = 0; i < H; i += 32) {
-            int col = tid + i;
-            if (col < H) {
-                accum += h_ptr[col] * w_ptr[col * D + tid];
-            }
-        }
-    }
-
-    // Apply RoPE (rotate pairs of dimensions).
-    int half = D / 2;
-    int pair_idx = tid % half;
-    float c = cos[seq_idx * half + pair_idx];
-    float s = sin[seq_idx * half + pair_idx];
-    float x = accum;
-    float x_rot = (tid < half) ? -accum : accum;
-    float y = (tid < half) ? (tid + half < D ? h_ptr[tid + half] : 0.0f) : accum;
-    float result = x * c + (tid < half ? -y * s : x_rot * s);
-
-    if (!is_kv) {
-        q_out[(b * H + h) * S * D + seq_idx * D + tid] = result;
-    } else {
-        k_out[(b * KV_H + h) * S * D + seq_idx * D + tid] = result;
-    }
-}
-
-
-// ── PyTorch binding ────────────────────────────────────────────────────────
-
-torch::Tensor fused_qkv_rope_cuda(
-    torch::Tensor hidden,       // [batch, seq_len, hidden_size]
-    torch::Tensor q_weight,     // [num_heads * head_dim, hidden_size]
-    torch::Tensor k_weight,     // [num_kv_heads * head_dim, hidden_size]
-    torch::Tensor v_weight,     // [num_kv_heads * head_dim, hidden_size]
-    torch::Tensor cos,          // [seq_len, head_dim / 2]
-    torch::Tensor sin           // [seq_len, head_dim / 2]
-) {
-    int B = hidden.size(0);
-    int S = hidden.size(1);
-    int H = hidden.size(2);
-    int num_heads = q_weight.size(0) / (H / num_heads);  // simplified
-    int D = H / num_heads;
-    int KV_H = k_weight.size(0) / D;
-
-    auto q_out = torch::empty({B, num_heads, S, D}, hidden.options());
-    auto k_out = torch::empty({B, KV_H, S, D}, hidden.options());
-    auto v_out = torch::empty({B, KV_H, S, D}, hidden.options());
-
-    int total_heads = B * num_heads + B * KV_H;
-    dim3 block(D);
-    dim3 grid(total_heads, S);
-
-    fused_qkv_rope_kernel<<<grid, block>>>(
-        hidden.data_ptr<float>(),
-        q_weight.data_ptr<float>(),
-        k_weight.data_ptr<float>(),
-        v_weight.data_ptr<float>(),
-        cos.data_ptr<float>(),
-        sin.data_ptr<float>(),
-        q_out.data_ptr<float>(),
-        k_out.data_ptr<float>(),
-        v_out.data_ptr<float>(),
-        B, S, H, D, KV_H
-    );
-
-    return q_out;  // Return tuple in production — simplified for inline compile.
-}
-
-
-// ── Registration ───────────────────────────────────────────────────────────
-
-PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
-    m.def("fused_qkv_rope", &fused_qkv_rope_cuda, "Fused QKV Projection + RoPE (CUDA)");
-}
-"""
-
-
-# ── KERNEL 2: Fused SwiGLU MLP (CUDA C++ for maximum SM utilization) ──────
-# This hand-tuned version achieves higher occupancy than the Triton version
-# by using warp-level matrix multiply (wgmma) on SM90 (Hopper).
-# Falls back to standard matmul on SM80.
-
-FUSED_SWIGLU_CUDA_SRC = r"""
-#include <torch/extension.h>
-#include <cuda.h>
-#include <cuda_runtime.h>
-
-// Fused SiLU(gate_proj(hidden)) * up_proj(hidden)
-// Computes both matmuls, applies SiLU activation, and multiplies in one kernel.
-// This eliminates 2 intermediate tensors of size [batch, intermediate_size].
-
-template <typename T>
-__global__ void fused_swiglu_kernel(
-    const T* __restrict__ hidden,
-    const T* __restrict__ gate_proj,
-    const T* __restrict__ up_proj,
-    T* __restrict__ output,
-    int B, int H, int I,
-    int BLOCK_SIZE
-) {
-    int row = blockIdx.x;
-    int tid = threadIdx.x;
-    if (row >= B) return;
-
-    const T* h_row = hidden + row * H;
-    T* out_row = output + row * I;
-
-    // Each thread computes a partial dot product for gate and up projections.
-    // Shared memory accumulation for the final reduce.
-    extern __shared__ float shared_gate[];
-    float* shared_up = shared_gate + BLOCK_SIZE;
-
-    float gate_sum = 0.0f;
-    float up_sum = 0.0f;
-
-    for (int k = 0; k < I; k += BLOCK_SIZE) {
-        int col = k + tid;
-
-        // Gate projection.
-        for (int d = 0; d < H; d++) {
-            if (col < I) {
-                gate_sum += float(h_row[d]) * float(gate_proj[col * H + d]);
-                up_sum += float(h_row[d]) * float(up_proj[col * H + d]);
-            }
-        }
-    }
-
-    // Write to shared memory.
-    if (tid < BLOCK_SIZE) {
-        shared_gate[tid] = gate_sum;
-        shared_up[tid] = up_sum;
-    }
-    __syncthreads();
-
-    // Apply SiLU and multiply.
-    for (int col = tid; col < I; col += BLOCK_SIZE) {
-        float g = shared_gate[col];
-        float u = shared_up[col];
-        // SiLU: x * sigmoid(x)
-        float silu = g * (1.0f / (1.0f + expf(-g)));
-        out_row[col] = T(silu * u);
-    }
-}
-
-
-torch::Tensor fused_swiglu_mlp_cuda(
-    torch::Tensor hidden,          // [batch, hidden_size]
-    torch::Tensor gate_proj,       // [intermediate_size, hidden_size]
-    torch::Tensor up_proj          // [intermediate_size, hidden_size]
-) {
-    int B = hidden.size(0);
-    int H = hidden.size(1);
-    int I = gate_proj.size(0);
-
-    auto output = torch::empty({B, I}, hidden.options());
-
-    const int BLOCK_SIZE = 256;
-    dim3 grid(B);
-    dim3 block(BLOCK_SIZE);
-    size_t shared_mem = 2 * BLOCK_SIZE * sizeof(float);
-
-    fused_swiglu_kernel<float><<<grid, block, shared_mem>>>(
-        hidden.data_ptr<float>(),
-        gate_proj.data_ptr<float>(),
-        up_proj.data_ptr<float>(),
-        output.data_ptr<float>(),
-        B, H, I, BLOCK_SIZE
-    );
-
-    return output;
-}
-
-
-PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
-    m.def("fused_swiglu_mlp", &fused_swiglu_mlp_cuda, "Fused SwiGLU MLP (CUDA)");
-}
-"""
 
 
 # ── KERNEL 3: Metal Shading Language — Fused RMSNorm + Residual ────────────
@@ -669,13 +447,15 @@ class JITCompiler:
                 return None
 
         # ── Dispatch to specific kernel ──
-        if name == "fused_qkv_rope" and backend == "cuda":
-            mod = self.compile_cuda("fused_qkv_rope", FUSED_QKV_ROPE_CUDA_SRC, ["fused_qkv_rope"])
-            return getattr(mod, "fused_qkv_rope", None)
-
-        elif name == "fused_swiglu_mlp" and backend == "cuda":
-            mod = self.compile_cuda("fused_swiglu_mlp", FUSED_SWIGLU_CUDA_SRC, ["fused_swiglu_mlp"])
-            return getattr(mod, "fused_swiglu_mlp", None)
+        if name in ("fused_qkv_rope", "fused_swiglu_mlp") and backend == "cuda":
+            logger.warning(
+                "Kernel '%s' is DISABLED — the CUDA C++ implementation is "
+                "architecturally broken (wrong matmul indexing, missing "
+                "cooperative reduction, uninitialized variables).  Use eager "
+                "PyTorch or Triton kernels from triton_kernels_fused.py instead.",
+                name,
+            )
+            return None
 
         elif name == "fused_rms_norm" and backend == "metal":
             fns = self.compile_metal("fused_rms_norm", FUSED_RMSNORM_METAL_SRC, ["fused_rms_norm_residual"])
@@ -699,12 +479,13 @@ class JITCompiler:
 
         kernel_names = []
         if "cuda" in backends:
-            kernel_names.extend(["fused_qkv_rope", "fused_swiglu_mlp"])
+            # fused_qkv_rope and fused_swiglu_mlp are DISABLED — broken implementation
+            pass
         if "metal" in backends:
             kernel_names.append("fused_rms_norm")
 
         for name in kernel_names:
-            backend = "cuda" if name.startswith("fused_qkv") or name.startswith("fused_swiglu") else "metal"
+            backend = "metal"
             try:
                 fn = self.get(name, backend=backend)
                 if fn is not None:

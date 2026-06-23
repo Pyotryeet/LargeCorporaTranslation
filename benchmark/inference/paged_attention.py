@@ -1,25 +1,30 @@
 """PagedAttention KV-cache manager (v3.4).
 
 Implements vLLM-style block-level virtual memory for KV-cache management.
-Wired into the autoregressive backend hot path via the PagedCache protocol
-adapter.  See ``AutoregressiveBackend._extreme_decode()`` for integration.
+Wired into the continuous batching scheduler via the PagedCache protocol
+adapter.  See ``ContinuousBatcher._prefill_batch()`` and ``step()`` for
+the hot-path integration.
 
 Key concepts
-PagedKVCache blocks**.  The paged cache is never consumed by any attention
-kernel.  It is referenced only from:
+------------
+- **PagedKVCache**: Block-level memory manager.  Allocates/frees blocks,
+  writes KV into physical block slots, reads assembled contiguous tensors.
+- **PagedLayer**: Per-layer adapter implementing the ``DynamicLayer``
+  interface that transformers ``DynamicCache`` expects.
+- **PagedCache**: Drop-in ``DynamicCache`` replacement — routes attention
+  layer KV reads/writes through ``PagedKVCache``.
 
-  - ``AutoregressiveBackend._init_paged_attention()`` — never called in the
-    default path because ``_use_paged_attention`` is hardcoded to ``False``.
-  - ``AutoregressiveBackend._convert_to_paged()`` — writes KV data into
-    paged blocks but returns the original HF cache unchanged.  Also never
-    called in the hot path.
-  - ``AutoregressiveBackend.close()`` and ``__del__`` — attribute access
-    for cleanup.
+Usage
+-----
+>>> paged_kv = PagedKVCache(num_layers=24, num_kv_heads=4, ...)
+>>> cache = PagedCache(paged_kv, seq_ids=[0, 1])
+>>> out = model(input_ids=..., past_key_values=cache, use_cache=True)
 
-Until model attention forward hooks are written to redirect KV reads from
-``past_key_values`` to ``PagedKVCache.read()``, this module is **complete
-but unused** — allocating a ``PagedKVCache`` would waste GPU memory with
-zero runtime benefit.
+This module is wired into the inference hot path through:
+  - ``ContinuousBatcher._prefill_batch()`` — allocates paged blocks,
+    writes prefill KV, creates PagedCache.
+  - ``ContinuousBatcher.step()`` — passes PagedCache as past_key_values
+    to model forward, rebuilds on completion.
 
 For the vLLM-style architecture this implements, see:
   - Kwon et al., "Efficient Memory Management for Large Language Model Serving

@@ -19,7 +19,7 @@ class BatchLogger:
         self._log_file: Optional[Path] = None
         self._buffer: list[str] = []
         self._flush_interval = BATCH_FLUSH_INTERVAL
-        self._buffer_lock = threading.Lock()
+        self._buffer_lock = threading.RLock()
 
     def start(self) -> None:
         ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
@@ -70,20 +70,16 @@ class BatchLogger:
         with self._buffer_lock:
             self._buffer.append(sanitized_dumps(entry, ensure_ascii=False))
             self.batch_count += 1
-        if len(self._buffer) >= self._flush_interval:
-            self.flush()
+            if len(self._buffer) >= self._flush_interval:
+                self._flush_locked()
 
     def flush(self) -> None:
+        """Public flush — acquires the buffer lock."""
         if not self._buffer or not self._log_file:
             return
         try:
             with self._buffer_lock:
-                if not self._buffer:
-                    return
-                with open(self._log_file, "a") as f:
-                    for line in self._buffer:
-                        f.write(line + "\n")
-                self._buffer.clear()
+                self._flush_locked()
         except OSError as e:
             logger.error(f"Flush failed — keeping buffer for next retry ({len(self._buffer)} entries): {e}")
             # Prevent unbounded buffer growth on persistent flush failures.
@@ -96,3 +92,12 @@ class BatchLogger:
                     f"Buffer exceeded MAX_METRICS_BUFFER_SIZE ({MAX_METRICS_BUFFER_SIZE}); "
                     f"dropped oldest {len(dropped)} batch log entries to prevent OOM"
                 )
+
+    def _flush_locked(self) -> None:
+        """Flush the buffer to disk.  Caller must hold ``self._buffer_lock``."""
+        if not self._buffer or not self._log_file:
+            return
+        with open(self._log_file, "a") as f:
+            for line in self._buffer:
+                f.write(line + "\n")
+        self._buffer.clear()

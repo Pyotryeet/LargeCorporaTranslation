@@ -9,13 +9,30 @@ backend creates a ``SpeculativeDecoder`` in ``load()`` and dispatches
 
 Performance expectation
 ------------------------
-Self-speculative (early-layer draft): ~1.1–1.3× in best case, depending
+Self-speculative (early-layer draft): ~1.1–1.5× in best case, depending
 on draft/verify layer ratio and token acceptance rate.  The current
 implementation processes sequences one-at-a-time in a per-sequence for
 loop — true batch-level vectorization requires tree-attention support to
 verify K speculative tokens across all B sequences in the batch
 simultaneously.  The draft_model mode with a well-matched small model
 can achieve 1.5–2.5× in wall-clock terms but requires a shared tokenizer.
+
+WARNING — Re-forward fallback on crop failure
+---------------------------------------------
+When ``DynamicCache.crop()`` fails (e.g., older transformers versions),
+the verify phase falls back to a full-model re-forward on the accepted
+tokens only.  This re-forward erases most of the speculative speedup for
+that step because it runs the full L layers instead of just the verify
+layers (L-D).  The fallback is correctness-preserving but a performance
+pessimisation.  Set ``TR_ENABLE_EXPERIMENTAL_SPECULATIVE=1`` to enable
+tree-attention verify that avoids this codepath entirely.
+
+Activation gate
+---------------
+Speculative decoding is gated behind the environment variable
+``TR_ENABLE_EXPERIMENTAL_SPECULATIVE``.  It must be set to ``"1"``
+for the speculative path to activate.  Without it, the factory returns
+``None`` and the backend falls through to standard autoregressive decode.
 
 Decoders
 --------
@@ -239,6 +256,64 @@ def _find_lm_head(model: nn.Module) -> nn.Module:
     raise AttributeError("Cannot locate lm_head")
 
 
+# ── KV-cache utility functions (used by both speculative decoder classes) ──
+
+
+def _clone_kv_cache(past_kv):
+    """Build a fresh ``DynamicCache`` from a model's ``past_key_values``.
+
+    Returns a ``DynamicCache`` if available.  Falls back to returning
+    ``past_kv`` unchanged when ``DynamicCache`` is not importable (older
+    transformers) or when *past_kv* is already a plain tuple (used by
+    tiny test models).
+
+    The returned cache is independent — cloning the tensors so draft
+    updates don't corrupt the prefill KV.
+    """
+    try:
+        from transformers.cache_utils import DynamicCache
+    except ImportError:
+        return past_kv  # pre-4.45 transformers — tuple of (k,v) tuples
+
+    # If past_kv is already a DynamicCache, clone its entries.
+    if isinstance(past_kv, DynamicCache):
+        cache = DynamicCache()
+        for i in range(len(past_kv)):
+            k, v = past_kv[i]
+            cache.update(k.clone(), v.clone(), i)
+        return cache
+
+    # Tuple-of-tuples format (older transformers or test models).
+    # Return as-is — individual layer calls accept plain tuples too.
+    return past_kv
+
+
+def _expand_cache_for_batch_fn(past_kv, target_batch_size: int):
+    """Expand a ``DynamicCache`` to *target_batch_size* by repeating
+    each layer's KV entries.
+
+    Used when the verify phase processes K speculative candidates as a
+    batch — the prefill cache has batch=1 but the verify forward needs
+    batch=K.
+    """
+    try:
+        from transformers.cache_utils import DynamicCache
+    except ImportError:
+        return past_kv
+
+    if not isinstance(past_kv, DynamicCache):
+        return past_kv
+
+    cache = DynamicCache()
+    for i in range(len(past_kv)):
+        k, v = past_kv[i]
+        # k, v: [1, num_heads, seq_len, head_dim]
+        k_expanded = k.repeat(target_batch_size, 1, 1, 1)
+        v_expanded = v.repeat(target_batch_size, 1, 1, 1)
+        cache.update(k_expanded, v_expanded, i)
+    return cache
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # Self-Speculative Decoder — zero extra VRAM, always tokenizer-compatible
 # ═════════════════════════════════════════════════════════════════════════════
@@ -265,10 +340,10 @@ class SelfSpeculativeDecoder(SpeculativeDecoder):
     For a model with L layers and D draft layers, K speculative tokens:
       - Draft cost:  D/L × K forward passes (single-token each)
       - Verify cost: (L-D)/L × 1 forward pass  (batched K tokens)
-      - Speedup:     K × acceptance_rate / (1 + K × D/L)
+      - Speedup:     K × acceptance_rate / (K × D/L + (L-D)/L)
 
     With L=16, D=4, K=3, acceptance_rate=0.75:
-      - Speedup ≈ 3 × 0.75 / (1 + 3 × 0.25) = 2.25 / 1.75 ≈ 1.3×
+      - Speedup ≈ 3 × 0.75 / (3 × 0.25 + 0.75) = 2.25 / 1.50 = 1.5×
     """
 
     def __init__(self, backend: Any, config: SpeculativeConfig | None = None):
@@ -361,58 +436,21 @@ class SelfSpeculativeDecoder(SpeculativeDecoder):
 
     @staticmethod
     def _full_cache_from_past(past_kv):
-        """Build a fresh ``DynamicCache`` from a model's ``past_key_values``.
+        """Build a fresh, independent KV-cache clone.
 
-        Returns a ``DynamicCache`` if available.  Falls back to returning
-        ``past_kv`` unchanged when ``DynamicCache`` is not importable (older
-        transformers) or when *past_kv* is already a plain tuple (used by
-        tiny test models).
-
-        The returned cache is independent — cloning the tensors so draft
-        updates don't corrupt the prefill KV.
+        Delegates to the module-level ``_clone_kv_cache()`` function.
+        Kept as a static method for backward compatibility.
         """
-        try:
-            from transformers.cache_utils import DynamicCache
-        except ImportError:
-            return past_kv  # pre-4.45 transformers — tuple of (k,v) tuples
-
-        # If past_kv is already a DynamicCache, clone its entries.
-        if isinstance(past_kv, DynamicCache):
-            cache = DynamicCache()
-            for i in range(len(past_kv)):
-                k, v = past_kv[i]
-                cache.update(k.clone(), v.clone(), i)
-            return cache
-
-        # Tuple-of-tuples format (older transformers or test models).
-        # Return as-is — individual layer calls accept plain tuples too.
-        return past_kv
+        return _clone_kv_cache(past_kv)
 
     @staticmethod
     def _expand_cache_for_batch(past_kv, target_batch_size: int):
-        """Expand a ``DynamicCache`` to *target_batch_size* by repeating
-        each layer's KV entries.
+        """Expand a cache to *target_batch_size* by repeating KV entries.
 
-        Used when the verify phase processes K speculative candidates as a
-        batch — the prefill cache has batch=1 but the verify forward needs
-        batch=K.
+        Delegates to the module-level ``_expand_cache_for_batch_fn()``.
+        Kept as a static method for backward compatibility.
         """
-        try:
-            from transformers.cache_utils import DynamicCache
-        except ImportError:
-            return past_kv
-
-        if not isinstance(past_kv, DynamicCache):
-            return past_kv
-
-        cache = DynamicCache()
-        for i in range(len(past_kv)):
-            k, v = past_kv[i]
-            # k, v: [1, num_heads, seq_len, head_dim]
-            k_expanded = k.repeat(target_batch_size, 1, 1, 1)
-            v_expanded = v.repeat(target_batch_size, 1, 1, 1)
-            cache.update(k_expanded, v_expanded, i)
-        return cache
+        return _expand_cache_for_batch_fn(past_kv, target_batch_size)
 
     @property
     def is_loaded(self) -> bool:
@@ -555,10 +593,15 @@ class SelfSpeculativeDecoder(SpeculativeDecoder):
                         [draft_tokens], device=device, dtype=torch.long,
                     )  # [1, K]
 
+                    # Clone past_kv before verify to prevent mutation.
+                    # DynamicCache.update() modifies the cache in-place even
+                    # when use_cache=False in some HF versions.
+                    verify_kv = self._full_cache_from_past(past_kv)
+
                     full_model_out = backend.model(
                         input_ids=candidates,
-                        past_key_values=past_kv,
-                        use_cache=False,   # don't pollute main KV-cache
+                        past_key_values=verify_kv,
+                        use_cache=True,
                     )
                     verify_logits = full_model_out.logits  # [1, K, vocab]
                     verify_logits = verify_logits.squeeze(0)  # [K, vocab]
@@ -593,29 +636,28 @@ class SelfSpeculativeDecoder(SpeculativeDecoder):
                     self.total_accepted += n_accepted_this_round
 
                     # ── Update past_kv for next iteration ──
-                    # The full model forward (prefill) populated the true KV-cache.
-                    # After draft+verify, we need the KV-cache that reflects the
-                    # accepted tokens.  Since the verify layers were run with the
-                    # draft's hidden states (not real token embeddings), their
-                    # KV-cache entries are approximate.  For strict correctness,
-                    # we re-run the full model on the accepted tokens.
-                    #
-                    # Fast path (approximate): use the verify KV entries.
-                    # Correct path: re-run full model prefill-style on accepted tokens.
-                    #
-                    # We take the correct path here because KV drift compounds
-                    # across iterations and degrades output quality.
-                    accepted_ids = generated_ids[-n_accepted_this_round:]
-                    if accepted_ids:
-                        accepted_t = torch.tensor(
-                            [accepted_ids], device=device, dtype=torch.long,
-                        )  # [1, N]
-                        reforward_out = backend.model(
-                            input_ids=accepted_t,
-                            past_key_values=past_kv,
-                            use_cache=True,
-                        )
-                        past_kv = reforward_out.past_key_values
+                    # The verify forward ran on a CLONED cache, so the main
+                    # past_kv is unpolluted.  Crop verify_kv to only the
+                    # accepted tokens and use it as the new past_kv.  This
+                    # avoids a wasteful full-model re-forward.
+                    if n_accepted_this_round > 0:
+                        try:
+                            # Crop to prefill_len + accepted count.
+                            new_len = prefill_len + len(generated_ids)
+                            verify_kv.crop(new_len)
+                            past_kv = verify_kv
+                        except Exception:
+                            # Fallback: re-run on accepted tokens if crop fails.
+                            accepted_ids = generated_ids[-n_accepted_this_round:]
+                            accepted_t = torch.tensor(
+                                [accepted_ids], device=device, dtype=torch.long,
+                            )
+                            reforward_out = backend.model(
+                                input_ids=accepted_t,
+                                past_key_values=past_kv,
+                                use_cache=True,
+                            )
+                            past_kv = reforward_out.past_key_values
 
                     if generated_ids and generated_ids[-1] == eos_id:
                         break
@@ -637,13 +679,13 @@ class SelfSpeculativeDecoder(SpeculativeDecoder):
                         generated_ids, skip_special_tokens=True,
                     ).strip()
 
-                # Strip "model" artifact
-                if generated_ids and len(generated_ids) > 0:
-                    first_tok = tokenizer.decode(
-                        [generated_ids[0]], skip_special_tokens=False,
-                    )
-                    if first_tok.strip() == "model":
-                        translated_text = translated_text[len("model"):].strip()
+                # Strip "model" prefix if present.
+                # NOTE: This is a heuristic — some models emit 'model' as the
+                # first token of turn-taking.  We check the decoded text prefix
+                # rather than the first token to avoid tokenizer-specific
+                # decode artifacts.  Future: track prompt length instead.
+                if translated_text.startswith("model"):
+                    translated_text = translated_text[len("model"):].strip()
 
                 seq_latency_ms = (seq_end - seq_start) * 1000.0
                 total_draft_ms += seq_draft_ms
@@ -897,9 +939,14 @@ class DraftModelSpeculativeDecoder(SpeculativeDecoder):
                         [draft_tokens_list], device=device, dtype=torch.long,
                     )  # [1, K]
 
+                    # Clone past_kv before verify to prevent mutation.
+                    # DynamicCache.update() modifies the cache in-place even
+                    # when use_cache=False in some HF versions.
+                    verify_kv = _clone_kv_cache(past_kv)
+
                     verify_out = backend.model(
                         input_ids=candidates,
-                        past_key_values=past_kv,
+                        past_key_values=verify_kv,
                         use_cache=True,
                     )
                     verify_logits = verify_out.logits  # [1, K, vocab]
@@ -928,8 +975,27 @@ class DraftModelSpeculativeDecoder(SpeculativeDecoder):
                     self.total_drafted += K
                     self.total_accepted += n_accepted_this_round
 
-                    # Update KV-cache
-                    past_kv = verify_out.past_key_values
+                    # Update KV-cache: crop verify output to only accepted
+                    # tokens to prevent cache pollution from unaccepted drafts.
+                    if n_accepted_this_round > 0:
+                        try:
+                            new_len = (
+                                seq_ids.shape[1] + len(generated_ids)
+                            )
+                            verify_kv.crop(new_len)
+                            past_kv = verify_kv
+                        except Exception:
+                            # Fallback: re-run on accepted tokens if crop fails.
+                            accepted_ids = generated_ids[-n_accepted_this_round:]
+                            accepted_t = torch.tensor(
+                                [accepted_ids], device=device, dtype=torch.long,
+                            )
+                            reforward_out = backend.model(
+                                input_ids=accepted_t,
+                                past_key_values=past_kv,
+                                use_cache=True,
+                            )
+                            past_kv = reforward_out.past_key_values
 
                     if generated_ids and generated_ids[-1] == eos_id:
                         break
@@ -1020,7 +1086,7 @@ def create_speculative_decoder(
     draft_model_name: str = "",
     num_speculative_tokens: int = 3,
     num_draft_layers: int = 0,
-) -> SpeculativeDecoder:
+) -> Optional[SpeculativeDecoder]:
     """Create the appropriate speculative decoder for the given mode.
 
     Parameters
@@ -1039,8 +1105,23 @@ def create_speculative_decoder(
 
     Returns
     -------
-    SpeculativeDecoder
+    SpeculativeDecoder or None
+        Returns ``None`` when ``TR_ENABLE_EXPERIMENTAL_SPECULATIVE`` is not
+        set to ``"1"`` — the caller MUST fall back to standard autoregressive
+        decode in that case.
     """
+    import os
+
+    # Gate: speculative decoding is experimental.  Without this env var,
+    # return None so the caller falls through to standard AR decode.
+    if os.environ.get("TR_ENABLE_EXPERIMENTAL_SPECULATIVE") != "1":
+        logger.warning(
+            "Speculative decoding requested but TR_ENABLE_EXPERIMENTAL_SPECULATIVE "
+            "is not set to '1'.  Falling back to standard autoregressive decode.  "
+            "Set the env var to opt into the experimental speculative path."
+        )
+        return None
+
     config = SpeculativeConfig(
         mode=mode,
         draft_model_name=draft_model_name,

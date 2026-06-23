@@ -17,6 +17,14 @@ class TestJSONLLoader:
         assert len(docs) > 1, f"Expected more than 1 document, got {len(docs)}"
         doc_id, file_name, text = docs[0]
         assert doc_id == 0
+        # Guard: data should not be the known synthetic "THIS DATA IS NOT REAL"
+        # placeholder text.  If this assertion fires, tests are running on
+        # auto-generated garbage — provide real data at data/input/ or
+        # tests/fixtures/.
+        assert "NOT REAL" not in text, (
+            "Test is running on auto-generated synthetic data. "
+            "Provide real data at data/input/ or tests/fixtures/."
+        )
 
     def test_shuffle_preserves_count(self, sample_jsonl_path):
         loader = JSONLLoader([sample_jsonl_path], shuffle=True, seed=42)
@@ -37,6 +45,13 @@ class TestJSONLLoader:
         texts2 = [t for _, _, t in loader2.iter_documents()]
         # Different seeds should likely produce different orders
         # (very unlikely to be identical for more than a few items)
+        # Note: for very small datasets (< 3 items), two different seeds can
+        # coincidentally produce the same order.
+        assert texts1 != texts2, (
+            f"Different seeds (42 vs 999) produced identical order "
+            f"({len(texts1)} docs). This is statistically possible but "
+            f"exceedingly unlikely for non-trivial datasets."
+        )
 
     def test_missing_pattern_does_not_crash(self):
         """Missing glob patterns warn instead of crashing — pipeline drains empty."""
@@ -135,6 +150,17 @@ class TestJSONLLoader:
         )
         docs = list(loader.iter_documents())
         assert len(docs) > 1
+        # Verify documents are well-formed: each must have a doc_id, file_name, and
+        # non-empty text.  This catches the case where synthetic auto-generated data
+        # silently produces structurally valid but meaningless output.
+        for doc in docs[:3]:
+            assert len(doc) == 3, f"Expected (id, file, text), got {len(doc)}-tuple"
+            doc_id, file_name, text = doc
+            assert isinstance(doc_id, int)
+            assert isinstance(file_name, str)
+            assert isinstance(text, str) and len(text) > 0, (
+                f"Document {doc_id} has empty text — possible fixture corruption"
+            )
 
     def test_temp_files_cleaned_up(self, sample_jsonl_path):
         """Binary run files are cleaned up after external sort completes."""
@@ -156,9 +182,19 @@ class TestJSONLLoader:
                 f"Temp files not cleaned up: {bin_files}"
             )
 
+    @pytest.mark.xfail(
+        reason=(
+            "Generator finalization via __del__ is not guaranteed to run "
+            "immediately in CPython. Residual .bin files may remain until the "
+            "TemporaryDirectory context manager exits. This test documents "
+            "expected behavior but __del__ timing is implementation-defined."
+        ),
+        strict=False,
+    )
     def test_temp_files_cleaned_up_on_error(self, sample_jsonl_path):
         """Temp files are cleaned up even if the iterator is not exhausted."""
         import tempfile as tmp
+        import gc
 
         with tmp.TemporaryDirectory() as td:
             loader = JSONLLoader(
@@ -173,13 +209,15 @@ class TestJSONLLoader:
             # block in _external_shuffle_iter runs via generator.close().
             del it
             del loader
+            gc.collect()  # Encourage immediate finalization
 
             # Check that .bin files were cleaned up by generator finalization.
             bin_files = list(Path(td).glob("*.bin"))
-            # Note: generator finalization via __del__ is not guaranteed
-            # to run immediately.  We accept either clean or the presence
-            # of residual files (which get cleaned by the OS eventually).
-            # This test documents the expected behavior, not a hard guarantee.
+            # Generator finalization via __del__ is not guaranteed to run
+            # immediately, so we mark this as xfail (non-strict).
+            assert len(bin_files) == 0, (
+                f"Temp files not cleaned up: {bin_files}"
+            )
 
     def test_gz_external_shuffle(self, sample_jsonl_gz_path):
         """External sort works with gzip-compressed input."""

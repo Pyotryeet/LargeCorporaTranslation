@@ -24,7 +24,6 @@ Any HF model whose forward takes (inputs_embeds, encoder_hidden_states)
 
 from __future__ import annotations
 
-import contextlib
 import logging
 import math
 import os
@@ -38,7 +37,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from transformers import AutoModel, AutoTokenizer
 
-from benchmark.hardware.precision import get_precision_config, is_transformer_engine_available
+from benchmark.hardware.precision import get_precision_config
 from benchmark.inference.backends.protocol import (
     BackendConfig,
     BatchGenerationOutput,
@@ -61,12 +60,12 @@ def _cosine_schedule(t: torch.Tensor, T: int) -> torch.Tensor:
 
 
 def _linear_schedule(t: torch.Tensor, T: int) -> torch.Tensor:
-    """Linear noise schedule."""
+    """Linear noise schedule — alpha_bar decreases uniformly from 1 to 0."""
     return 1.0 - t / T
 
 
 def _sqrt_schedule(t: torch.Tensor, T: int) -> torch.Tensor:
-    """Square-root schedule."""
+    """Square-root noise schedule — gentler decay near T=0."""
     return 1.0 - torch.sqrt(t / T)
 
 
@@ -538,7 +537,13 @@ class DiffusionBackend(InferenceBackend):
                 # ── Batched CFG ── (EXTREME: cond+uncond in one forward)
                 null_source = torch.zeros_like(source_hidden)
                 combined_source = torch.cat([source_hidden, null_source], dim=0)
-                combined_target = torch.cat([x_t_conditioned, x_t_conditioned], dim=0)
+                # Deep-copy x_t_conditioned for the unconditional branch so
+                # the conditioned branch's hidden states don't leak into the
+                # unconditional forward via autograd or in-place ops.  Without
+                # this, the batched forward effectively runs conditioned
+                # embeddings on both branches, defeating CFG entirely.
+                x_t_uncond = x_t_conditioned.clone()
+                combined_target = torch.cat([x_t_conditioned, x_t_uncond], dim=0)
                 combined_mask = (
                     torch.cat([attention_mask, attention_mask], dim=0)
                     if attention_mask is not None else None
@@ -715,6 +720,23 @@ class DiffusionBackend(InferenceBackend):
         hasn't changed (same nearest token), its forward-pass contribution
         is nearly identical — we can reuse the cached logits for that
         position and only recompute positions that changed.
+
+        +------------------------------------------------------------------+
+        | INTENTIONALLY DISABLED — CACHE POPULATED BUT NOT USED            |
+        |                                                                  |
+        | A correct Fast-dLLM implementation requires model-level hooks    |
+        | to mask out unchanged KV-cache positions, which is not safe to   |
+        | do generically across arbitrary HF models.  Mixing partial       |
+        | cached logits with newly-computed logits from different forward  |
+        | passes produces subtly-wrong outputs (stale activations,         |
+        | incorrect attention patterns).                                   |
+        |                                                                  |
+        | The cache hit/miss statistics are tracked for observability      |
+        | (_dllm_cache_hits, _dllm_cache_total) so users can gauge the     |
+        | potential speedup.  Actual cache-based fast-path will be gated   |
+        | behind a future config flag (e.g. diffusion.enable_dllm_cache)   |
+        | once per-model KV-cache masking hooks are implemented.           |
+        +------------------------------------------------------------------+
         """
         # Compute which positions changed since last step.
         current_tokens = self._nearest_token(target_embeds)
@@ -725,7 +747,8 @@ class DiffusionBackend(InferenceBackend):
             changed_mask = (current_tokens != self._prev_token_ids)  # [bs, tgt_len]
             unchanged_ratio = 1.0 - changed_mask.float().mean().item()
 
-            # If >90% positions unchanged, use fast path.
+            # If >90% positions unchanged, increment the "would have hit"
+            # counter but still fall through to the full forward pass.
             if unchanged_ratio > 0.90:
                 self._dllm_cache_hits += 1
                 # NOTE: Caching is intentionally disabled for correctness.
@@ -786,14 +809,45 @@ class DiffusionBackend(InferenceBackend):
                 )
             # Slice out the target portion of logits.
             src_len = source_hidden.shape[1]
-            return outputs.last_hidden_state[:, src_len:, :] @ self.model.get_input_embeddings().weight.T
+            # Use lm_head / output embeddings for the projection.
+            # Only fall back to input embeddings if tie_word_embeddings is set.
+            if hasattr(self.model, 'lm_head'):
+                proj_weight = self.model.lm_head.weight
+            elif hasattr(self.model, 'get_output_embeddings'):
+                proj_weight = self.model.get_output_embeddings().weight
+            elif self.model.config.tie_word_embeddings:
+                proj_weight = self.model.get_input_embeddings().weight
+            else:
+                raise AttributeError(
+                    "Decoder-only model has no lm_head, get_output_embeddings, "
+                    "and tie_word_embeddings is not set — cannot project "
+                    "hidden states to logits."
+                )
+            return outputs.last_hidden_state[:, src_len:, :] @ proj_weight.T
         except Exception:
             # Final fallback: just run with target embeddings only.
             with self._fp8_context():
                 outputs = self.model(inputs_embeds=target_embeds, return_dict=True)
             if hasattr(outputs, 'logits'):
                 return outputs.logits
-            return outputs.last_hidden_state @ self.model.get_input_embeddings().weight.T
+            # Same projection logic for the final fallback.
+            if hasattr(self.model, 'lm_head'):
+                proj_weight = self.model.lm_head.weight
+            elif hasattr(self.model, 'get_output_embeddings'):
+                proj_weight = self.model.get_output_embeddings().weight
+            elif getattr(self.model.config, 'tie_word_embeddings', False):
+                proj_weight = self.model.get_input_embeddings().weight
+            else:
+                logger.warning(
+                    "Decoder-only model has no lm_head, get_output_embeddings, "
+                    "and tie_word_embeddings is not set in config.  Falling back "
+                    "to input embeddings for logit projection, but this will "
+                    "produce incorrect output unless the model actually ties "
+                    "input/output embeddings (e.g., weight-tying without the "
+                    "config flag)."
+                )
+                proj_weight = self.model.get_input_embeddings().weight
+            return outputs.last_hidden_state @ proj_weight.T
 
     # ── Source encoding ────────────────────────────────────────────────
 
@@ -908,12 +962,26 @@ class DiffusionBackend(InferenceBackend):
         try:
             hidden = self.model.config.hidden_size
         except AttributeError:
-            hidden = 4096
-            logger.warning(
-                "Model config has no hidden_size; falling back to hidden=%d "
-                "for timestep projection MLP.  This may be incorrect for "
-                "non-standard architectures.", hidden,
-            )
+            # Infer hidden_dim from model parameters when config.hidden_size
+            # is not available (e.g. custom architectures).
+            hidden = None
+            for p in self.model.parameters():
+                if p.dim() >= 2 and p.shape[-1] > 128:
+                    hidden = p.shape[-1]
+                    break
+            if hidden is None:
+                hidden = 4096
+                logger.warning(
+                    "Model config has no hidden_size and parameter inference "
+                    "failed; hardcoding hidden=%d for timestep projection MLP. "
+                    "This is likely incorrect for non-standard architectures.",
+                    hidden,
+                )
+            else:
+                logger.warning(
+                    "Model config has no hidden_size; inferred hidden=%d from "
+                    "model parameters for timestep projection MLP.", hidden,
+                )
 
         self._time_proj = nn.Sequential(
             nn.Linear(hidden, hidden * 4),

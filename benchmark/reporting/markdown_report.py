@@ -1,7 +1,9 @@
 """Markdown report renderer — produces human-readable benchmark_report.md."""
 
 import logging
+import math
 import os
+import shutil
 import tempfile
 from datetime import datetime
 from pathlib import Path
@@ -9,6 +11,20 @@ from pathlib import Path
 from benchmark.config.constants import QUALITY_BLEU_TARGET, QUALITY_CHRF_TARGET, QUALITY_COMET_TARGET
 
 logger = logging.getLogger(__name__)
+
+
+def _fmt_num(val, fmt_spec=",.1f", default="N/A"):
+    """Format a numeric value safely — guards against NaN, Inf, and non-numeric types.
+
+    Returns *default* when the value is missing, non-finite, or not a number.
+    """
+    if val is None:
+        return default
+    if isinstance(val, (int, float)) and math.isfinite(val):
+        return f"{val:{fmt_spec}}"
+    if isinstance(val, bool):
+        return default  # bool is a subclass of int — reject it
+    return default
 
 
 class MarkdownReportWriter:
@@ -21,9 +37,17 @@ class MarkdownReportWriter:
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 f.write(md)
-            os.rename(tmp_path, path)
+            # Atomic rename with cross-filesystem fallback.
+            try:
+                shutil.move(str(tmp_path), str(path))
+            except OSError:
+                shutil.copy2(str(tmp_path), str(path))
+                os.unlink(tmp_path)
         except Exception:
-            os.unlink(tmp_path)
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
             raise
         logger.info(f"Markdown report -> {path}")
         return path
@@ -48,7 +72,7 @@ class MarkdownReportWriter:
         lines.append("## Configuration")
         lines.append("")
         lines.append(f"- **Backend**: {_safe(model_cfg, 'backend') or _safe(model_cfg, 'model', 'dtype')}")
-        lines.append(f"- **Model**: {_safe(model_cfg, 'model', 'model_path') or _safe(model_cfg, 'model')}")
+        lines.append(f"- **Model**: {_safe(model_cfg, 'model', 'model_path') or _safe(model_cfg, 'model', 'dtype')}")
         lines.append(f"- **Target Duration**: {_safe(model_cfg, 'runtime', 'target_duration_seconds')} s")
         lines.append(f"- **Seed**: {_safe(model_cfg, 'runtime', 'seed')}")
         lines.append("")
@@ -64,25 +88,23 @@ class MarkdownReportWriter:
         lines.append("")
         lines.append("| Metric | Value |")
         lines.append("|---|---|")
-        lines.append(f"| Mean tokens/second | {batch.get('mean_tps', 'N/A')} |")
-        lines.append(f"| Median tokens/second | {batch.get('median_tps', 'N/A')} |")
-        lines.append(f"| P5 tokens/second | {batch.get('p5_tps', 'N/A')} |")
-        lines.append(f"| P95 tokens/second | {batch.get('p95_tps', 'N/A')} |")
-        lines.append(f"| Std dev | {batch.get('std_tps', 'N/A')} |")
-        val = batch.get("total_output_tokens", None)
-        lines.append(f"| Total output tokens | {val:,.0f}" if isinstance(val, (int, float)) else f"| Total output tokens | {val or 'N/A'} |")
-        val = batch.get("total_batches", None)
-        lines.append(f"| Total batches | {val:.0f}" if isinstance(val, (int, float)) else f"| Total batches | {val or 'N/A'} |")
+        lines.append(f"| Mean tokens/second | {_fmt_num(batch.get('mean_tps'), '.1f')} |")
+        lines.append(f"| Median tokens/second | {_fmt_num(batch.get('median_tps'), '.1f')} |")
+        lines.append(f"| P5 tokens/second | {_fmt_num(batch.get('p5_tps'), '.1f')} |")
+        lines.append(f"| P95 tokens/second | {_fmt_num(batch.get('p95_tps'), '.1f')} |")
+        lines.append(f"| Std dev | {_fmt_num(batch.get('std_tps'), '.1f')} |")
+        lines.append(f"| Total output tokens | {_fmt_num(batch.get('total_output_tokens'), ',.0f')} |")
+        lines.append(f"| Total batches | {_fmt_num(batch.get('total_batches'), '.0f')} |")
         lines.append("")
         dev = r.get("metrics", {}).get("device", {})
         lines.append("## GPU Utilisation")
         lines.append("")
         lines.append("| Metric | Value |")
         lines.append("|---|---|")
-        lines.append(f"| Mean GPU utilisation | {dev.get('mean_util_pct', 'N/A')} % |")
-        lines.append(f"| P99 GPU utilisation | {dev.get('p99_util_pct', 'N/A')} % |")
-        lines.append(f"| Data starvation (<20%) | {dev.get('data_starvation_pct', 'N/A')} % |")
-        lines.append(f"| Mean GPU temperature | {dev.get('mean_temp_c', 'N/A')} °C |")
+        lines.append(f"| Mean GPU utilisation | {_fmt_num(dev.get('mean_util_pct'), '.1f')} % |")
+        lines.append(f"| P99 GPU utilisation | {_fmt_num(dev.get('p99_util_pct'), '.1f')} % |")
+        lines.append(f"| Data starvation (<20%) | {_fmt_num(dev.get('data_starvation_pct'), '.1f')} % |")
+        lines.append(f"| Mean GPU temperature | {_fmt_num(dev.get('mean_temp_c'), '.1f')} °C |")
         lines.append("")
         q = r.get("quality", {})
         lines.append("## Quality Scores")
@@ -99,10 +121,15 @@ class MarkdownReportWriter:
         ext = r.get("extrapolation", {})
         lines.append("## Extrapolation")
         lines.append("")
-        lines.append(f"- **Point estimate**: {ext.get('days_point_estimate', 'N/A')} days")
-        lines.append(f"- **95% CI**: [{ext.get('days_95ci_lower', 'N/A')}, {ext.get('days_95ci_upper', 'N/A')}] days")
-        lines.append(f"- **GPU hours**: {ext.get('gpu_hours', 'N/A')}")
-        lines.append(f"- **Cost estimate**: ${ext.get('estimated_cost_usd', 'N/A')}")
+        lines.append(f"- **Point estimate**: {_fmt_num(ext.get('days_point_estimate'), '.1f')} days")
+        # Bootstrap CI (preferred when available — handles skewed distributions).
+        if 'bootstrap_days_lower' in ext and ext['bootstrap_days_lower'] is not None:
+            lines.append(f"- **Bootstrap 95% CI**: [{_fmt_num(ext.get('bootstrap_days_lower'), '.1f')}, {_fmt_num(ext.get('bootstrap_days_upper'), '.1f')}] days ({ext.get('n_batches', '?')} batches)")
+        # Parametric CI (t-test, displayed alongside bootstrap when both exist).
+        if 'days_95ci_lower' in ext and ext['days_95ci_lower'] is not None:
+            lines.append(f"- **Parametric 95% CI**: [{_fmt_num(ext.get('days_95ci_lower'), '.1f')}, {_fmt_num(ext.get('days_95ci_upper'), '.1f')}] days")
+        lines.append(f"- **GPU hours**: {_fmt_num(ext.get('gpu_hours'), '.1f')}")
+        lines.append(f"- **Cost estimate**: ${_fmt_num(ext.get('estimated_cost_usd'), ',.2f')}")
         lines.append("")
         lines.append("## Caveats")
         lines.append("")

@@ -5,6 +5,7 @@ comparison instead of per-character Python loops (O(1)/char vs O(n)).
 """
 
 import logging
+import re
 import threading
 from dataclasses import dataclass, field
 
@@ -52,6 +53,16 @@ class ChunkFilter:
     __slots__ = ("min_tokens", "max_tokens", "max_garbage_ratio", "stats", "_stats_lock")
 
     def __init__(self, min_tokens: int = 10, max_tokens: int = 2048, max_garbage_ratio: float = 0.95):
+        if min_tokens < 0:
+            raise ValueError(f"min_tokens must be >= 0, got {min_tokens}")
+        if max_tokens < min_tokens:
+            raise ValueError(
+                f"max_tokens ({max_tokens}) must be >= min_tokens ({min_tokens})"
+            )
+        if not 0.0 <= max_garbage_ratio <= 1.0:
+            raise ValueError(
+                f"max_garbage_ratio must be in [0.0, 1.0], got {max_garbage_ratio}"
+            )
         self.min_tokens = min_tokens
         self.max_tokens = max_tokens
         self.max_garbage_ratio = max_garbage_ratio
@@ -65,19 +76,32 @@ class ChunkFilter:
             with self._stats_lock:
                 self.stats.rejected_too_short += 1
             return False
-        if self._is_garbage(text):
+        if self._is_mostly_non_ascii(text):
             with self._stats_lock:
                 self.stats.rejected_garbage += 1
+            logger.debug(
+                "Chunk rejected by _is_mostly_non_ascii (threshold=%.2f): "
+                "first 80 chars: %r",
+                self.max_garbage_ratio, text[:80],
+            )
             return False
         with self._stats_lock:
             self.stats.passed += 1
         return True
 
-    def _is_garbage(self, text: str) -> bool:
-        """Numpy-vectorized garbage detection (v2.0).
+    def _is_mostly_non_ascii(self, text: str) -> bool:
+        """Numpy-vectorized ASCII purity check (v2.0).
 
         Encodes text as uint8 array and counts non-ASCII bytes via a single
         masked comparison — 30–50× faster than the per-character Python loop.
+
+        This is NOT a "garbage" detector in the semantic sense — it only
+        measures the ratio of bytes > 127 (typical of multi-byte UTF-8
+        sequences).  High non-ASCII ratios often correlate with corrupt
+        data or non-English text, but can also fire on legitimate
+        non-Latin-script content.  Data scientists investigating false
+        positives should check rejected chunks against the
+        ``max_garbage_ratio`` threshold (default 0.95).
         """
         if not text:
             return True

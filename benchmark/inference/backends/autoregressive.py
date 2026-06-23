@@ -63,7 +63,7 @@ import torch
 import torch.nn as nn
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from benchmark.hardware.precision import get_precision_config, is_transformer_engine_available
+from benchmark.hardware.precision import get_precision_config
 from benchmark.inference.backends.protocol import (
     BackendConfig, BatchGenerationOutput, GenerationOutput,
     InferenceBackend, ModelCapability, ModelType,
@@ -90,12 +90,6 @@ except (ImportError, RuntimeError):
 
 try:
     import triton  # noqa: E402
-    import triton.language as tl  # noqa: E402
-except (ImportError, RuntimeError):
-    pass
-
-try:
-    from awq import AutoAWQForCausalLM  # noqa: E402
 except (ImportError, RuntimeError):
     pass
 
@@ -144,8 +138,6 @@ from benchmark.config.constants import (  # noqa: E402
     PAGED_NUM_BLOCKS_SMALL_GPU,
     WARMUP_SHORT_BATCHES,
     WARMUP_LONG_BATCHES,
-    WARMUP_SHORT_TOKENS,
-    WARMUP_LONG_TOKENS,
 )
 
 
@@ -227,7 +219,7 @@ def _load_tokenizer_with_list_fix(model_path: str) -> Any:
     import shutil
     import json
     from pathlib import Path as _Path
-    from huggingface_hub import snapshot_download, hf_hub_download
+    from huggingface_hub import snapshot_download
 
     # Stage 1: download every tokenizer file into a temp directory.
     tmp_dir = _Path(tempfile.mkdtemp(prefix="tr_benchmark_tok_"))
@@ -824,7 +816,15 @@ class AutoregressiveBackend(InferenceBackend):
                 num_speculative_tokens=extra.get("speculative_num_tokens", 3),
                 num_draft_layers=extra.get("speculative_num_draft_layers", 0),
             )
-            self._spec_decoder.load()
+            if self._spec_decoder is not None:
+                self._spec_decoder.load()
+            else:
+                logger.warning(
+                    "Speculative decoder factory returned None — "
+                    "speculative decoding will be skipped. "
+                    "Set TR_ENABLE_EXPERIMENTAL_SPECULATIVE=1 to enable."
+                )
+                self._use_speculative = False
 
         logger.info(
             "=== AR model loaded in %.1fs — "
@@ -1467,9 +1467,22 @@ class AutoregressiveBackend(InferenceBackend):
             # ── PREFILL ──────────────────────────────────────────────────
             ev_prefill_start.record()
             with torch.cuda.nvtx.range("prefill"):
+                # Compute position_ids for left-padded sequences.
+                # With left-padding, position_ids must count from the first
+                # real token (after PAD tokens) starting at position 0.
+                # Without this, RoPE-based and other position-aware models
+                # receive incorrect positional encodings and produce degraded
+                # output.  We compute position_ids for ALL architectures
+                # because (a) it is harmless for models that ignore it, and
+                # (b) missing it silently corrupts any model using absolute
+                # or rotary position embeddings with a left-padded batch.
+                position_ids = attention_mask.long().cumsum(-1) - 1
+                position_ids = position_ids.clamp(min=0)
+
                 prefill_out = self.model(
                     input_ids=input_ids,
                     attention_mask=attention_mask,
+                    position_ids=position_ids,
                     use_cache=True,
                     return_dict=True,
                 )
@@ -1609,11 +1622,13 @@ class AutoregressiveBackend(InferenceBackend):
             text = text.strip()
             # Strip the "model" token artifact that sometimes leaks through
             # when the model echoes <start_of_turn>model\n at output start.
-            # We check the FIRST generated token rather than the decoded text
-            # prefix to avoid removing legitimate Turkish words like "Model".
-            if ids and len(ids) > 0:
-                first_tok = self.tokenizer.decode([ids[0]], skip_special_tokens=False)
-                if first_tok.strip() == "model":
+            # NOTE: This is a heuristic that can corrupt legitimate translations
+            # containing the word "model".  Configure via BackendConfig.extra:
+            #   strip_model_prefix: true/false (default: false)
+            # When disabled, the caller is responsible for stripping prompt
+            # artifacts via prompt_length tracking in _build_templated_inputs.
+            if self.config.extra.get("strip_model_prefix", False):
+                if text.startswith("model"):
                     text = text[len("model"):].strip()
             in_tok = len(batch.input_ids[i]) if hasattr(batch, 'input_ids') and i < len(batch.input_ids) else 0
             generations.append(GenerationOutput(

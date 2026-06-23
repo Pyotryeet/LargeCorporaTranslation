@@ -1,2 +1,2 @@
 # benchmark package
-__version__ = "3.6"
+from benchmark.utils.version import VERSION as __version__

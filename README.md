@@ -430,12 +430,11 @@ H200Research/
 │   ├── reporting/      # aggregator · extrapolation · JSON/Markdown reports
 │   ├── observability/  # Prometheus client · Grafana dashboard · Nsight profiler · regression detection
 │   └── config/         # Pydantic v2 schema · model presets (9 models)
-├── benchmarks/         # convenience scripts for running model benchmarks
+├── scripts/            # standalone runner scripts (benchmark_all_models.py, run_new_models.py)
 ├── tests/              # 27 test files
 ├── .github/            # CI workflow · Grafana dashboard JSON · Prometheus config
 ├── setup.sh            # ★ one-command install (auto-detect platform)
 ├── run.sh              # ★ unified launcher
-├── benchmark_all_models.py  # comparative MPS benchmark across all presets
 ├── Makefile            # make setup | make run-quick | make dashboard
 ├── Dockerfile          # multi-stage with pre-compiled JIT kernels
 ├── config.yaml         # production H200/CUDA configuration

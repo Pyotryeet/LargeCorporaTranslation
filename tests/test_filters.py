@@ -17,12 +17,17 @@ class TestChunkFilter:
     def test_too_long_chunk_rejected(self):
         f = ChunkFilter(max_tokens=100)
         assert f.should_keep("x " * 200, 150) is False
+        # NOTE: ChunkFilter tracks both "too short" and "too long" under the
+        # single `rejected_too_short` counter — the filter lumps all token-count
+        # rejections (outside [min_tokens, max_tokens]) into one bucket.
         assert f.stats.rejected_too_short == 1
 
     def test_garbage_text_rejected(self):
         f = ChunkFilter(max_garbage_ratio=0.3)
         # Mostly non-ASCII characters will exceed 0.3
         garbage = "\ufffd" * 100 + "aa"  # 100 unicode replacement chars + 2 ASCII = 100/102 > 0.3
+        # NOTE: token_count (20) is caller-provided; the filter trusts it rather
+        # than recomputing. This avoids coupling the filter to a tokenizer.
         assert f.should_keep(garbage, 20) is False
         assert f.stats.rejected_garbage == 1
 

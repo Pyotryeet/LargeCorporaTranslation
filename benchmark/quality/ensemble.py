@@ -91,26 +91,7 @@ class EnsembleTranslator:
         self.total_translations += 1
 
         # ── Primary translation ──
-        import torch
-        device = self.primary_engine.devices[0]
-        tokenizer = self.primary_engine.tokenizer
-
-        enc = tokenizer(text, return_tensors="pt", truncation=True, max_length=MAX_INPUT_LENGTH)
-        input_ids = enc["input_ids"].to(device)
-        attention_mask = enc["attention_mask"].to(device)
-
-        with torch.no_grad():
-            out = self.primary_engine.model.generate(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                max_new_tokens=self.primary_engine.decoding_params.max_new_tokens,
-                do_sample=False,
-                pad_token_id=tokenizer.pad_token_id,
-                eos_token_id=tokenizer.eos_token_id,
-            )
-
-        in_len = len(input_ids[0])
-        primary_text = tokenizer.decode(out[0][in_len:], skip_special_tokens=True).strip()
+        primary_text = self._translate_single(self.primary_engine, text)
 
         result = EnsembleTranslationResult(
             source_text=text,
@@ -120,15 +101,25 @@ class EnsembleTranslator:
 
         # ── Secondary translation (if available) ──
         if self.secondary_engine is not None:
-            secondary_text = self._translate_secondary(text)
+            secondary_text = self._translate_single(
+                self.secondary_engine, text, num_beams=SECONDARY_NUM_BEAMS,
+            )
             result.secondary_translation = secondary_text
 
             # Compute consensus (chrF++ between primary and secondary).
             try:
                 import sacrebleu
-                chrf_score = sacrebleu.corpus_chrf(
+                raw_chrf = sacrebleu.corpus_chrf(
                     [primary_text], [[secondary_text]]
-                ).score / 100.0
+                )
+                # sacrebleu < 2.0.0 returned 0-100; >= 2.0.0 returns 0-1.
+                # Detect the scale from the runtime package version.
+                try:
+                    _ver = sacrebleu.__version__
+                    _major = int(_ver.split(".")[0])
+                except (AttributeError, ValueError):
+                    _major = 1  # conservative: assume old scale
+                chrf_score = raw_chrf.score / 100.0 if _major < 2 else raw_chrf.score
                 result.consensus_score = chrf_score
 
                 if chrf_score < self.consensus_threshold:
@@ -147,26 +138,72 @@ class EnsembleTranslator:
 
         return result
 
-    def _translate_secondary(self, text: str) -> str:
-        """Run secondary model translation (beam search for diversity)."""
-        import torch
-        device = self.secondary_engine.devices[0]
-        tokenizer = self.secondary_engine.tokenizer
+    def _translate_single(
+        self, engine, text: str, num_beams: int = 1,
+    ) -> str:
+        """Translate a single text using the given engine.
 
-        enc = tokenizer(text, return_tensors="pt", truncation=True, max_length=MAX_INPUT_LENGTH)
+        Uses the backend protocol (translate_batch) when available, falling
+        back to raw model.generate() only for encoder-decoder models where
+        the backend is not wired.
+        """
+        from types import SimpleNamespace
+        import torch
+
+        device = engine.devices[0]
+        tokenizer = engine.tokenizer
+
+        enc = tokenizer(text, return_tensors="pt", truncation=True,
+                        max_length=MAX_INPUT_LENGTH)
         input_ids = enc["input_ids"].to(device)
         attention_mask = enc["attention_mask"].to(device)
 
+        # Prefer the backend protocol since it handles chat templates,
+        # forced language tokens, and architecture-specific generation
+        # details correctly for all model families (autoregressive,
+        # diffusion, encoder-decoder).
+        if hasattr(engine, '_backend') and engine._backend is not None:
+            try:
+                mini_batch = SimpleNamespace()
+                mini_batch.input_ids = input_ids
+                mini_batch.attention_mask = attention_mask
+                mini_batch.raw_texts = [text]
+                mini_batch.batch_id = 0
+
+                result = engine._backend.translate_batch(mini_batch)
+                if result.generations:
+                    return result.generations[0].translated_text
+            except Exception as e:
+                logger.warning(
+                    "Ensemble: translate_batch failed — "
+                    "falling back to model.generate(): %s", e,
+                )
+
+        # Legacy fallback: direct model.generate() for autoregressive models
+        # without a wired backend.  Only applicable when the model object
+        # actually has a generate() method (autoregressive, not diffusion).
+        if not hasattr(engine.model, 'generate'):
+            logger.warning(
+                "Ensemble: backend unavailable and model has no generate() "
+                "method (likely a diffusion model or custom backend). "
+                "Skipping translation for: %.100s...", text,
+            )
+            return ""
+
+        # Legacy fallback: direct model.generate() for models without a
+        # backend, or when the backend call fails above.
         with torch.no_grad():
-            out = self.secondary_engine.model.generate(
+            gen_kwargs = dict(
                 input_ids=input_ids,
                 attention_mask=attention_mask,
-                max_new_tokens=self.secondary_engine.decoding_params.max_new_tokens,
+                max_new_tokens=engine.decoding_params.max_new_tokens,
                 do_sample=False,
-                num_beams=SECONDARY_NUM_BEAMS,  # beam search for secondary diversity
-                pad_token_id=tokenizer.pad_token_id,
+                pad_token_id=tokenizer.pad_token_id or 0,
                 eos_token_id=tokenizer.eos_token_id,
             )
+            if num_beams > 1:
+                gen_kwargs["num_beams"] = num_beams
+            out = engine.model.generate(**gen_kwargs)
 
         in_len = len(input_ids[0])
         return tokenizer.decode(out[0][in_len:], skip_special_tokens=True).strip()

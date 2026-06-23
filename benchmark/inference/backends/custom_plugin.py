@@ -63,23 +63,27 @@ Example plugin (for a custom diffusion model)
 Discovery mechanism
 -------------------
 Plugins are discovered at import time in this order:
-1. ``tr_benchmark.plugins`` entry points (setuptools).
-2. ``~/.tr_benchmark/plugins/*.py`` files.
-3. ``TR_BENCHMARK_PLUGIN_PATH`` environment variable.
-4. Runtime ``register_plugin()`` calls.
+1. ``tr_benchmark.plugins`` entry points (setuptools) — gated by
+   ``TR_ALLOW_UNTRUSTED_PLUGINS=1``.
+2. ``~/.tr_benchmark/plugins/*.py`` files — gated by
+   ``TR_ALLOW_UNTRUSTED_PLUGINS=1``.
+3. ``TR_BENCHMARK_PLUGIN_PATH`` environment variable — gated by
+   ``TR_ALLOW_UNTRUSTED_PLUGINS=1``.
+4. Runtime ``register_plugin()`` calls — NOT gated (explicit opt-in).
 
 Environment variable gate
 -------------------------
-Directory-based plugin discovery (items 2, 3, and the project-local
-``plugins/`` directory) is **disabled by default**.  To enable it you must
+**All** automatic plugin discovery paths are **disabled by default** —
+including entry points (setuptools), directory scanning, and the
+project-local ``plugins/`` directory.  To enable any of them you must
 set the environment variable::
 
     export TR_ALLOW_UNTRUSTED_PLUGINS=1
 
-Without this gate the framework will skip all filesystem-based plugin
-directories and log an info message.  Entry points (setuptools) and
-runtime ``register_plugin()`` calls are **not** gated because the user
-has already explicitly installed or invoked those plugins.
+Without this gate the framework will skip all automatic discovery and
+log an info message.  Only runtime ``register_plugin()`` calls bypass
+this gate — the caller has already explicitly chosen to load the plugin
+by invoking the function directly.
 
 Security considerations
 -----------------------
@@ -294,10 +298,13 @@ class _PluginRegistry:
         Parameters
         ----------
         name : str
+            Unique plugin identifier (the ``name`` attribute of the plugin).
 
         Returns
         -------
         CustomModelPlugin or None
+            The registered plugin instance, or None if no plugin with that
+            name has been registered.
         """
         cls._ensure_discovered()
         return cls._plugins.get(name)

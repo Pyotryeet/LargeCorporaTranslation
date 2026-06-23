@@ -51,8 +51,13 @@ from benchmark.config.constants import DIFFUSION_KEYWORDS
 logger = logging.getLogger(__name__)
 
 
-class _LRUCache(dict):
-    """A bounded dict that evicts the oldest entries when the size limit is exceeded."""
+class _FIFOCache(dict):
+    """A bounded dict that evicts the oldest entries (insertion-order, FIFO).
+
+    NOTE: Despite the common pattern, this is NOT an LRU cache — it uses
+    insertion order, not access order, for eviction.  Renamed from
+    _LRUCache to reflect actual behaviour.
+    """
 
     def __init__(self, max_size: int = 100):
         self.max_size = max_size
@@ -74,7 +79,29 @@ class _LRUCache(dict):
 
 
 # Cache model configs to avoid re-downloading on auto-detect.
-_CONFIG_CACHE: _LRUCache = _LRUCache(max_size=100)
+_CONFIG_CACHE: _FIFOCache = _FIFOCache(max_size=100)
+
+# Known encoder-decoder architectures for auto-detection.
+# Defined at module scope to avoid re-creating the tuple on every
+# _detect_model_type() call.
+_ENCODER_DECODER_ARCHITECTURES = (
+    "M2M100ForConditionalGeneration",
+    "NllbMoeForConditionalGeneration",
+    "BartForConditionalGeneration",
+    "FSMTForConditionalGeneration",
+    "T5ForConditionalGeneration",
+)
+
+# Keys in a model config.json that indicate a diffusion model.
+# Defined at module scope so the list is created once, not on every
+# _detect_model_type() call (the method checks both local and HF config paths).
+_DIFFUSION_CONFIG_KEYS = (
+    "diffusion_steps",
+    "noise_schedule",
+    "num_diffusion_steps",
+    "num_timesteps",
+    "diffusion_config",
+)
 
 
 def clear_config_cache() -> None:
@@ -232,22 +259,34 @@ class ModelRegistry:
         - For HuggingFace Hub IDs, try to fetch the config.
         - Default to AUTOREGRESSIVE.
 
+        Results are cached in _CONFIG_CACHE keyed by
+        ``f"__model_type__{model_path}"`` to avoid repeated network I/O
+        and local JSON parsing on every call.
+
         Returns
         -------
         ModelType
         """
+        cache_key = f"__model_type__{model_path}"
+        if cache_key in _CONFIG_CACHE:
+            return _CONFIG_CACHE[cache_key]
+
         name_lower = model_path.lower()
 
         # ── Name-based heuristics: NLLB ──
         if "nllb" in name_lower:
             logger.info("NLLB encoder-decoder model detected via name: '%s'", model_path)
-            return ModelType.ENCODER_DECODER
+            result = ModelType.ENCODER_DECODER
+            _CONFIG_CACHE[cache_key] = result
+            return result
 
         # ── Name-based heuristics: diffusion ──
         for kw in DIFFUSION_KEYWORDS:
             if kw in name_lower:
                 logger.info("Diffusion model detected via name keyword: '%s'", kw)
-                return ModelType.DIFFUSION
+                result = ModelType.DIFFUSION
+                _CONFIG_CACHE[cache_key] = result
+                return result
 
         # ── Config-based detection (local paths) ──
         local_path = Path(model_path)
@@ -256,39 +295,42 @@ class ModelRegistry:
             if config_file.exists():
                 try:
                     import json
-                    with open(config_file) as f:
-                        cfg = json.load(f)
+
+                    # Cache local JSON config parsing to avoid re-reading on
+                    # every call (keyed by model_path — different namespace
+                    # from the model-type cache key).
+                    local_cfg_key = f"__local_cfg__{model_path}"
+                    if local_cfg_key in _CONFIG_CACHE:
+                        cfg = _CONFIG_CACHE[local_cfg_key]
+                    else:
+                        with open(config_file) as f:
+                            cfg = json.load(f)
+                        _CONFIG_CACHE[local_cfg_key] = cfg
 
                     # Check model_type field.
                     if cfg.get("model_type") in ("diffusion", "diffusion_gemma"):
-                        return ModelType.DIFFUSION
+                        result = ModelType.DIFFUSION
+                        _CONFIG_CACHE[cache_key] = result
+                        return result
 
                     # Check architectures for encoder-decoder (NLLB, M2M100, BART, T5).
                     archs = cfg.get("architectures", [])
-                    _ENCODER_DECODER_ARCHITECTURES = (
-                        "M2M100ForConditionalGeneration",
-                        "NllbMoeForConditionalGeneration",
-                        "BartForConditionalGeneration",
-                        "FSMTForConditionalGeneration",
-                        "T5ForConditionalGeneration",
-                    )
                     for arch in archs:
                         if arch in _ENCODER_DECODER_ARCHITECTURES:
                             logger.info(
                                 "Encoder-decoder architecture detected: '%s'", arch,
                             )
-                            return ModelType.ENCODER_DECODER
+                            result = ModelType.ENCODER_DECODER
+                            _CONFIG_CACHE[cache_key] = result
+                            return result
 
                     # Check for diffusion-specific config keys.
-                    diffusion_config_keys = [
-                        "diffusion_steps", "noise_schedule",
-                        "num_diffusion_steps", "num_timesteps",
-                        "diffusion_config",
-                    ]
-                    for key in diffusion_config_keys:
+                    for key in _DIFFUSION_CONFIG_KEYS:
                         if key in cfg:
                             logger.info("Diffusion config key detected: '%s'", key)
-                            return ModelType.DIFFUSION
+                            result = ModelType.DIFFUSION
+                            _CONFIG_CACHE[cache_key] = result
+                            return result
 
                     # Check architectures.
                     archs = cfg.get("architectures", [])
@@ -296,7 +338,9 @@ class ModelRegistry:
                         arch_lower = arch.lower()
                         if any(kw in arch_lower for kw in DIFFUSION_KEYWORDS):
                             logger.info("Diffusion architecture detected: '%s'", arch)
-                            return ModelType.DIFFUSION
+                            result = ModelType.DIFFUSION
+                            _CONFIG_CACHE[cache_key] = result
+                            return result
 
                 except Exception as e:
                     logger.debug("Config-based detection failed: %s", e)
@@ -309,7 +353,9 @@ class ModelRegistry:
                     # Check model_type for diffusion indicators.
                     if cfg.get("model_type") in ("diffusion", "diffusion_gemma"):
                         logger.info("HF config model_type='%s'", cfg["model_type"])
-                        return ModelType.DIFFUSION
+                        result = ModelType.DIFFUSION
+                        _CONFIG_CACHE[cache_key] = result
+                        return result
 
                     # Check architectures for diffusion keywords.
                     archs = cfg.get("architectures", [])
@@ -317,17 +363,16 @@ class ModelRegistry:
                         arch_lower = arch.lower()
                         if any(kw in arch_lower for kw in DIFFUSION_KEYWORDS):
                             logger.info("HF config diffusion arch: '%s'", arch)
-                            return ModelType.DIFFUSION
+                            result = ModelType.DIFFUSION
+                            _CONFIG_CACHE[cache_key] = result
+                            return result
 
-                    diffusion_keys = [
-                        "diffusion_steps", "noise_schedule",
-                        "num_diffusion_steps", "num_timesteps",
-                        "diffusion_config",
-                    ]
-                    for key in diffusion_keys:
+                    for key in _DIFFUSION_CONFIG_KEYS:
                         if key in cfg:
                             logger.info("HF config diffusion key: '%s'", key)
-                            return ModelType.DIFFUSION
+                            result = ModelType.DIFFUSION
+                            _CONFIG_CACHE[cache_key] = result
+                            return result
             except OSError:
                 logger.error(
                     "network unavailable — cannot auto-detect model type. "
@@ -336,7 +381,9 @@ class ModelRegistry:
             except Exception:
                 pass
 
-        return ModelType.AUTOREGRESSIVE
+        result = ModelType.AUTOREGRESSIVE
+        _CONFIG_CACHE[cache_key] = result
+        return result
 
     def _get_hf_config(self, model_id: str) -> Optional[dict]:
         """Fetch model config from HuggingFace Hub (cached).
@@ -380,12 +427,23 @@ class ModelRegistry:
     def list_available_backends(self) -> list[dict]:
         """Return metadata about all registered backends."""
         result = []
+        # Only iterate over single-bit (power-of-two) capability flags,
+        # skipping compound convenience flags like FULL_TRANSLATION and
+        # FULL_DIFFUSION.  Iterating over the full IntFlag enum would
+        # yield compound values that also match the bitwise AND check,
+        # producing duplicate capability entries.
+        _single_bit_caps = [
+            cap for cap in ModelCapability
+            if cap.value != 0 and (cap.value & (cap.value - 1)) == 0
+        ]
         for model_type, cls in self._backends.items():
             result.append({
                 "model_type": model_type.value,
                 "display_name": cls.display_name,
-                "capabilities": [c.name for c in type(cls.capabilities) if c in cls.capabilities]
-                if hasattr(cls.capabilities, '__iter__') else [],
+                "capabilities": [
+                    cap.name for cap in _single_bit_caps
+                    if cap & cls.capabilities
+                ],
                 "class": cls.__name__,
             })
 

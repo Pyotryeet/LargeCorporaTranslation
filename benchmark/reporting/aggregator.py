@@ -3,10 +3,15 @@
 v2.0: Parallel JSONL parsing via ThreadPoolExecutor — batch, device, and
 system metrics are read concurrently, cutting aggregation wall-clock time
 by ~40% for large runs with thousands of samples.
+
+v2.1: Bootstrap CI estimation — auto-computed from per-batch TPS samples for
+all run modes (discrete and continuous batching alike).
 """
 
 import json
 import logging
+import math
+import random
 import statistics
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -39,6 +44,44 @@ class MetricsAggregator:
 
         return {"batch": batch_stats, "device": device_stats, "system": system_stats}
 
+    def compute_bootstrap_ci(self, tps_values: list[float],
+                             n_bootstrap: int = 10_000, seed: int = 42) -> dict | None:
+        """Compute bootstrap confidence intervals from per-batch TPS samples.
+
+        Works for ALL run modes (discrete, continuous batching, speculative)
+        — any workload that produces per-batch TPS samples in JSONL logs.
+
+        Returns None when there are fewer than 2 samples (CI is undefined).
+        Otherwise returns a dict with ``bootstrap_tps_lower`` and
+        ``bootstrap_tps_upper`` at the 95% confidence level.
+        """
+        n = len(tps_values)
+        if n < 2:
+            return None
+        # For very small sample sizes, ensure enough resamples for valid
+        # percentile indices.
+        n_bootstrap = max(n_bootstrap, 1000)
+        rng = random.Random(seed)
+        means = []
+        for _ in range(n_bootstrap):
+            sample = [tps_values[rng.randint(0, n - 1)] for _ in range(n)]
+            mean = sum(sample) / n
+            if not (math.isfinite(mean)):
+                continue
+            means.append(mean)
+        if len(means) < n_bootstrap * 0.5:
+            logger.warning("Bootstrap CI: too many non-finite resample means, bailing out")
+            return None
+        means.sort()
+        ci_lower_idx = int(len(means) * 0.025)
+        ci_upper_idx = int(len(means) * 0.975)
+        return {
+            "bootstrap_tps_lower": round(means[ci_lower_idx], 1),
+            "bootstrap_tps_upper": round(means[ci_upper_idx], 1),
+            "n_bootstrap": n_bootstrap,
+            "n_samples": n,
+        }
+
     def _load_batch_stats(self) -> dict:
         """Read batch metrics from JSONL files.
 
@@ -54,17 +97,39 @@ class MetricsAggregator:
         total_output = 0
         total_batches = 0
         for f in sorted(batch_dir.glob("batch_metrics_*.jsonl")):
+            skipped = 0
+            corrupted = 0
             with open(f, encoding="utf-8") as fh:
                 for line in fh:
                     try:
                         d = json.loads(line)
-                        tps_values.append(d.get("tokens_per_second", 0))
+                        tps = d.get("tokens_per_second")
+                        if tps is None:
+                            skipped += 1
+                            continue
+                        # Zero TPS is physically impossible for a completed
+                        # batch — treat as missing data (NaN would be more
+                        # honest, but downstream code doesn't handle NaN).
+                        if tps <= 0:
+                            skipped += 1
+                            continue
+                        tps_values.append(tps)
                         latencies.append(d.get("total_latency_ms", 0))
                         total_input += d.get("input_tokens_total", 0)
                         total_output += d.get("output_tokens_total", 0)
                         total_batches += 1
-                    except (json.JSONDecodeError, KeyError):
+                    except json.JSONDecodeError as exc:
+                        corrupted += 1
+                        if corrupted <= 3:
+                            logger.warning(
+                                "Corrupted JSON line in %s (err %d): %s",
+                                f.name, corrupted, exc,
+                            )
                         continue
+            if corrupted:
+                logger.warning("Corrupted JSON lines in %s: %d — data integrity loss", f.name, corrupted)
+            if skipped:
+                logger.warning("Skipped %d unparseable/missing line(s) in %s", skipped, f.name)
         if not tps_values:
             return {"total_batches": 0}
         return {"total_batches": total_batches, "total_input_tokens": total_input,
@@ -87,6 +152,8 @@ class MetricsAggregator:
         mem_values = []
         temp_values = []
         for f in sorted(gpu_dir.glob("device_metrics_*.jsonl")):
+            skipped = 0
+            corrupted = 0
             with open(f, encoding="utf-8") as fh:
                 for line in fh:
                     try:
@@ -98,8 +165,18 @@ class MetricsAggregator:
                                 mem_values.append(dev["mem_used_mib"])
                             if dev.get("temp_c") is not None:
                                 temp_values.append(dev["temp_c"])
-                    except (json.JSONDecodeError, KeyError):
+                    except json.JSONDecodeError as exc:
+                        corrupted += 1
+                        if corrupted <= 3:
+                            logger.warning(
+                                "Corrupted JSON line in %s (err %d): %s",
+                                f.name, corrupted, exc,
+                            )
                         continue
+            if corrupted:
+                logger.warning("Corrupted JSON lines in %s: %d — data integrity loss", f.name, corrupted)
+            if skipped:
+                logger.warning("Skipped %d unparseable line(s) in %s", skipped, f.name)
         if not util_values:
             return {}
         return {"num_samples": len(util_values),
@@ -114,14 +191,26 @@ class MetricsAggregator:
         cpu_vals = []
         ram_vals = []
         for f in sorted(sys_dir.glob("system_metrics_*.jsonl")):
+            skipped = 0
+            corrupted = 0
             with open(f, encoding="utf-8") as fh:
                 for line in fh:
                     try:
                         d = json.loads(line)
                         cpu_vals.append(d.get("cpu_util_pct", 0))
                         ram_vals.append(d.get("ram_used_mib", 0))
-                    except (json.JSONDecodeError, KeyError):
+                    except json.JSONDecodeError as exc:
+                        corrupted += 1
+                        if corrupted <= 3:
+                            logger.warning(
+                                "Corrupted JSON line in %s (err %d): %s",
+                                f.name, corrupted, exc,
+                            )
                         continue
+            if corrupted:
+                logger.warning("Corrupted JSON lines in %s: %d — data integrity loss", f.name, corrupted)
+            if skipped:
+                logger.warning("Skipped %d unparseable line(s) in %s", skipped, f.name)
         if not cpu_vals:
             return {}
         return {"num_samples": len(cpu_vals),

@@ -4,16 +4,11 @@ Each preset carries architecture constants, model paths, quantization settings,
 and platform compatibility flags.  All other modules should resolve architecture
 defaults through this registry rather than hardcoding constants.
 
-Supported presets
------------------
-====================  ========  ======  ========  ============  ===============
-Name                  Layers    KV-hds  HeadDim  HiddenSize    Quantization
-====================  ========  ======  ========  ============  ===============
-translategemma-4b-bf16  36        4       256       2560          BF16
-translategemma-4b-int8  36        4       256       2560          INT8 (bnb)
-translategemma-4b-int4  36        4       256       2560          INT4 (bnb NF4)
-ministral-3b-bf16       24        8       128       2048          BF16
-====================  ========  ======  ========  ============  ===============
+Registered presets (see ``MODEL_PRESETS`` dict for full details):
+  translategemma-4b-bf16, translategemma-4b-int8, translategemma-4b-int4,
+  ministral-3b-bf16, gemma4-e2b-qat-ct, gemma4-e2b-qat-int4,
+  gemma4-e4b-qat-ct, gemma4-e4b-qat-int4, gemma4-e2b-q4_0,
+  gemma4-e4b-q4_0, diffusiongemma-26b-a4b
 
 Usage
 -----
@@ -97,9 +92,9 @@ class ModelPreset:
         return self.quantization_method != "none"
 
     @property
-    def bytes_per_element(self) -> int:
+    def bytes_per_element(self) -> float:
         if self.quantization in ("int4",):
-            return 1  # packed
+            return 0.5  # 4 bits per weight = 0.5 bytes per element (packed)
         if self.quantization in ("int8",):
             return 1
         return 2  # bf16/fp16
@@ -342,19 +337,29 @@ def get_preset_by_model_id(hf_model_id: str, quantization: str = "bf16") -> Opti
     # Fallback: match model ID only, return first matching quantization
     for preset in MODEL_PRESETS.values():
         if preset.hf_model_id.lower() == path_lower:
+            if preset.quantization != quantization:
+                logger.warning(
+                    "No preset for model='%s' with quantization='%s'. "
+                    "Falling back to quantization='%s' (preset '%s').",
+                    hf_model_id, quantization, preset.quantization, preset.name,
+                )
             return preset
     return None
 
 
 def list_available_presets(backend: str = "mps") -> list[str]:
-    """Return preset names compatible with *backend*."""
+    """Return preset names compatible with *backend*.
+
+    ``"cpu"`` returns all presets (CPU can run any model).
+    ``"cuda"`` and ``"mps"`` filter by the respective compatibility flag.
+    """
+    if backend == "cpu":
+        return list(MODEL_PRESETS.keys())
     names = []
     for name, preset in MODEL_PRESETS.items():
         if backend == "mps" and preset.supports_mps:
             names.append(name)
         elif backend == "cuda" and preset.supports_cuda:
-            names.append(name)
-        elif backend == "cpu":
             names.append(name)
     return names
 

@@ -24,7 +24,14 @@ class JSONReportWriter:
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 sanitized_dump(report, f, indent=2, ensure_ascii=False)
-            shutil.move(str(tmp_path), str(path))
+            # Use shutil.move for atomic rename; falls back to copy+delete
+            # when tmp and target reside on different filesystems (e.g. /tmp
+            # is a ramdisk while output_dir is on a persistent volume).
+            try:
+                shutil.move(str(tmp_path), str(path))
+            except OSError:
+                shutil.copy2(str(tmp_path), str(path))
+                os.unlink(tmp_path)
         except Exception:
             try:
                 os.unlink(tmp_path)

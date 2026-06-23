@@ -39,7 +39,11 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class ProfilerSpan:
-    """Timing data for one annotated span."""
+    """Timing data for one annotated span.
+
+    ``gpu_time_ns`` / ``gpu_duration_ms`` are populated via CUDA Events when a
+    CUDA device is available, regardless of profiling mode.
+    """
 
     name: str
     start_ns: int = 0
@@ -64,8 +68,11 @@ class NsightProfiler:
     (~2 µs per span).  Compatible with both CUDA (via CUPTI) and CPU backends.
 
     Two modes:
-    - **lightweight** — NVTX annotations only (sub-microsecond overhead).
-    - **full** — PyTorch profiler with trace export for Chrome trace viewer.
+    - **lightweight** — NVTX annotations + CUDA Events for GPU timing
+      (sub-microsecond overhead per span).  ``gpu_time_ns`` / ``gpu_duration_ms``
+      are populated via ``torch.cuda.Event``.
+    - **full** — PyTorch profiler with CUPTI trace export for Chrome trace
+      viewer.  Also populates ``gpu_time_ns`` and ``gpu_duration_ms``.
 
     Usage
     -----
@@ -110,7 +117,6 @@ class NsightProfiler:
             logger.warning("Profiler already active — stop() first.")
             return
 
-        self._active = True
         self._spans.clear()
         self._span_stack.clear()
 
@@ -126,8 +132,21 @@ class NsightProfiler:
                 with_stack=self.with_stack,
             )
             if self._profiler is not None:
-                self._profiler.__enter__()
+                try:
+                    self._profiler.__enter__()
+                except Exception:
+                    # Clean up on failure so a subsequent start() can retry.
+                    self._profiler = None
+                    self._spans.clear()
+                    raise
 
+        self._active = True
+
+        if self.mode == "lightweight":
+            logger.info(
+                "Nsight profiler started in lightweight mode. "
+                "GPU timing is available via CUDA Events in this mode."
+            )
         logger.info(
             "Nsight profiler started (mode=%s, backend=%s, trace_dir=%s)",
             self.mode, self._backend, self.trace_dir,
@@ -150,14 +169,23 @@ class NsightProfiler:
     def range(self, name: str, **metadata):
         """Context manager for annotated profiling ranges.
 
-        Creates an NVTX range (CUDA) plus a CPU-side span for timing.
+        Creates an NVTX range (CUDA) plus CPU-side and GPU-side span timing.
+
+        GPU timing uses ``torch.cuda.Event`` — lightweight (~0.5 us overhead)
+        and works even outside the PyTorch profiler, populating ``gpu_time_ns``
+        and ``gpu_duration_ms`` in both ``lightweight`` and ``full`` modes.
         """
         span = ProfilerSpan(name=name, metadata=metadata)
         span.start_ns = time.monotonic_ns()
 
-        # NVTX push (CUDA only).
+        # CUDA events for GPU-side timing (lightweight, works in both modes).
+        gpu_start = None
+        gpu_end = None
         if torch is not None and self._backend == "cuda" and self._active:
             torch.cuda.nvtx.range_push(name)
+            gpu_start = torch.cuda.Event(enable_timing=True)
+            gpu_end = torch.cuda.Event(enable_timing=True)
+            gpu_start.record()
 
         if self._span_stack:
             self._span_stack[-1].children.append(span)
@@ -168,10 +196,20 @@ class NsightProfiler:
         try:
             yield span
         finally:
-            span.end_ns = time.monotonic_ns()
-
             if torch is not None and self._backend == "cuda" and self._active:
+                gpu_end.record()
                 torch.cuda.nvtx.range_pop()
+                # Synchronize to ensure the GPU events are ready; this is
+                # lightweight (typically < 5 us for a single event pair).
+                gpu_end.synchronize()
+                span.gpu_time_ns = gpu_start.elapsed_time(gpu_end) * 1_000_000  # ms -> ns
+            else:
+                span.end_ns = time.monotonic_ns()  # Already CPU-only; no GPU timing.
+
+            if self._backend == "cuda":
+                # For GPU runs, record CPU end after GPU sync so duration_ms
+                # reflects wall-clock (host) time including GPU work.
+                span.end_ns = time.monotonic_ns()
 
             self._span_stack.pop()
 
@@ -227,7 +265,8 @@ class NsightProfiler:
         Parameters
         ----------
         filename : str, optional
-            Output filename.  Default: ``trace_<timestamp>.json``.
+            Output filename.  Default: ``trace_YYYYMMDD_HHMMSS.json``
+            (e.g. ``trace_20260623_143051.json``).
 
         Returns
         -------

@@ -42,7 +42,7 @@ import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import IntFlag, Enum
-from typing import Any, Callable, Optional
+from typing import Any, Optional
 
 import torch
 import torch.nn as nn
@@ -251,9 +251,13 @@ class InferenceBackend(ABC):
         """
         ...
 
-    @abstractmethod
     def is_loaded(self) -> bool:
-        """Return True if the model is successfully loaded and ready."""
+        """Return True if the model is successfully loaded and ready.
+
+        Subclasses should set ``self._loaded = True`` in their ``load()``
+        method.  Override this property only if the loaded-state check
+        requires more than reading the flag.
+        """
         return self._loaded
 
     # ── Optional capabilities ──────────────────────────────────────────

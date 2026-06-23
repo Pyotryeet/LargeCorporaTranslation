@@ -32,7 +32,8 @@ DEFAULT_MAX_INPUT_TOKENS = 512
 TEST_SENTENCE_MULTIPLIER = 10
 TEST_GENERATION_TOKENS = 10
 PIN_MEMORY_BACKEND = "cuda"
-BYTES_PER_MB = 1024
+BYTES_PER_KB = 1024
+BYTES_PER_MB = BYTES_PER_KB * BYTES_PER_KB  # 1,048,576 — convert bytes → MB
 MIN_BATCH_SIZE = 1
 BINARY_SEARCH_DIVISOR = 2
 FALLBACK_PAD_TOKEN_ID = 0
@@ -80,7 +81,7 @@ class BatchSizeTuner:
                 est = int(usable_mem / kv_per_seq) if kv_per_seq > 0 else cap
                 cap = min(cap, max(est, MIN_BATCH_SIZE))
                 logger.info("Performance model: kv_per_seq=%.1fMB, est_cap=%d",
-                            kv_per_seq / BYTES_PER_MB / BYTES_PER_MB, cap)
+                            kv_per_seq / BYTES_PER_MB, cap)
             except (RuntimeError, torch.cuda.CudaError, AttributeError):
                 pass
 

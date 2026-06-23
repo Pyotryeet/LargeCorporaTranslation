@@ -155,6 +155,17 @@ refresh(); setInterval(refresh, 2000);
 class DashboardServer:
     """Serve the Prometheus endpoint + web dashboard + JSON API.
 
+    .. warning::
+
+       This class embeds a full HTTP server.  Do **not** start both
+       DashboardServer AND PrometheusExporter.start() with the same ``port``
+       on the same host — only one process can bind to a port at a time.
+       Choose distinct ports or (strongly recommended) use **only**
+       DashboardServer, passing the exporter via the ``exporter=`` argument,
+       so that the HTML dashboard, JSON API, /health, and /metrics are all
+       served through a single port.  PrometheusExporter.start() should only
+       be called directly when the dashboard/API is not needed.
+
     Usage
     -----
     >>> server = DashboardServer(exporter, port=9090)
@@ -195,7 +206,7 @@ class DashboardServer:
 
             def _get_snapshot(handler_self) -> dict:
                 if handler_self.exporter_ref is None:
-                    return {"error": "No exporter connected"}
+                    return {"error": "No exporter connected", "throughput_tps": 0}
                 return handler_self.exporter_ref.snapshot()
 
             def _serve_html(handler_self, html: str) -> None:
@@ -236,7 +247,7 @@ class DashboardServer:
 
             def log_message(handler_self, format, *args):
                 """Suppress noisy access logs."""
-                if "/api/snapshot" in (args[0] if args else ""):
+                if args and isinstance(args[0], str) and "/api/snapshot" in args[0]:
                     return  # Don't log the polling endpoint.
                 logger.debug("Dashboard HTTP: " + format % args)
 
@@ -255,7 +266,10 @@ class DashboardServer:
     def stop(self) -> None:
         """Stop the dashboard server."""
         if self._httpd is not None:
-            self._httpd.shutdown()
+            try:
+                self._httpd.shutdown()
+            finally:
+                self._httpd.server_close()
             self._httpd = None
         if self._thread is not None:
             self._thread.join(timeout=5)

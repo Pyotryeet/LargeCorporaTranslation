@@ -166,8 +166,31 @@ class InferenceEngine:
         self._backend.load()
 
     def warmup(self, batches: int = 20) -> None:
-        """Run warm-up batches via the backend."""
-        self._backend.warmup(batches)
+        """Run warm-up batches via the backend.
+
+        Parameters
+        ----------
+        batches : int
+            Number of warm-up batches to run.
+
+        Raises
+        ------
+        Exception
+            Any exception from the backend warmup is logged and re-raised.
+            Warmup failures indicate a model/device misconfiguration that
+            will produce incorrect benchmark results — silently continuing
+            would mask real problems.
+        """
+        try:
+            self._backend.warmup(batches)
+        except Exception:
+            logger.exception(
+                "Warmup failed for model=%s on backend=%s — "
+                "this indicates a model/device misconfiguration.  "
+                "Benchmark results will be incorrect if execution continues.",
+                self.model_path, self._backend.display_name,
+            )
+            raise
 
     def translate(self, batch: Any) -> BatchResult:
         """Translate a single pre-tokenised batch via the backend.

@@ -19,6 +19,7 @@ Or as a standalone command:
 
 from __future__ import annotations
 
+import collections
 import curses
 import logging
 import threading
@@ -62,9 +63,11 @@ class LiveDashboard:
         self.history_seconds = history_seconds
 
         # Rolling history for sparkline-like visualization.
-        self._throughput_history: list[float] = []
-        self._util_history: list[list[float]] = []  # per-device
+        self._throughput_history: collections.deque[float] = collections.deque(
+            maxlen=history_seconds,
+        )
         self._max_history_points = history_seconds
+        self._history_lock = threading.Lock()  # guards _throughput_history
 
         # Threading.
         self._running = threading.Event()
@@ -72,7 +75,6 @@ class LiveDashboard:
         self._screen = None
 
         # Track last seen values for delta calculation.
-        self._last_batches: float = 0.0
         self._last_tokens: float = 0.0
         self._last_update: float = time.monotonic()
 
@@ -122,7 +124,6 @@ class LiveDashboard:
         tokens_total = snap.get("tokens_total", 0)
         delta_tokens = tokens_total - self._last_tokens
         instant_tps = delta_tokens / dt if dt > 0 else 0.0
-        self._last_batches = snap.get("batches_total", 0)
         self._last_tokens = tokens_total
 
         lines = []
@@ -131,7 +132,10 @@ class LiveDashboard:
         lines.append("═" * 78)
 
         # Throughput row
-        tps_bar = self._sparkline(self._throughput_history, width=40)
+        with self._history_lock:
+            # Snapshot the history for consistent sparkline rendering.
+            history_snapshot = list(self._throughput_history)
+        tps_bar = self._sparkline(history_snapshot, width=40)
         throughput_tps = snap.get("throughput_tps", 0)
         lines.append(
             f"  Throughput: {throughput_tps:8.0f} tok/s "
@@ -181,6 +185,7 @@ class LiveDashboard:
 
     def _render_loop(self) -> None:
         """Main curses rendering loop (runs in background thread)."""
+        consecutive_errors = 0
         try:
             self._screen = curses.initscr()
             curses.noecho()
@@ -200,8 +205,16 @@ class LiveDashboard:
                         except curses.error:
                             pass
                     self._screen.refresh()
-                except Exception:
-                    pass
+                    consecutive_errors = 0
+                except Exception as exc:
+                    consecutive_errors += 1
+                    if consecutive_errors >= 3:
+                        logger.error(
+                            "Dashboard render error (consecutive=%d): %s",
+                            consecutive_errors, exc,
+                        )
+                    else:
+                        logger.warning("Dashboard render error: %s", exc)
                 time.sleep(self.refresh_interval)
         except Exception as e:
             logger.debug("Curses dashboard failed (terminal may not support it): %s", e)
@@ -215,13 +228,12 @@ class LiveDashboard:
                     pass
 
     def _update_history(self, snap: dict) -> None:
-        """Update rolling history buffers."""
-        self._throughput_history.append(snap.get("throughput_tps", 0))
-        if len(self._throughput_history) > self._max_history_points:
-            self._throughput_history = self._throughput_history[-self._max_history_points:]
+        """Update rolling history buffers (thread-safe)."""
+        with self._history_lock:
+            self._throughput_history.append(snap.get("throughput_tps", 0))
 
     @staticmethod
-    def _sparkline(values: list[float], width: int = 20, max_val: float | None = None) -> str:
+    def _sparkline(values, width: int = 20, max_val: float | None = None) -> str:
         """Render a unicode sparkline bar from a list of values."""
         if not values:
             return "▁" * width

@@ -106,7 +106,6 @@ _pm_cache: dict[str, tuple[float, float | None]] = {}
 """Keyword → (timestamp, value).  Values refresh when older than _POWERCACHE_TTL
 to avoid spawning a subprocess on every metrics sample."""
 
-import threading
 _pm_cache_lock: Optional[threading.Lock] = None
 """Lock protecting _pm_cache against concurrent mutation and rehash during reads.
 Allocated lazily on first access via ``_get_pm_cache_lock()`` to avoid creating
@@ -131,6 +130,12 @@ def _refresh_powermetrics_cache() -> None:
     """
     now = time.monotonic()
     with _get_pm_cache_lock():
+        # Snapshot existing cache entries before the run so we can preserve
+        # them if powermetrics succeeds but returns no new GPU data (e.g.
+        # format drift on a new macOS release).  Without this guard the
+        # cache is populated with (now, None) entries and callers see a
+        # 5-second blackout window.
+        prev_cache = dict(_pm_cache)
         try:
             r = subprocess.run(
                 ["powermetrics", "--samplers", "gpu_power", "-n", "1", "-i", "100"],
@@ -168,10 +173,44 @@ def _refresh_powermetrics_cache() -> None:
                                 _pm_cache[kw_match] = (now, val)
                             except ValueError:
                                 pass
-        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
-            # Mark all keys as stale-but-None so callers don't retry immediately.
+            # If powermetrics ran successfully but did not produce any GPU
+            # data (even after the fallback parse), preserve the previous
+            # cached values with an extended TTL instead of overwriting
+            # them with None.  This avoids a 5-second metrics blackout
+            # when macOS incrementally changes powermetrics output format.
+            for kw in ["GPU Active Residency", "GPU Power"]:
+                if kw not in _pm_cache:
+                    if kw in prev_cache:
+                        _ts, prev_val = prev_cache[kw]
+                        if prev_val is not None:
+                            _pm_cache[kw] = (now, prev_val)
+                            logger.debug(
+                                "powermetrics produced no data for %r — "
+                                "extending stale cached value (%.3f) to avoid gap",
+                                kw, prev_val,
+                            )
+                        else:
+                            _pm_cache[kw] = (now, None)
+                    else:
+                        _pm_cache[kw] = (now, None)
+        except FileNotFoundError:
+            # Permanent failure — powermetrics binary missing. Mark all keys as
+            # stale-None so callers don't retry immediately.
             for kw in ["GPU Active Residency", "GPU Power"]:
                 _pm_cache[kw] = (now, None)
+        except (subprocess.TimeoutExpired, OSError):
+            # Transient failure (e.g. timeout, system busy).  Bump the timestamp
+            # on existing cache entries so callers get the last known good value
+            # for another TTL cycle instead of a gap of 5+ seconds of None.
+            # Without this, the stale cache expires, _get_powermetrics_value
+            # returns None, and the metrics log shows a blackout window.
+            logger.warning(
+                "Transient powermetrics failure — extending stale cache TTL to avoid metrics gap"
+            )
+            for kw in _pm_cache:
+                ts, val = _pm_cache[kw]
+                if val is not None:
+                    _pm_cache[kw] = (now, val)
 
 
 def _get_powermetrics_value(keyword: str) -> float | None:
@@ -217,7 +256,7 @@ class DeviceSampler:
         self._start_time: Optional[float] = None
         self._buffer: list[str] = []
         self._flush_interval = _FLUSH_INTERVAL
-        self._buffer_lock = threading.Lock()
+        self._buffer_lock = threading.RLock()
         # Lazy NVML init — only loaded when the CUDA backend is active.
         self._pynvml: Optional[object] = None
         self._has_pynvml: bool = False
@@ -256,20 +295,17 @@ class DeviceSampler:
         with self._buffer_lock:
             self._buffer.append(s.to_json())
             self.sample_count += 1
-        if len(self._buffer) >= self._flush_interval:
-            self.flush()
+            if len(self._buffer) >= self._flush_interval:
+                self._flush_locked()
         return s
 
     def flush(self) -> None:
+        """Public flush — acquires the buffer lock."""
         if not self._buffer or not self._log_file:
             return
         try:
             with self._buffer_lock:
-                if not self._buffer:
-                    return
-                with open(self._log_file, "a") as f:
-                    f.write("\n".join(self._buffer) + "\n")
-                self._buffer.clear()
+                self._flush_locked()
         except (PermissionError, FileNotFoundError, OSError) as e:
             logger.error(f"Flush failed — keeping buffer for next retry ({len(self._buffer)} entries): {e}")
             # Prevent unbounded buffer growth on persistent flush failures.
@@ -282,6 +318,14 @@ class DeviceSampler:
                     f"Buffer exceeded MAX_METRICS_BUFFER_SIZE ({MAX_METRICS_BUFFER_SIZE}); "
                     f"dropped oldest {len(dropped)} device samples to prevent OOM"
                 )
+
+    def _flush_locked(self) -> None:
+        """Flush the buffer to disk.  Caller must hold ``self._buffer_lock``."""
+        if not self._buffer or not self._log_file:
+            return
+        with open(self._log_file, "a") as f:
+            f.write("\n".join(self._buffer) + "\n")
+        self._buffer.clear()
 
     def _sample_cuda(self) -> list[dict]:
         if not self._has_pynvml:
@@ -296,7 +340,7 @@ class DeviceSampler:
                 devices.append({"id": i, "util_pct": float(util.gpu),
                     "mem_used_mib": int(mem.used/(1024*1024)), "mem_total_mib": int(mem.total/(1024*1024)),
                     "temp_c": self._safe(_pymod.nvmlDeviceGetTemperature, h, _pymod.NVML_TEMPERATURE_GPU),
-                    "power_w": (self._safe(_pymod.nvmlDeviceGetPowerUsage, h) or 0) / 1000.0,
+                    "power_w": self._nvml_power(h),
                     "sm_clock_mhz": self._safe(_pymod.nvmlDeviceGetClockInfo, h, _pymod.NVML_CLOCK_SM),
                     "mem_clock_mhz": self._safe(_pymod.nvmlDeviceGetClockInfo, h, _pymod.NVML_CLOCK_MEM)})
             except (_pymod.NVMLError, RuntimeError, ValueError) as e:
@@ -315,11 +359,11 @@ class DeviceSampler:
         mem_total = psutil.virtual_memory().total
         mem_used = proc.memory_info().rss
         return [{"id": 0,
-                 "util_pct": self._mps_util(),
+                 "util_pct": self._mps_gpu_metrics()[0],
                  "mem_used_mib": int(mem_used / (1024 * 1024)),
                  "mem_total_mib": int(mem_total / (1024 * 1024)),
                  "temp_c": self._mps_temp(),
-                 "power_w": self._mps_power(),
+                 "power_w": self._mps_gpu_metrics()[1],
                  "sm_clock_mhz": None,
                  "mem_clock_mhz": None}]
 
@@ -330,10 +374,15 @@ class DeviceSampler:
                  "mem_used_mib": int(mem.used/(1024*1024)), "mem_total_mib": int(mem.total/(1024*1024)),
                  "temp_c": None, "power_w": None, "sm_clock_mhz": None, "mem_clock_mhz": None}]
 
-    def _mps_util(self):
+    def _mps_gpu_metrics(self) -> tuple[float | None, float | None]:
+        """Return (util_pct, power_w) from a single powermetrics cache refresh.
+
+        Previously _mps_util() and _mps_power() each called _get_powermetrics_value
+        independently, acquiring the cache lock twice per sample.
+        """
         if not DeviceSampler._powermetrics_ok:
-            return None
-        return _get_powermetrics_value("GPU Active Residency")
+            return None, None
+        return _get_powermetrics_value("GPU Active Residency"), _get_powermetrics_value("GPU Power")
 
     def _mps_temp(self):
         try:
@@ -347,11 +396,6 @@ class DeviceSampler:
             pass
         return None
 
-    def _mps_power(self):
-        if not DeviceSampler._powermetrics_ok:
-            return None
-        return _get_powermetrics_value("GPU Power")
-
     @staticmethod
     def _safe(func, *args):
         try:
@@ -362,6 +406,18 @@ class DeviceSampler:
                 getattr(func, '__name__', func), args, e,
             )
             return None
+
+    def _nvml_power(self, handle) -> float | None:
+        """Read NVML power usage in watts with explicit None semantics.
+
+        Previously used ``(self._safe(...) or 0) / 1000.0``, which conflated
+        a measurement failure (None) with a genuinely idle GPU reading 0 mW.
+        Now returns None on failure so callers can distinguish the two cases.
+        """
+        raw = self._safe(self._pynvml.nvmlDeviceGetPowerUsage, handle)
+        if raw is None:
+            return None
+        return raw / 1000.0
 
     def __del__(self):
         try:

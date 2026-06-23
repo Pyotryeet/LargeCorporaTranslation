@@ -21,17 +21,27 @@ import time
 from datetime import datetime, timezone
 from typing import Any
 
-import torch
+try:
+    import torch
+except ImportError as e:
+    raise ImportError(
+        "EchoPlugin requires PyTorch. Install via: pip install torch"
+    ) from e
 
-from benchmark.inference.backends.protocol import (
-    BackendConfig,
-    BatchGenerationOutput,
-    GenerationOutput,
-    InferenceBackend,
-    ModelCapability,
-    ModelType,
-)
-from benchmark.inference.backends.custom_plugin import CustomModelPlugin, register_plugin
+try:
+    from benchmark.inference.backends.protocol import (
+        BackendConfig,
+        BatchGenerationOutput,
+        GenerationOutput,
+        InferenceBackend,
+        ModelCapability,
+        ModelType,
+    )
+    from benchmark.inference.backends.custom_plugin import CustomModelPlugin, register_plugin
+except ImportError as e:
+    raise ImportError(
+        "EchoPlugin requires the benchmark package. Install via: pip install -e ."
+    ) from e
 
 logger = logging.getLogger(__name__)
 
@@ -59,13 +69,27 @@ class EchoBackend(InferenceBackend):
         from transformers import AutoTokenizer
 
         # Try to load any small tokenizer for encode/decode.
+        # Use local_files_only=True to avoid network hangs in offline environments.
         try:
             self.tokenizer = AutoTokenizer.from_pretrained(
                 "HuggingFaceTB/SmolLM2-135M-Instruct",
+                local_files_only=True,
             )
-        except Exception:
-            # Ultra-fallback: use a simple word-split tokenizer.
-            self.tokenizer = _SimpleTokenizer()
+        except (OSError, EnvironmentError):
+            # Fallback: try loading from HuggingFace Hub with a short timeout.
+            try:
+                import signal
+                def _timeout_handler(signum, frame):
+                    raise TimeoutError("Tokenizer download timed out")
+                signal.signal(signal.SIGALRM, _timeout_handler)
+                signal.alarm(30)
+                self.tokenizer = AutoTokenizer.from_pretrained(
+                    "HuggingFaceTB/SmolLM2-135M-Instruct",
+                )
+                signal.alarm(0)
+            except Exception:
+                # Ultra-fallback: use a simple word-split tokenizer.
+                self.tokenizer = _SimpleTokenizer()
 
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
@@ -111,7 +135,13 @@ class EchoBackend(InferenceBackend):
 
 
 class _SimpleTokenizer:
-    """Minimal tokenizer for testing without HF dependency."""
+    """Minimal tokenizer for testing without HF dependency.
+
+    Uses a deterministic hashing scheme (zlib.adler32) to guarantee
+    the same word maps to the same token ID across all runs, unlike
+    Python's built-in hash() which is salted per process via PYTHONHASHSEED.
+    """
+
     vocab_size = 1000
     pad_token_id = 0
     eos_token_id = 1
@@ -119,8 +149,13 @@ class _SimpleTokenizer:
     eos_token = "[EOS]"
     padding_side = "left"
 
+    @staticmethod
+    def _word_to_id(word: str) -> int:
+        import zlib
+        return zlib.adler32(word.encode("utf-8")) % 1000
+
     def encode(self, text, **kwargs):
-        return [hash(w) % 1000 for w in text.split()]
+        return [self._word_to_id(w) for w in text.split()]
 
     def decode(self, ids, skip_special_tokens=False):
         return " ".join(str(i) for i in ids if i not in (0, 1))

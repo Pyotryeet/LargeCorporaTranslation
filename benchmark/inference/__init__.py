@@ -9,7 +9,7 @@ import os
 from benchmark.inference.engine import InferenceEngine, TranslationResult, BatchResult
 from benchmark.inference.batch_assembly import BatchAssembler
 from benchmark.inference.batch_tuner import BatchSizeTuner
-from benchmark.inference.sampling import DecodingParams
+from benchmark.inference.sampling import DecodingParams, TEMPERATURE_EPSILON
 
 # v3.0: Backend protocol and registry.
 from benchmark.inference.backends.protocol import (

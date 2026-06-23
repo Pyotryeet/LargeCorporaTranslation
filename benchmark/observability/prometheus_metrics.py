@@ -14,7 +14,6 @@ Counters (monotonically increasing):
   - tr_benchmark_errors_total
 
 Gauges (instantaneous value):
-  - tr_benchmark_throughput_tokens_per_second
   - tr_benchmark_gpu_utilization_percent (per device)
   - tr_benchmark_gpu_memory_used_bytes (per device)
   - tr_benchmark_gpu_temperature_celsius (per device)
@@ -30,6 +29,8 @@ Gauges (instantaneous value):
   - tr_benchmark_quality_comet_kiwi
 
 Histograms:
+  - tr_benchmark_throughput_tokens_per_second  (per-batch TPS samples; meaningful
+    distribution even at 15-60 s scrape intervals)
   - tr_benchmark_batch_latency_seconds
   - tr_benchmark_decode_time_seconds
   - tr_benchmark_prefill_time_seconds
@@ -71,6 +72,9 @@ class _Metric:
         self.help = help_text
         self.labels = labels or {}
         self._lock = threading.Lock()
+        # Reserved for OpenMetrics _created timestamp support.
+        # Currently stored but not rendered; will be used once the
+        # Prometheus text format exporter emits _created lines per metric.
         self._created_ts = time.time()
 
     def _label_str(self) -> str:
@@ -94,7 +98,13 @@ class Counter(_Metric):
         with self._lock:
             self._value += delta
 
-    def set(self, value: float) -> None:
+    def _reset_for_testing(self, value: float = 0.0) -> None:
+        """Reset counter value — FOR TESTING ONLY.
+
+        Do NOT use in production code.  Prometheus counters must be
+        monotonically increasing; resetting violates the contract and
+        causes rate()/increase() to produce garbage.
+        """
         with self._lock:
             self._value = value
 
@@ -162,7 +172,6 @@ class Histogram(_Metric):
         self._bucket_counts: dict[float, int] = {b: 0 for b in self.buckets}
         self._sum: float = 0.0
         self._count: int = 0
-        self._inf_count: int = 0
 
     def observe(self, value: float) -> None:
         with self._lock:
@@ -172,23 +181,34 @@ class Histogram(_Metric):
                 if value <= boundary:
                     self._bucket_counts[boundary] += 1
                     return
-            self._inf_count += 1
+            # value exceeds all defined bucket boundaries — it falls into +Inf
+            # (implicitly captured by _count, no separate accumulator needed)
 
     def render(self) -> str:
+        """Render the histogram in Prometheus text format.
+
+        Bucket counts are stored per-bucket internally (each observation
+        increments exactly one bucket).  At render time we convert to
+        cumulative counts as required by the Prometheus exposition format:
+        ``le=X`` must equal the total number of observations with value <= X.
+        The ``+Inf`` bucket is always equal to ``_count``.
+        """
         label_str = self._label_str()
         lines = [
             f"# HELP {self.name} {self.help}",
             f"# TYPE {self.name} histogram",
         ]
         with self._lock:
+            cumulative = 0
             for boundary in self.buckets:
+                cumulative += self._bucket_counts[boundary]
                 lines.append(
                     f"{self.name}_bucket{label_str}"
-                    f'{{le="{boundary}"}} {self._bucket_counts[boundary]}'
+                    f'{{le="{boundary}"}} {cumulative}'
                 )
             lines.append(
                 f"{self.name}_bucket{label_str}"
-                f'{{le="+Inf"}} {self._count + self._inf_count}'
+                f'{{le="+Inf"}} {self._count}'
             )
             lines.append(f"{self.name}_sum{label_str} {self._sum}")
             lines.append(f"{self.name}_count{label_str} {self._count}")
@@ -274,10 +294,17 @@ class PrometheusExporter:
         # WARNING: port 9090 is hardcoded. Multi-node deployments must pass
         # unique ports via TR_PROMETHEUS_PORT or equivalent.
         import os
-        self.port = (
-            port if port is not None
-            else int(os.environ.get("TR_PROMETHEUS_PORT", 9090))
-        )
+        if port is not None:
+            self.port = port
+        else:
+            try:
+                self.port = int(os.environ.get("TR_PROMETHEUS_PORT", 9090))
+            except (ValueError, TypeError):
+                logger.error(
+                    "TR_PROMETHEUS_PORT=%r is not a valid integer; falling back to 9090",
+                    os.environ.get("TR_PROMETHEUS_PORT"),
+                )
+                self.port = 9090
         self.host = host
         self.registry = PrometheusRegistry()
 
@@ -300,10 +327,6 @@ class PrometheusExporter:
         )
 
         # ── Gauge metrics ──
-        self.throughput = self.registry.gauge(
-            "tr_benchmark_throughput_tokens_per_second",
-            "Rolling throughput in tokens per second.",
-        )
         self.queue_depth = self.registry.gauge(
             "tr_benchmark_queue_depth",
             "Current pipeline queue depth (tokenised chunks waiting).",
@@ -380,6 +403,13 @@ class PrometheusExporter:
         )
 
         # ── Histogram metrics ──
+        self.throughput_hist = self.registry.histogram(
+            "tr_benchmark_throughput_tokens_per_second",
+            "Per-batch throughput samples (tokens/sec).  Use histogram_quantile() "
+            "or rate() for meaningful dashboards — a single gauge point is useless "
+            "at 15-60 s scrape intervals.",
+            buckets=[1, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000, 20000],
+        )
         self.latency_hist = self.registry.histogram(
             "tr_benchmark_batch_latency_seconds",
             "Total batch latency in seconds.",
@@ -400,10 +430,14 @@ class PrometheusExporter:
     # ── Lifecycle ───────────────────────────────────────────────────────
 
     def _index_html(self) -> str:
-        return """<!DOCTYPE html>
+        try:
+            from benchmark import __version__
+        except ImportError:
+            __version__ = "unknown"
+        return f"""<!DOCTYPE html>
 <html><head><title>TR Benchmark Metrics</title></head>
 <body>
-<h1>TR Benchmark v3.6 — Metrics</h1>
+<h1>TR Benchmark {__version__} — Metrics</h1>
 <ul>
 <li><a href="/metrics">/metrics</a> — Prometheus text format</li>
 <li><a href="/health">/health</a> — Health check</li>
@@ -411,7 +445,22 @@ class PrometheusExporter:
 </body></html>"""
 
     def start(self) -> None:
-        """Start the Prometheus HTTP metrics server on a background thread."""
+        """Start the Prometheus HTTP metrics server on a background thread.
+
+        .. warning::
+
+           Only one process can bind to a given (host, port) pair.  If you
+           also use DashboardServer (server.py), do **not** call start() on
+           both objects — use only DashboardServer and pass this exporter as
+           ``DashboardServer(exporter=...)`` so /metrics, /dashboard, /health,
+           and /api/snapshot are all served through a single port.
+
+        Raises
+        ------
+        OSError
+            If the port is already in use (no pre-check heuristic — the OS
+            tells us definitively at bind time).
+        """
         _exporter = self
         class _PerExportHandler(BaseHTTPRequestHandler):
             """Sole implementation of the /metrics HTTP handler.
@@ -450,6 +499,10 @@ class PrometheusExporter:
                 pass
 
         self._server = HTTPServer((self.host, self.port), _PerExportHandler)
+        # Verify bind succeeded by opening the socket immediately.
+        # HTTPServer.__init__ binds on construction — if another process
+        # holds the port this raises OSError (Address already in use).
+        # No pre-check heuristic needed; the OS tells us at bind time.
         self._server_thread = threading.Thread(
             target=self._server.serve_forever,
             name="prometheus-server",
@@ -464,7 +517,10 @@ class PrometheusExporter:
     def stop(self) -> None:
         """Stop the metrics server."""
         if self._server is not None:
-            self._server.shutdown()
+            try:
+                self._server.shutdown()
+            finally:
+                self._server.server_close()
             self._server = None
         if self._server_thread is not None:
             self._server_thread.join(timeout=5)
@@ -484,9 +540,12 @@ class PrometheusExporter:
         self.batches_total.inc()
         self.tokens_total.inc(tokens)
         self.sequences_completed.inc(batch_size)
-        self.throughput.set(
-            (tokens / latency_ms) * 1000.0 if latency_ms > 0 else 0.0
-        )
+        # Record per-batch TPS as a histogram sample — produces a meaningful
+        # distribution even when Prometheus scrapes at 15-60 s intervals.
+        # The histogram's _sum / _count gives the average TPS; use
+        # histogram_quantile() in PromQL for quantile analysis.
+        batch_tps = (tokens / latency_ms) * 1000.0 if latency_ms > 0 else 0.0
+        self.throughput_hist.observe(batch_tps)
         self.latency_hist.observe(latency_ms / 1000.0)
         if prefill_ms > 0:
             self.prefill_hist.observe(prefill_ms / 1000.0)
@@ -561,12 +620,16 @@ class PrometheusExporter:
 
     def snapshot(self) -> dict:
         """Return a JSON-serializable summary of all current metric values."""
+        # Compute mean TPS from the throughput histogram (sum / count).
+        _tps_sum = self.throughput_hist._sum
+        _tps_count = self.throughput_hist._count
+        _mean_tps = _tps_sum / _tps_count if _tps_count > 0 else 0.0
         return {
             "batches_total": self.batches_total.get(),
             "tokens_total": self.tokens_total.get(),
             "sequences_completed": self.sequences_completed.get(),
             "errors_total": self.errors_total.get(),
-            "throughput_tps": self.throughput.get(),
+            "throughput_tps": _mean_tps,
             "queue_depth": self.queue_depth.get(),
             "data_starvation_pct": self.data_starvation.get(),
             "cpu_util_pct": self.cpu_util.get(),

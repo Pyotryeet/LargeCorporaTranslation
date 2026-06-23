@@ -64,6 +64,8 @@ from typing import Any, Optional
 
 import torch
 
+from benchmark.config.constants import END_OF_TURN_TOKEN_ID
+
 logger = logging.getLogger(__name__)
 
 # ── Activation thresholds ────────────────────────────────────────────────────
@@ -80,7 +82,7 @@ class SequenceState:
     current_position: int = 0
     max_new_tokens: int = 512
     eos_token_id: int = 1
-    end_of_turn_token_id: int = 106
+    end_of_turn_token_id: int = END_OF_TURN_TOKEN_ID
     done: bool = False
     raw_text: str = ""
 
@@ -162,7 +164,7 @@ class ContinuousBatcher:
             max_new_tokens=self.engine.decoding_params.max_new_tokens
             if hasattr(self.engine, 'decoding_params') else 512,
             eos_token_id=self.tokenizer.eos_token_id,
-            end_of_turn_token_id=106,
+            end_of_turn_token_id=END_OF_TURN_TOKEN_ID,
             raw_text=raw_text,
         )
         self._waiting.append(state)
@@ -248,13 +250,12 @@ class ContinuousBatcher:
             # Free paged blocks immediately.
             self._paged_kv.free(seq_id)
 
-        # ── 4b. Rebuild PagedCache whenever _active_order changed ──
-        # _active_order is the source of truth for the current batch.
-        # PagedCache must reflect it exactly — stale PagedCache with
-        # missing seq_ids causes crashes when the model writes KV for
-        # new sequences, and leaked seq_ids reference freed blocks.
-        _order_changed = bool(completed_ids) or bool(new_seqs)
-        if _order_changed:
+        # ── 4b. Rebuild PagedCache only when completions changed _active_order ──
+        # When new sequences joined, _prefill_batch already rebuilt the
+        # PagedCache.  We only need to rebuild here when sequences completed
+        # and were removed from _active_order (size/composition changed).
+        # Rebuilding unconditionally wastes GPU time and allocator pressure.
+        if completed_ids:
             from benchmark.inference.paged_attention import PagedCache
             self._paged_cache = PagedCache(self._paged_kv, list(self._active_order))
 
@@ -478,20 +479,46 @@ class ContinuousBatcher:
 
         Uses ``_active_order`` (NOT ``_running.values()``) for deterministic
         batch-index → seq_id mapping.
+
+        Raises
+        ------
+        RuntimeError
+            If ``_active_order`` and ``_running`` are inconsistent — a seq_id
+            in one but not the other indicates a scheduler bug that would
+            produce silent data corruption.
         """
         device = self.device
 
-        # Each active sequence contributes its last generated token
-        # (or last prompt token if no tokens generated yet).
+        # ── Validate consistency between _active_order and _running ──
+        active_set = set(self._active_order)
+        running_set = set(self._running.keys())
+        only_in_active = active_set - running_set
+        only_in_running = running_set - active_set
+        if only_in_active:
+            raise RuntimeError(
+                f"ContinuousBatcher state corruption: seq_ids {only_in_active} "
+                f"are in _active_order but not in _running.  _assemble_batch "
+                f"cannot safely construct the batch.  This is a scheduler bug."
+            )
+        if only_in_running:
+            raise RuntimeError(
+                f"ContinuousBatcher state corruption: seq_ids {only_in_running} "
+                f"are in _running but not in _active_order.  These sequences "
+                f"will be silently dropped from the decode batch.  This is a "
+                f"scheduler bug."
+            )
+
+        # Build input IDs and position IDs in a SINGLE pass to prevent
+        # desync between batch_input_ids and positions.
         next_tokens_list = []
+        position_list = []
         for seq_id in self._active_order:
-            seq = self._running.get(seq_id)
-            if seq is None:
-                continue
+            seq = self._running[seq_id]  # guaranteed present by validation above
             if seq.generated_ids:
                 next_tokens_list.append(seq.generated_ids[-1])
             else:
                 next_tokens_list.append(seq.input_ids[-1])
+            position_list.append(seq.current_position)
 
         batch_input_ids = torch.tensor(
             next_tokens_list, dtype=torch.long, device=device,
@@ -499,25 +526,50 @@ class ContinuousBatcher:
 
         # Position IDs track cumulative token count per sequence.
         positions = torch.tensor(
-            [self._running[sid].current_position for sid in self._active_order
-             if sid in self._running],
+            position_list,
             dtype=torch.long, device=device,
         ).unsqueeze(-1)  # [batch, 1]
 
+        # ── Assertion: input IDs and position IDs must agree on batch size ──
+        # A length mismatch means position_list or next_tokens_list desynced
+        # from _active_order, which produces silent data corruption.
+        assert batch_input_ids.shape[0] == positions.shape[0] == len(self._active_order), (
+            f"Batch assembly size mismatch: batch_input_ids={batch_input_ids.shape[0]}, "
+            f"positions={positions.shape[0]}, _active_order={len(self._active_order)}"
+        )
+
         return batch_input_ids, positions
 
-    def flush_completed(self) -> list[SequenceState]:
-        """Drain all remaining running sequences (called at shutdown)."""
-        flushed = []
+    def drain_running(self) -> list[SequenceState]:
+        """Drain all remaining running sequences — free paged blocks, return states.
+
+        Use this to recover from a stuck batch or to gracefully shut down
+        without leaking paged KV-cache blocks.  All drained sequences are
+        marked as ``done`` and their blocks are returned to the free pool.
+
+        Returns
+        -------
+        list[SequenceState]
+            All sequences that were in the running pool.
+        """
+        drained = []
         for seq_id in list(self._active_order):
             seq = self._running.pop(seq_id, None)
             if seq is not None:
                 seq.done = True
-                flushed.append(seq)
+                drained.append(seq)
                 self._paged_kv.free(seq_id)
         self._active_order.clear()
         self._paged_cache = None
-        return flushed
+        return drained
+
+    def flush_completed(self) -> list[SequenceState]:
+        """Drain all remaining running sequences (called at shutdown).
+
+        Deprecated: use ``drain_running()`` instead.  Kept for backward
+        compatibility.
+        """
+        return self.drain_running()
 
 
 # ── Integration helper ───────────────────────────────────────────────────────

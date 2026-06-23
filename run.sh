@@ -374,10 +374,18 @@ if [ "$_AUTO_SHARD" = true ]; then
     if [ ! -f "$_SHARD_0" ] || [ ! -f "$_SHARD_1" ]; then
         warn "Splitting data into $_NUM_GPUS shards for multi-GPU parallelism..."
         mkdir -p "$_SHARD_DIR"
-        $PYTHON_BIN -c "
+        # SECURITY: INPUT is passed via argv to avoid shell injection from --data flag.
+        # Never interpolate user-controlled strings into python -c blocks.
+        _SPLIT_SCRIPT=$(mktemp /tmp/tr_data_split.XXXXXX.py)
+        cat > "$_SPLIT_SCRIPT" << 'PYSPLIT'
 import json, gzip, glob, os, sys
+
+input_pattern = sys.argv[1]
+num_gpus = int(sys.argv[2])
+shard_dir = sys.argv[3]
+
 # Find the input file (resolve glob)
-patterns = ['$INPUT'] if not '$INPUT'.startswith('./data/input/shards') else ['data/input/fineweb_en_sample.jsonl.gz', 'data/input/*.jsonl.gz']
+patterns = [input_pattern] if not input_pattern.startswith('./data/input/shards') else ['data/input/fineweb_en_sample.jsonl.gz', 'data/input/*.jsonl.gz']
 docs = []
 for pat in patterns:
     for f in sorted(glob.glob(pat)):
@@ -392,21 +400,23 @@ for pat in patterns:
             break
 
 n = len(docs)
-if n < $_NUM_GPUS * 2:
-    print(f'Not enough docs ({n}) to split across $_NUM_GPUS GPUs — using full dataset per GPU')
+if n < num_gpus * 2:
+    print(f'Not enough docs ({n}) to split across {num_gpus} GPUs — using full dataset per GPU')
     sys.exit(0)
 
-chunk = n // $_NUM_GPUS
-for gpu in range($_NUM_GPUS):
+chunk = n // num_gpus
+for gpu in range(num_gpus):
     start = gpu * chunk
-    end = start + chunk if gpu < $_NUM_GPUS - 1 else n
+    end = start + chunk if gpu < num_gpus - 1 else n
     subset = docs[start:end]
-    path = os.path.join('$_SHARD_DIR', f'shard_{gpu}.jsonl.gz')
+    path = os.path.join(shard_dir, f'shard_{gpu}.jsonl.gz')
     with gzip.open(path, 'wt', encoding='utf-8') as fh:
         for doc in subset:
             fh.write(json.dumps(doc, ensure_ascii=False) + '\n')
     print(f'shard_{gpu}: {len(subset)} docs ({os.path.getsize(path)/1024**2:.1f} MB)')
-" 2>&1 || warn "Data split failed — falling back to single-GPU mode"
+PYSPLIT
+        $PYTHON_BIN "$_SPLIT_SCRIPT" "$INPUT" "$_NUM_GPUS" "$_SHARD_DIR" 2>&1 || warn "Data split failed — falling back to single-GPU mode"
+        rm -f "$_SPLIT_SCRIPT"
     fi
 
     # Check shards actually exist after split attempt.
@@ -456,7 +466,7 @@ for gpu in range($_NUM_GPUS):
         else
             warn "$_FAILED of $_NUM_GPUS GPU processes failed — check logs in output/gpu*/"
         fi
-        exit $_FAILED
+        exit "$_FAILED"
     fi
 fi
 
@@ -626,7 +636,6 @@ case "$MODEL_PATH" in
     *translategemma-27b*) _model_label="TranslateGemma 27B" ;;
     *SmolLM*|*smollm*) _model_label="SmolLM2 1.7B" ;;
     *LLaDA*|*llada*) _model_label="LLaDA 8B" ;;
-esac
     # v3.4: Gemma 4 QAT models.
     *gemma-4-E2B*qat*|*gemma-4-e2b*qat*) _model_label="Gemma 4 E2B QAT" ;;
     *gemma-4-E4B*qat*|*gemma-4-e4b*qat*) _model_label="Gemma 4 E4B QAT" ;;
@@ -634,6 +643,7 @@ esac
     *gemma-4*4b*|*gemma-4*4B*) _model_label="Gemma 4 E4B" ;;
     # v3.4: DiffusionGemma.
     *diffusiongemma*|*DiffusionGemma*) _model_label="DiffusionGemma 26B-A4B" ;;
+esac
 
 echo -e "  ${B}Model:${N}     ${_model_label}"
 echo -e "  ${B}Backend:${N}   $BACKEND"
@@ -667,6 +677,14 @@ fi
 # ═══════════════════════════════════════════════════════════════════════════
 if [ -f "${VENV_DIR}/bin/activate" ]; then
     source "${VENV_DIR}/bin/activate"
+    # Validate venv activation: verify $VIRTUAL_ENV is set and matches VENV_DIR.
+    _expected_venv="$(cd "$SCRIPT_DIR" && pwd)/${VENV_DIR}"
+    if [ "${VIRTUAL_ENV:-}" != "$_expected_venv" ]; then
+        fail "Virtualenv activation failed: VIRTUAL_ENV=$VIRTUAL_ENV expected $_expected_venv"
+    fi
+    if ! python -c "import sys; sys.exit(0 if sys.prefix == '$_expected_venv' else 1)" 2>/dev/null; then
+        fail "Virtualenv activation mismatch: python prefix does not point to $_expected_venv"
+    fi
 fi
 
 if [ "$OBSERVABILITY" = true ]; then
@@ -679,7 +697,10 @@ print('Metrics:   http://localhost:9090/metrics')
 import time; time.sleep(2)
 " &
     OBS_PID=$!
-    trap "kill $OBS_PID 2>/dev/null; exit" EXIT
+    # Clean up on SIGINT/SIGTERM as well — not just EXIT.
+    # Without this, Ctrl-C leaves the Prometheus exporter orphaned.
+    _cleanup_obs() { kill "$OBS_PID" 2>/dev/null || true; }
+    trap _cleanup_obs EXIT SIGINT SIGTERM
     ok "Observability: http://localhost:9090/"
 fi
 

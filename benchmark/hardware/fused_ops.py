@@ -6,11 +6,14 @@ memory traffic.
 
 Fusions (backend-aware):
   - ``fused_rms_norm_residual`` : RMSNorm + residual add (1 kernel vs 3).
-  - ``fused_rotary_qkv_projection`` : RoPE + Q/K/V linear (1 kernel vs 4).
+    CUDA path uses Triton when available; falls back to eager PyTorch.
   - ``fused_swiglu_gate_up`` : SiLU gate + up projection + multiply.
+    Uses eager PyTorch matmuls (auto-fused by the CUDA compiler); a true
+    Triton kernel for this operation is available in
+    ``triton_kernels_fused.py`` but uses a different calling convention
+    (pre-computed projections).
 
-These use ``torch.library`` for portability across CUDA and MPS.
-Triton implementations are registered on CUDA for maximum performance.
+These use ``torch.library`` for portability across CUDA, MPS, and CPU.
 """
 
 from __future__ import annotations
@@ -27,77 +30,139 @@ logger = logging.getLogger(__name__)
 # torch.library registration (portable fallbacks)
 # ---------------------------------------------------------------------------
 
-# Use a private namespace to avoid collisions.
-_lib = torch.library.Library("tr_benchmark", "DEF")  # type: ignore[attr-defined]
+# Double-import guard: torch.library registration is global — re-importing the
+# module re-runs DEF/define and triggers errors.  Use a module-level sentinel
+# to skip re-registration.
+_IMPORT_REGISTERED = False
 
-_lib.define(
-    "fused_rms_norm_residual(Tensor x, Tensor residual, Tensor weight, float eps) "
-    "-> (Tensor output, Tensor new_residual)"
-)
+__all__ = [
+    "fused_rms_norm_residual",
+    "fused_swiglu_gate_up",
+]
 
-_lib.define(
-    "fused_swiglu_gate_up(Tensor hidden, Tensor gate_proj_weight, "
-    "Tensor up_proj_weight) -> Tensor"
-)
-
-
-@torch.library.impl(_lib, "fused_rms_norm_residual", "CPU")
-def _fused_rms_norm_residual_cpu(
-    x: torch.Tensor, residual: torch.Tensor, weight: torch.Tensor, eps: float,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """CPU fallback: RMSNorm + residual add in two steps."""
-    # Step 1: Add residual.
-    x = x + residual
-    # Step 2: RMSNorm.
-    rms = torch.sqrt(torch.mean(x.float() ** 2, dim=-1, keepdim=True) + eps)
-    output = (x.float() / rms).to(x.dtype) * weight
-    return output, x.detach()  # new_residual = x before norm
-
-
-@torch.library.impl(_lib, "fused_rms_norm_residual", "CUDA")
-def _fused_rms_norm_residual_cuda(
-    x: torch.Tensor, residual: torch.Tensor, weight: torch.Tensor, eps: float,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """CUDA implementation via Triton when available, else eager fallback."""
+if not _IMPORT_REGISTERED:
     try:
-        return _fused_rms_norm_residual_triton(x, residual, weight, eps)
-    except (RuntimeError, torch.cuda.CudaError, ImportError):
+        _lib = torch.library.Library("tr_benchmark", "DEF")  # type: ignore[attr-defined]
+    except RuntimeError:
+        # Already defined by a prior import (e.g. reimport in tests, pickling,
+        # or multiprocessing spawn).  Re-attach as a FRAGMENT.
+        _lib = torch.library.Library("tr_benchmark", "FRAGMENT")  # type: ignore[attr-defined]
+
+    try:
+        # define() is idempotent within the same Library handle but raises
+        # RuntimeError if the op was already defined via a different handle.
+        _lib.define(
+            "fused_rms_norm_residual(Tensor x, Tensor residual, Tensor weight, float eps) "
+            "-> (Tensor output, Tensor new_residual)"
+        )
+    except RuntimeError:
+        pass  # Already defined by a prior import path.
+
+    try:
+        _lib.define(
+            "fused_swiglu_gate_up(Tensor hidden, Tensor gate_proj_weight, "
+            "Tensor up_proj_weight) -> Tensor"
+        )
+    except RuntimeError:
+        pass  # Already defined by a prior import path.
+
+    _IMPORT_REGISTERED = True
+
+
+# Dispatch-handler registration.  Each @torch.library.impl decorator registers a
+# dispatch key for the op.  On double-import (or reimport in tests/multiprocessing)
+# the decorator may fail if the key is already registered.  Fall back gracefully.
+
+_IMPL_ERRORS: list[str] = []
+
+try:
+
+    @torch.library.impl(_lib, "fused_rms_norm_residual", "CPU")
+    def _fused_rms_norm_residual_cpu(
+        x: torch.Tensor, residual: torch.Tensor, weight: torch.Tensor, eps: float,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """CPU fallback: RMSNorm + residual add in two steps."""
+        # Step 1: Add residual.
+        x = x + residual
+        # Step 2: RMSNorm.
+        rms = torch.sqrt(torch.mean(x.float() ** 2, dim=-1, keepdim=True) + eps)
+        output = (x.float() / rms).to(x.dtype) * weight
+        return output, x.detach()  # new_residual = x before norm
+except RuntimeError as e:
+    _IMPL_ERRORS.append(f"fused_rms_norm_residual CPU: {e}")
+
+
+try:
+
+    @torch.library.impl(_lib, "fused_rms_norm_residual", "CUDA")
+    def _fused_rms_norm_residual_cuda(
+        x: torch.Tensor, residual: torch.Tensor, weight: torch.Tensor, eps: float,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """CUDA implementation via Triton when available, else eager fallback."""
+        try:
+            return _fused_rms_norm_residual_triton(x, residual, weight, eps)
+        except (RuntimeError, torch.cuda.CudaError, ImportError):
+            return _fused_rms_norm_residual_cpu(x, residual, weight, eps)
+except RuntimeError as e:
+    _IMPL_ERRORS.append(f"fused_rms_norm_residual CUDA: {e}")
+
+
+try:
+
+    @torch.library.impl(_lib, "fused_rms_norm_residual", "MPS")
+    def _fused_rms_norm_residual_mps(
+        x: torch.Tensor, residual: torch.Tensor, weight: torch.Tensor, eps: float,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """MPS: uses eager PyTorch (Metal auto-fuses where possible)."""
         return _fused_rms_norm_residual_cpu(x, residual, weight, eps)
+except RuntimeError as e:
+    _IMPL_ERRORS.append(f"fused_rms_norm_residual MPS: {e}")
 
 
-@torch.library.impl(_lib, "fused_rms_norm_residual", "MPS")
-def _fused_rms_norm_residual_mps(
-    x: torch.Tensor, residual: torch.Tensor, weight: torch.Tensor, eps: float,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """MPS: uses eager PyTorch (Metal auto-fuses where possible)."""
-    return _fused_rms_norm_residual_cpu(x, residual, weight, eps)
+try:
+
+    @torch.library.impl(_lib, "fused_swiglu_gate_up", "CPU")
+    def _fused_swiglu_gate_up_cpu(
+        hidden: torch.Tensor, gate_proj_weight: torch.Tensor, up_proj_weight: torch.Tensor,
+    ) -> torch.Tensor:
+        """CPU: SiLU gate × up — two matmuls + elementwise."""
+        gate = F.silu(F.linear(hidden, gate_proj_weight))
+        up = F.linear(hidden, up_proj_weight)
+        return gate * up
+except RuntimeError as e:
+    _IMPL_ERRORS.append(f"fused_swiglu_gate_up CPU: {e}")
 
 
-@torch.library.impl(_lib, "fused_swiglu_gate_up", "CPU")
-def _fused_swiglu_gate_up_cpu(
-    hidden: torch.Tensor, gate_proj_weight: torch.Tensor, up_proj_weight: torch.Tensor,
-) -> torch.Tensor:
-    """CPU: SiLU gate × up — two matmuls + elementwise."""
-    gate = F.silu(F.linear(hidden, gate_proj_weight))
-    up = F.linear(hidden, up_proj_weight)
-    return gate * up
+try:
+
+    @torch.library.impl(_lib, "fused_swiglu_gate_up", "CUDA")
+    def _fused_swiglu_gate_up_cuda(
+        hidden: torch.Tensor, gate_proj_weight: torch.Tensor, up_proj_weight: torch.Tensor,
+    ) -> torch.Tensor:
+        try:
+            return _fused_swiglu_gate_up_eager(hidden, gate_proj_weight, up_proj_weight)
+        except (RuntimeError, torch.cuda.CudaError, ImportError):
+            return _fused_swiglu_gate_up_cpu(hidden, gate_proj_weight, up_proj_weight)
+except RuntimeError as e:
+    _IMPL_ERRORS.append(f"fused_swiglu_gate_up CUDA: {e}")
 
 
-@torch.library.impl(_lib, "fused_swiglu_gate_up", "CUDA")
-def _fused_swiglu_gate_up_cuda(
-    hidden: torch.Tensor, gate_proj_weight: torch.Tensor, up_proj_weight: torch.Tensor,
-) -> torch.Tensor:
-    try:
-        return _fused_swiglu_gate_up_triton(hidden, gate_proj_weight, up_proj_weight)
-    except (RuntimeError, torch.cuda.CudaError, ImportError):
+try:
+
+    @torch.library.impl(_lib, "fused_swiglu_gate_up", "MPS")
+    def _fused_swiglu_gate_up_mps(
+        hidden: torch.Tensor, gate_proj_weight: torch.Tensor, up_proj_weight: torch.Tensor,
+    ) -> torch.Tensor:
         return _fused_swiglu_gate_up_cpu(hidden, gate_proj_weight, up_proj_weight)
+except RuntimeError as e:
+    _IMPL_ERRORS.append(f"fused_swiglu_gate_up MPS: {e}")
 
 
-@torch.library.impl(_lib, "fused_swiglu_gate_up", "MPS")
-def _fused_swiglu_gate_up_mps(
-    hidden: torch.Tensor, gate_proj_weight: torch.Tensor, up_proj_weight: torch.Tensor,
-) -> torch.Tensor:
-    return _fused_swiglu_gate_up_cpu(hidden, gate_proj_weight, up_proj_weight)
+if _IMPL_ERRORS:
+    logger.debug(
+        "torch.library impl registration errors (expected on double-import): %s",
+        ", ".join(_IMPL_ERRORS),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -167,7 +232,7 @@ def _fused_rms_norm_residual_triton(
         raise  # Let the caller fall back to eager.
 
 
-def _fused_swiglu_gate_up_triton(
+def _fused_swiglu_gate_up_eager(
     hidden: torch.Tensor, gate_proj_weight: torch.Tensor, up_proj_weight: torch.Tensor,
 ) -> torch.Tensor:
     """Eager PyTorch fallback for fused SiLU(gate(hidden)) * up(hidden).
@@ -176,9 +241,8 @@ def _fused_swiglu_gate_up_triton(
     SwiGLU fusion exists in ``triton_kernels_fused.py`` but is not wired into
     this dispatch path (it requires a different calling convention — the
     Triton kernel operates on pre-computed gate/up projections, not raw
-    weight matmuls).  The name ``_fused_swiglu_gate_up_triton`` is retained
-    for API compatibility; the actual implementation uses eager PyTorch
-    matmuls which are already auto-fused by the CUDA compiler.
+    weight matmuls).  This implementation uses eager PyTorch matmuls which
+    are already auto-fused by the CUDA compiler.
     """
     gate = F.silu(F.linear(hidden, gate_proj_weight))
     up = F.linear(hidden, up_proj_weight)

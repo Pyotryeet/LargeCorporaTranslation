@@ -124,6 +124,16 @@ class PrecisionConfig:
     ``fp8_autocast`` context; accumulation happens in BF16 for numerical
     stability.
 
+    **TF32 note**: On Ampere+ GPUs (SM80+), PyTorch defaults to TF32 for
+    ``torch.matmul`` and ``torch.nn.Linear``.  TF32 uses a 19-bit mantissa
+    (vs FP32's 23-bit), giving ~8x throughput over FP32 on tensor cores.
+    TF32 is automatically managed by CUDA's ``torch.backends.cuda.matmul.allow_tf32``
+    (default True on CUDA 11+).  This config does NOT disable TF32 — it remains
+    active unless the user explicitly sets ``torch.backends.cuda.matmul.allow_tf32 = False``.
+    On H200 (SM90), TF32 is superseded by FP8 whenever Transformer Engine is active,
+    but TF32 still applies to operations outside ``fp8_autocast`` (e.g., attention
+    softmax, RMSNorm weight multiplication).
+
     Attributes
     ----------
     backend : str
@@ -134,6 +144,8 @@ class PrecisionConfig:
     uses_fp8 : bool
     supports_fp8_native : bool
         True when the hardware is capable of FP8 (Hopper/H200 SM90+).
+    tf32_enabled : bool
+        True when TF32 is enabled on CUDA (default on Ampere+).
     """
 
     def __init__(self, backend: str, preferred: PrecisionMode = "auto"):
@@ -144,6 +156,7 @@ class PrecisionConfig:
         self.compute_dtype = self._resolve_compute_dtype()
         self.uses_fp8 = self._resolve_fp8()
         self.supports_fp8_native = self._resolve_fp8_native()
+        self.tf32_enabled = self._resolve_tf32()
 
     def _resolve_master_dtype(self) -> torch.dtype:
         if self.preferred in ("fp8", "float8_e4m3fn") and self.backend == "cuda":
@@ -224,6 +237,22 @@ class PrecisionConfig:
         except Exception:
             return False
 
+    def _resolve_tf32(self) -> bool:
+        """True when TF32 matmul is enabled on CUDA.
+
+        TF32 is the default on Ampere+ GPUs (SM80+).  PyTorch enables it
+        automatically via ``torch.backends.cuda.matmul.allow_tf32`` (default
+        True on CUDA 11+).  It is superseded by FP8 inside ``fp8_autocast``
+        but still active for non-TE operations.
+
+        On MPS and CPU, TF32 is irrelevant — returns False.
+        """
+        if self.backend != "cuda" or not torch.cuda.is_available():
+            return False
+        return getattr(
+            torch.backends.cuda.matmul, "allow_tf32", False
+        )
+
     def to_dict(self) -> dict:
         return {
             "backend": self.backend,
@@ -233,6 +262,7 @@ class PrecisionConfig:
             "uses_transformer_engine": self.uses_transformer_engine,
             "uses_fp8": self.uses_fp8,
             "supports_fp8_native": self.supports_fp8_native,
+            "tf32_enabled": self.tf32_enabled,
         }
 
     @property

@@ -17,6 +17,7 @@ from contextlib import contextmanager
 from glob import glob
 import gzip
 import heapq
+import json as _stdlib_json  # for JSONDecodeError in catch clauses
 import logging
 import os
 import random
@@ -36,6 +37,9 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+# Module-level sentinel for object-identity checks (avoids magic-string bugs).
+_SENTINEL_OBJ = object()
+
 # ── External shuffle constants (imported from central constants) ──────────
 from benchmark.config.constants import (  # noqa: E402
     SHUFFLE_MEMORY_BUDGET_BYTES,
@@ -53,12 +57,27 @@ _SHUFFLE_LOAD_TIMEOUT = 15
 
 
 def _parse_json_line(line: str) -> dict:
-    """Parse a single JSON line — uses orjson when available, stdlib fallback."""
+    """Parse a single JSON line — uses orjson when available, stdlib fallback.
+
+    orjson is 4-10x faster but strict: it rejects NaN, Infinity, trailing
+    commas, and some Unicode edge cases.  When orjson fails we fall back to
+    stdlib json.loads, which is more lenient.  Both orjson.JSONDecodeError
+    (a ValueError subclass) and generic ValueError are caught to handle
+    orjson versions that raise TypeError or ValueError for malformed input.
+
+    Raises
+    ------
+    json.JSONDecodeError
+        If both orjson and stdlib json fail to parse the line.
+    """
     if HAS_ORJSON:
         try:
             return orjson.loads(line)
-        except orjson.JSONDecodeError:
-            raise
+        except (orjson.JSONDecodeError, ValueError):
+            # orjson is strict — fall back to stdlib json for lines that
+            # orjson rejects (e.g., NaN, Infinity, trailing commas, or
+            # malformed UTF-8 that raises TypeError in older orjson).
+            return _stdlib_json.loads(line)
     else:
         return _json.loads(line)
 
@@ -137,6 +156,16 @@ class JSONLLoader:
 
         The next call to ``iter_documents()`` will skip the first
         *docs_processed* documents, resuming from doc_id = docs_processed.
+
+        .. note::
+
+           The ``doc_id`` yielded by ``iter_documents()`` after a seek is
+           the iteration-sequence position (0-based after skip), NOT the
+           original corpus document index.  When shuffle is enabled, this
+           means doc_id values are permutation-relative and will differ
+           from the unshuffled doc_id sequence.  Callers that need
+           reproducible doc_id values should record the checkpoint
+           ``current_position`` tuple before pausing.
         """
         self._seek_skip_docs = docs_processed
         self._current_doc_id = docs_processed
@@ -193,23 +222,21 @@ class JSONLLoader:
     # Shuffled iterator — delegates to in-memory or external sort
     # ------------------------------------------------------------------
 
-    def _count_documents(self) -> int:
-        """Fast count pass — lines only, no JSON parsing."""
-        if self._doc_count is not None:
-            return self._doc_count
-        total = 0
-        for fp in self._files:
-            with self._open(fp) as fh:
-                total += sum(1 for _ in fh)
-        self._doc_count = total
-        return total
+    def _ensure_counts(self) -> tuple[int, int]:
+        """Single-pass document count and text byte estimate, with caching.
 
-    def _count_and_estimate_bytes(self) -> tuple[int, int]:
-        """Estimate document count and text size without parsing JSON.
+        Reads each file once (line counting), then estimates decompressed
+        text size from the compressed byte count.  Both fields are cached
+        so subsequent calls are free.  All other count-related methods
+        delegate here to prevent redundant file reads.
 
-        Uses line-counting (no allocation) plus compressed-size heuristic
-        to avoid the O(n) JSON-parse pre-pass that fragments CPython's
-        memory arenas on multi-million-document datasets.
+        Notes
+        -----
+        The text byte estimate uses a 4:1 compression-ratio heuristic for
+        .gz files.  This is intentionally conservative: typical English JSONL
+        with short text fields compresses at 3–5:1, while highly redundant
+        JSONL (long repeated keys) can reach 10:1.  ``_should_use_external_sort``
+        applies a safety floor to prevent OOM from underestimated sizes.
         """
         if self._doc_count is not None and self._total_text_bytes is not None:
             return self._doc_count, self._total_text_bytes
@@ -219,10 +246,9 @@ class JSONLLoader:
             with self._open(fp) as fh:
                 doc_count += sum(1 for _ in fh)
 
-        # Estimate decompressed text size from compressed size.
-        # JSONL with English text typically compresses 3–5:1 with gzip.
-        # Conservative: assume 4:1 ratio → total_text_bytes ≈ compressed_bytes × 4.
-        # Also cap per-document average to avoid overestimating from metadata.
+        # 4:1 is a conservative estimate for English JSONL text compression.
+        # Safety cap in _should_use_external_sort guards against underestimation
+        # when real compression ratios exceed 4:1 (e.g., highly redundant JSONL).
         compressed_bytes = sum(fp.stat().st_size for fp in self._files if fp.suffix == '.gz')
         uncompressed_bytes = sum(fp.stat().st_size for fp in self._files if fp.suffix != '.gz')
         estimated_text_bytes = compressed_bytes * 4 + uncompressed_bytes
@@ -231,13 +257,39 @@ class JSONLLoader:
         self._total_text_bytes = estimated_text_bytes
         return doc_count, estimated_text_bytes
 
+    def _count_documents(self) -> int:
+        """Return cached document count (delegates to _ensure_counts for single-pass)."""
+        return self._ensure_counts()[0]
+
+    def _count_and_estimate_bytes(self) -> tuple[int, int]:
+        """Return (doc_count, estimated_text_bytes) — delegates to _ensure_counts."""
+        return self._ensure_counts()
+
     def _should_use_external_sort(self, doc_count: int, total_text_bytes: int) -> bool:
-        """Return True if the dataset exceeds the in-memory budget."""
+        """Return True if the dataset exceeds the in-memory budget.
+
+        Applies a safety cap to the heuristic text byte estimate — extremely
+        compressible files (10:1+) produce artificially low estimates that
+        can cause OOM when the actual decompressed text is much larger than
+        predicted.  The cap prevents the 4:1 heuristic from underestimating
+        by more than a configurable factor.
+        """
         if doc_count == 0:
             return False
         if doc_count > MAX_IN_MEMORY_DOCS:
             return True
         estimated_memory = int(total_text_bytes * SHUFFLE_BYTES_PER_CHAR_OVERHEAD)
+        # Safety cap: if the heuristic estimate is suspiciously low relative
+        # to the number of documents, bump it.  A typical English JSONL doc
+        # is ~500-2000 chars, so < 50 chars/doc suggests the heuristic is
+        # badly underestimating (e.g., highly compressed metadata-heavy JSONL).
+        if doc_count > 0 and estimated_memory < doc_count * 50:
+            logger.warning(
+                "Heuristic memory estimate (%.2f MB) is < 50 chars/doc — "
+                "likely underestimating. Using doc-count-based fallback.",
+                estimated_memory / (1024**2),
+            )
+            estimated_memory = doc_count * SHUFFLE_BYTES_PER_CHAR_OVERHEAD * 500
         return estimated_memory > self._max_shuffle_memory_bytes
 
     def _shuffled_iter(self) -> Iterator[tuple[int, str, str]]:
@@ -280,6 +332,11 @@ class JSONLLoader:
                 total,
                 MAX_IN_MEMORY_DOCS,
             )
+            # NOTE: Falling back to _sequential_iter() yields doc_id values
+            # that start from the seek-skip offset rather than the shuffled
+            # permutation indices.  doc_id is a monotonic sequence identifier,
+            # not a canonical document index, so this is safe — but callers
+            # that compare doc_id across shuffle paths may see inconsistencies.
             yield from self._sequential_iter()
             return
 
@@ -317,10 +374,12 @@ class JSONLLoader:
         avg_text_len = total_text_len / records_loaded if records_loaded else 0
         estimated_memory_bytes = int(total_text_len * SHUFFLE_BYTES_PER_CHAR_OVERHEAD)
         logger.info(
-            "Shuffle loaded %d docs (avg text len=%.0f chars) — "
+            "Shuffle loaded %d docs (avg text len=%.0f chars, "
+            "total chars=%d) — "
             "estimated memory ~%.2f MB",
             records_loaded,
             avg_text_len,
+            total_text_len,
             estimated_memory_bytes / (1024**2),
         )
         if estimated_memory_bytes > 1024**3:
@@ -653,7 +712,7 @@ class JSONLLoader:
                     continue
                 try:
                     obj = _parse_json_line(line)
-                except Exception:
+                except (_stdlib_json.JSONDecodeError, ValueError):
                     if is_last_file and idx == total_lines - 1:
                         logger.warning(
                             "Failed to parse LAST line of last file %s — "
@@ -672,9 +731,11 @@ class JSONLLoader:
 
         Used by the external sort path and the byte-estimation pre-pass
         to avoid materialising entire files in memory.  Parse errors are
-        counted and summarised at the end rather than logged per-line.
+        counted and summarised at the end rather than logged per-line
+        (to avoid flooding the log on large datasets).
         """
         skipped = 0
+        skipped_first_lines: list[str] = []  # capture first few malformed lines for diagnosis
         with self._open(file_path) as f:
             for line in f:
                 line = line.strip()
@@ -682,23 +743,54 @@ class JSONLLoader:
                     continue
                 try:
                     obj = _parse_json_line(line)
-                except Exception:
+                except (_stdlib_json.JSONDecodeError, ValueError) as e:
+                    # orjson raises orjson.JSONDecodeError (a subclass of
+                    # ValueError), and _parse_json_line converts orjson failures
+                    # to stdlib JSONDecodeError.  Catch both so we skip truly
+                    # malformed lines but let fatal errors (MemoryError,
+                    # KeyboardInterrupt, etc.) propagate.
                     skipped += 1
+                    if len(skipped_first_lines) < 3:
+                        skipped_first_lines.append(line[:120])
                     continue
                 text = obj.get("text", "")
                 if text:
                     yield text
         if skipped:
+            sample = "; ".join(repr(s) for s in skipped_first_lines)
             logger.warning(
-                "Skipped %d malformed JSON lines in %s",
-                skipped, file_path.name,
+                "Skipped %d malformed JSON lines in %s (first %d: [%s])",
+                skipped, file_path.name, len(skipped_first_lines), sample,
             )
 
     @staticmethod
     @contextmanager
     def _open(file_path: Path):
+        """Open a file for line reading — uses pigz for .gz when available."""
         path_str = str(file_path)
         if path_str.endswith(".gz"):
+            # Try parallel_gz (pigz) first — 3-8x faster than Python gzip on
+            # multi-core machines.  Falls back to stdlib gzip when pigz is not
+            # installed or the module is unavailable.
+            try:
+                from benchmark.data.parallel_gz import decompress_lines as _pgz_lines
+                # Wrap the iterator so it behaves like a file object for
+                # `for line in fh` consumers (context manager protocol).
+                class _PgzWrapper:
+                    def __init__(self, lines):
+                        self._lines = lines
+                    def __iter__(self):
+                        return self
+                    def __next__(self):
+                        return next(self._lines)
+                    def __enter__(self):
+                        return self
+                    def __exit__(self, *args):
+                        pass
+                yield _PgzWrapper(_pgz_lines(file_path))
+                return
+            except ImportError:
+                pass
             with gzip.open(path_str, "rt", encoding="utf-8", errors="replace") as fh:
                 yield fh
         else:

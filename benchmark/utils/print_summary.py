@@ -25,7 +25,7 @@ def main():
         sys.exit(1)
 
     try:
-        with open(sys.argv[1]) as f:
+        with open(sys.argv[1], encoding="utf-8") as f:
             r = json.load(f)
     except FileNotFoundError:
         print(f"Error: file not found — {sys.argv[1]}", file=sys.stderr)

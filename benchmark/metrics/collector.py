@@ -42,7 +42,6 @@ class MetricsCollector:
         self._device_thread: Optional[threading.Thread] = None
         self._system_thread: Optional[threading.Thread] = None
         self._running = threading.Event()
-        self._log_lock = threading.Lock()
         self._prometheus: Optional['PrometheusExporter'] = None  # type: ignore[valid-type]
 
     def set_prometheus_exporter(self, exporter: 'PrometheusExporter') -> None:  # type: ignore[valid-type]
@@ -65,15 +64,26 @@ class MetricsCollector:
         for t in [self._device_thread, self._system_thread]:
             if t and t.is_alive():
                 t.join(timeout=10)
+        # Flush after stopping threads — catches any samples buffered between
+        # the thread's last interval check and actual thread exit.  A second
+        # flush after join() ensures no samples are left orphaned in-memory.
+        # (Each sampler's flush() is idempotent on an empty buffer.)
+        self.device_sampler.flush()
+        self.system_sampler.flush()
+        self.batch_logger.flush()
+        # Double-flush is intentional: a sampler thread may have been
+        # mid-sample when _running was cleared, adding one last entry to the
+        # buffer after the first flush call above released the lock.  The
+        # join() ensures the thread has exited by this point, so re-flushing
+        # guarantees every sample is persisted.
         self.device_sampler.flush()
         self.system_sampler.flush()
         self.batch_logger.flush()
         logger.info("Metrics collection stopped")
 
     def log_batch(self, batch_result) -> None:
-        with self._log_lock:
-            self.batch_logger.log(batch_result)
-            self.throughput_tracker.add(batch_result.output_tokens_total, batch_result.total_latency_ms)
+        self.batch_logger.log(batch_result)
+        self.throughput_tracker.add(batch_result.output_tokens_total)
 
     def get_rolling_throughput(self) -> float:
         return self.throughput_tracker.current()

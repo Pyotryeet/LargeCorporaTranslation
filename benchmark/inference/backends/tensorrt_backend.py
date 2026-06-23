@@ -1,5 +1,16 @@
 """TensorRT inference backend — TRT-optimized autoregressive translation (v3.3).
 
+⚠️  KNOWN LIMITATION — KV-CACHE NOT YET IMPLEMENTED
+    The TRT decode loop feeds single tokens to the engine with NO
+    past_key_values input/output.  Each decode step is an isolated forward
+    pass that sees only the current token — the model has ZERO accumulated
+    context from previous tokens.  Output after the first token will be
+    near-random.
+
+    This backend is gated behind --use-tensorrt and is intended for
+    benchmarking TRT engine latency, NOT for producing correct translations.
+    For correct translations, use the standard AutoregressiveBackend.
+
 Wraps a serialized TensorRT engine (.engine file) for the model forward pass
 while keeping all our other optimizations: PagedAttention, async H2D, CUDA
 stream overlap, pinned memory pipeline, Rust tokenizer, O(1) throughput, etc.
@@ -16,12 +27,13 @@ Architecture
     └─ Extract last-token logits, populate KV-cache
 
   DECODE LOOP (N× TRT engine forward — one per token)
+    ⚠️  KV-cache is NOT wired — each step is independent, producing garbage.
     for token in 1..max_new_tokens:
       ├─ [Async H2D] next_token → GPU
       ├─ TRT engine → logits [bs, 1, vocab]
       ├─ Argmax → next_token
       ├─ Check EOS → break
-      └─ Update KV-cache
+      └─ Update KV-cache  ← NOT IMPLEMENTED
 
 Precision options
 -----------------
@@ -47,8 +59,8 @@ Usage
 
 from __future__ import annotations
 
-import contextlib
 import logging
+import os
 import time
 from datetime import datetime, timezone
 from typing import Any, Optional
@@ -66,6 +78,13 @@ from benchmark.inference.backends.protocol import (
 from benchmark.hardware.precision import get_precision_config
 
 logger = logging.getLogger(__name__)
+
+
+def _local_kwargs(path: str) -> dict:
+    """Return ``{"local_files_only": True}`` if *path* is a local file/dir."""
+    if os.path.isdir(path) or os.path.isfile(path):
+        return {"local_files_only": True}
+    return {}
 
 
 class TensorRTBackend(InferenceBackend):
@@ -156,6 +175,14 @@ class TensorRTBackend(InferenceBackend):
         self._trt_runtime: Any = None
         self._trt_active = False
 
+        # ── Safety gate: TRT decode requires explicit opt-in ──
+        # The TRT decode loop feeds single tokens with NO KV-cache,
+        # producing corrupted output.  This flag must be explicitly set
+        # to True to acknowledge the risk before TRT decode is used.
+        self._allow_trt_decode_without_kv_cache: bool = extra.get(
+            "allow_trt_decode_without_kv_cache", False,
+        )
+
         # CUDA streams.
         self._compute_stream: Optional[torch.cuda.Stream] = None
         self._transfer_stream: Optional[torch.cuda.Stream] = None
@@ -186,7 +213,8 @@ class TensorRTBackend(InferenceBackend):
         # ── Load tokenizer + minimal HF model ──
         from transformers import AutoTokenizer, AutoModelForCausalLM
         self.tokenizer = AutoTokenizer.from_pretrained(
-            self.tokenizer_path, trust_remote_code=False,  # Security: remote code execution disabled
+            self.tokenizer_path, trust_remote_code=False,
+            **_local_kwargs(self.tokenizer_path),
         )
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
@@ -299,16 +327,26 @@ class TensorRTBackend(InferenceBackend):
         eos_id = self.tokenizer.eos_token_id
         pad_id = self.tokenizer.pad_token_id or 0
 
-        # ── Get embedding weight for argmax decoding ──
-        if self._hf_model is not None:
-            embed_weight = self._hf_model.get_input_embeddings().weight  # [vocab, hidden]
-        else:
-            embed_weight = None
-
         wall_start = time.monotonic()
 
         # ── Use TRT engine ──
         if self._trt_active and self._trt_runtime is not None:
+            if not self._allow_trt_decode_without_kv_cache:
+                raise RuntimeError(
+                    "TensorRT decode is disabled by default because KV-cache is "
+                    "NOT wired into the TRT engine.  Each decode step operates on "
+                    "a single token with ZERO accumulated context, producing "
+                    "corrupted translations.  "
+                    "Set extra={'allow_trt_decode_without_kv_cache': True} in "
+                    "BackendConfig to acknowledge this risk and enable TRT decode "
+                    "for latency benchmarking only."
+                )
+            logger.warning(
+                "TensorRT decode: KV-cache is NOT wired into the TRT engine. "
+                "Each decode step operates on a single token with ZERO accumulated "
+                "context. Output translations WILL be corrupted. Use "
+                "AutoregressiveBackend for correct results."
+            )
             total_logits = self._trt_runtime.infer(input_ids, attention_mask)
             # total_logits: [bs, prompt_len, vocab]
 

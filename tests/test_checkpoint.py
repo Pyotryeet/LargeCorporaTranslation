@@ -54,6 +54,12 @@ class TestCheckpointManager:
     def test_rotation_keeps_last_n(self):
         with tempfile.TemporaryDirectory() as tmp:
             mgr = CheckpointManager(Path(tmp))
+            # NOTE: We access _rotation directly because CheckpointManager has no
+            # public setter for rotation — it is initialized from
+            # CHECKPOINT_ROTATION in constants.py and intended to be immutable
+            # after construction.  Setting it directly here is a white-box test
+            # that validates the rotation behaviour in isolation without relying
+            # on the global constant remaining at 3.
             mgr._rotation = 3
             for i in range(5):
                 _save_with_unique_name(mgr, i * 100, i * 50000)

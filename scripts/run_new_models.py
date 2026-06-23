@@ -6,9 +6,9 @@ Benchmarks all 5 new models on MPS for 300s each and produces a comparison
 report.  Designed for the H200Research benchmark harness.
 
 Usage:
-    python benchmarks/run_new_models.py
-    python benchmarks/run_new_models.py --models e2b_qat e4b_qat
-    python benchmarks/run_new_models.py --duration 600 --dry-run
+    python scripts/run_new_models.py
+    python scripts/run_new_models.py --models e2b_qat e4b_qat
+    python scripts/run_new_models.py --duration 600 --dry-run
 """
 
 import gc
@@ -323,9 +323,15 @@ def run_benchmark(model: ModelRun, output_dir: Path, duration: int, dry_run: boo
             "error": str(e),
         }
     finally:
-        # Aggressively free memory
+        # ── Proper GPU memory cleanup for MPS (not just gc.collect()) ──
+        # MPS allocator pool retains memory even after Python objects are freed;
+        # we must expire the allocator pool + synchronize the MPS stream to
+        # actually release the backing IOSurfaces back to the system.
         engine = None
         gc.collect()
+        # Expire the MPS allocator so backing IOSurfaces are freed.
+        if hasattr(torch.mps, "synchronize"):
+            torch.mps.synchronize()
         if hasattr(torch.mps, "empty_cache"):
             torch.mps.empty_cache()
         time.sleep(2)

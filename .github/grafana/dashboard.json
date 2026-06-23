@@ -145,11 +145,11 @@
           "min": 0,
           "max": "$max_memory",
           "thresholds": {
-            "mode": "absolute",
+            "mode": "percentage",
             "steps": [
               { "color": "green", "value": null },
-              { "color": "orange", "value": 100 },
-              { "color": "red", "value": 130 }
+              { "color": "orange", "value": 70 },
+              { "color": "red", "value": 90 }
             ]
           }
         }
@@ -238,6 +238,7 @@
     "list": [
       {
         "current": { "selected": false, "text": "141", "value": "141" },
+        "description": "Maximum GPU memory in GiB. Adjust per GPU: A100=80, H100=80, H200=141, B200=192.",
         "hide": 0,
         "label": "Max GPU Memory (GiB)",
         "name": "max_memory",

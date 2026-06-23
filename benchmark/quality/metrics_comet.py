@@ -24,27 +24,33 @@ logger = logging.getLogger(__name__)
 # tokenizer subclasses.  COMET 2.2.7 calls this method directly.
 # Re-add it as a compatibility shim that delegates to the tokenizer's own
 # internal implementation (which still exists — it was just renamed).
-_HAS_APPENDED_TOKEN_PATCH = False
 
 
-def _apply_transformers_v5_comet_patch():
-    """Ensure ``build_inputs_with_special_tokens`` exists on tokenizers."""
-    global _HAS_APPENDED_TOKEN_PATCH
-    if _HAS_APPENDED_TOKEN_PATCH:
-        return
+def _apply_comet_tokenizer_patch(tokenizer_instance):
+    """Ensure ``build_inputs_with_special_tokens`` exists on *tokenizer_instance*.
+
+    SCOPE: Only patches the **instance**, not the base class.  This
+    prevents global corruption of tokenization across the process
+    (a previous version monkey-patched PreTrainedTokenizerBase at the
+    class level, which silently corrupts unrelated tokenizers).
+    """
+    if hasattr(tokenizer_instance, "build_inputs_with_special_tokens"):
+        return  # already present, nothing to do
     try:
-        from transformers import PreTrainedTokenizerBase
-        if not hasattr(PreTrainedTokenizerBase, "build_inputs_with_special_tokens"):
-            def _build_inputs_compat(self, token_ids_0, token_ids_1=None):
-                """Re-add removed method for COMET 2.2.7 compatibility."""
-                if token_ids_1 is None:
-                    return self.build_inputs_with_special_tokens_single_seq(token_ids_0)
-                return self.build_inputs_with_special_tokens_pair(token_ids_0, token_ids_1)
-            PreTrainedTokenizerBase.build_inputs_with_special_tokens = _build_inputs_compat
-            _HAS_APPENDED_TOKEN_PATCH = True
-            logger.info("Applied transformers 5.x COMET compatibility patch")
+        from types import MethodType
+
+        def _build_inputs_compat(self, token_ids_0, token_ids_1=None):
+            """Re-add removed method for COMET 2.2.7 compatibility."""
+            if token_ids_1 is None:
+                return self.build_inputs_with_special_tokens_single_seq(token_ids_0)
+            return self.build_inputs_with_special_tokens_pair(token_ids_0, token_ids_1)
+
+        tokenizer_instance.build_inputs_with_special_tokens = MethodType(
+            _build_inputs_compat, tokenizer_instance
+        )
+        logger.info("Applied COMET tokenizer compatibility patch (instance-scoped)")
     except Exception:
-        pass
+        logger.debug("COMET tokenizer patch not needed for this instance")
 
 
 try:
@@ -55,7 +61,6 @@ except ImportError:
     HAS_TORCH = False
 
 try:
-    _apply_transformers_v5_comet_patch()
     from comet import download_model, load_from_checkpoint
     HAS_COMET = True
 except ImportError:
@@ -118,6 +123,11 @@ def _get_comet_model(model_name: str):
             )
             model_path = _download_comet_model_direct(model_name)
         model = load_from_checkpoint(model_path)
+        # Patch the model's tokenizer instance (NOT the base class) for
+        # transformers 5.x compatibility — COMET calls
+        # build_inputs_with_special_tokens on its tokenizer.
+        if hasattr(model, 'tokenizer') and model.tokenizer is not None:
+            _apply_comet_tokenizer_patch(model.tokenizer)
         _comet_model_cache[model_name] = model
         logger.info("COMET model cached: %s", model_name)
     return _comet_model_cache[model_name]

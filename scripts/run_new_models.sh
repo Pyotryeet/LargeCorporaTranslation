@@ -2,7 +2,7 @@
 # =============================================================================
 # Sequential 5-Minute Benchmark — 5 New Models on MPS
 # =============================================================================
-# Usage: bash benchmarks/run_new_models.sh
+# Usage: bash scripts/run_new_models.sh
 # =============================================================================
 set -euo pipefail
 
@@ -65,11 +65,11 @@ for MODEL_LABEL in "${MODEL_ORDER[@]}"; do
 
     banner "[$CURRENT/$TOTAL] $MODEL_LABEL"
 
-    # Determine if diffusion
+    # Determine backend type and write it into the YAML config
     if [[ "$MODEL_PATH" == *diffusiongemma* ]]; then
-        BACKEND_ARG="--diffusion"
+        BACKEND_TYPE="diffusion"
     else
-        BACKEND_ARG=""
+        BACKEND_TYPE="auto"
     fi
 
     # Write runtime config
@@ -87,7 +87,7 @@ model:
   dtype: "bfloat16"
   tensor_parallel_size: 1
   use_flash_attention: false
-  backend_type: "auto"
+  backend_type: "$BACKEND_TYPE"
   diffusion_steps: 128
   guidance_scale: 2.0
   noise_schedule: "linear"
@@ -119,10 +119,18 @@ YAMLEND
     export PYTHONWARNINGS="ignore::FutureWarning"
 
     set +e
-    $PYTHON_BIN -m benchmark \
-        --config "$CONFIG_FILE" \
-        --quick --translate-only --mps-safe \
-        2>&1 | tee "$MODEL_OUTDIR/benchmark.log"
+    if [[ "$BACKEND_TYPE" == "diffusion" ]]; then
+        $PYTHON_BIN -m benchmark \
+            --config "$CONFIG_FILE" \
+            --quick --translate-only --mps-safe \
+            --diffusion \
+            2>&1 | tee "$MODEL_OUTDIR/benchmark.log"
+    else
+        $PYTHON_BIN -m benchmark \
+            --config "$CONFIG_FILE" \
+            --quick --translate-only --mps-safe \
+            2>&1 | tee "$MODEL_OUTDIR/benchmark.log"
+    fi
     EXIT_CODE=$?
     set -e
 
@@ -136,12 +144,12 @@ YAMLEND
         MEAN_TPS=$($PYTHON_BIN -c "
 import json, sys
 try:
-    with open('$REPORT_JSON') as f:
+    with open(sys.argv[1]) as f:
         r = json.load(f)
     tps = r.get('metrics',{}).get('batch',{}).get('mean_tps', 'N/A')
     print(tps)
 except: print('N/A')
-" 2>/dev/null || echo "N/A")
+" "$REPORT_JSON" 2>/dev/null || echo "N/A")
     fi
 
     # Handle missing report (model may not have downloaded, etc.)
@@ -156,7 +164,18 @@ except: print('N/A')
     fi
 
     # Save result
-    echo "{\"model\":\"$MODEL_LABEL\",\"path\":\"$MODEL_PATH\",\"exit\":$EXIT_CODE,\"duration_s\":$RUN_DURATION,\"mean_tps\":\"$MEAN_TPS\"}" >> "$RESULTS_FILE"
+    # Build result entry safely with python json.dumps (avoids broken JSON from special chars)
+    $PYTHON_BIN -c "
+import json, sys
+json.dump({
+    'model': sys.argv[1],
+    'path': sys.argv[2],
+    'exit': int(sys.argv[3]),
+    'duration_s': int(sys.argv[4]),
+    'mean_tps': sys.argv[5]
+}, sys.stdout)
+sys.stdout.write('\n')
+" "$MODEL_LABEL" "$MODEL_PATH" "$EXIT_CODE" "$RUN_DURATION" "$MEAN_TPS" >> "$RESULTS_FILE"
 
     # Aggressively free memory between runs
     $PYTHON_BIN -c "

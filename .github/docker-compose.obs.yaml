@@ -25,23 +25,36 @@ services:
     restart: "no"
 
   prometheus:
-    image: prom/prometheus:v2.54.0
+    image: prom/prometheus:v2.54.0@sha256:2612666a0a39003a58b5e5ef02eb2e4c59f658c689aaa9743f6e9331506e9078
     volumes:
       - ./.github/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus_data:/prometheus
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
       - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=30d'
       - '--web.enable-lifecycle'
     ports:
       - "9090:9090"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
     restart: unless-stopped
 
   grafana:
-    image: grafana/grafana:11.2.0
+    image: grafana/grafana:11.2.0@sha256:a8dee6b60308b8a6d0989abe8f2f1a60b6e0cd6d249201df2dd74180e7be8c30
     environment:
-      - GF_SECURITY_ADMIN_USER=admin
-      - GF_SECURITY_ADMIN_PASSWORD=admin
+      # CRITICAL: Do not use hardcoded defaults for production.
+      # Set these via .env file (gitignored) or shell environment.
+      # Example .env contents:
+      #   GF_ADMIN_USER=myadmin
+      #   GF_ADMIN_PASSWORD=$(openssl rand -base64 32)
+      # If neither is set, Grafana will refuse to start (exit 1).
+      - GF_SECURITY_ADMIN_USER=${GF_ADMIN_USER:?err: GF_ADMIN_USER must be set via .env or environment}
+      - GF_SECURITY_ADMIN_PASSWORD=${GF_ADMIN_PASSWORD:?err: GF_ADMIN_PASSWORD must be set via .env or environment}
       - GF_INSTALL_PLUGINS=grafana-clock-panel
     volumes:
       - grafana_data:/var/lib/grafana
@@ -49,6 +62,12 @@ services:
       - ./.github/grafana/provisioning.yaml:/etc/grafana/provisioning/dashboards/default.yaml:ro
     ports:
       - "3000:3000"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
     restart: unless-stopped
     depends_on:
       - prometheus

@@ -28,6 +28,7 @@ jobs:
   lint:
     name: Lint & Format
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v2
@@ -44,6 +45,7 @@ jobs:
     name: Unit Tests (CPU)
     needs: [lint]
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     strategy:
       matrix:
         python-version: ["3.11", "3.12"]
@@ -76,6 +78,7 @@ jobs:
     name: Unit Tests (macOS CPU)
     needs: [lint]
     runs-on: macos-15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v2
@@ -103,6 +106,7 @@ jobs:
     needs: [test-cpu]
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
@@ -120,6 +124,9 @@ jobs:
           # For real perf regression, this would run on self-hosted GPU runners.
           python -m benchmark --config tests/fixtures/config_test.yaml --dry-run 2>&1 | tee perf_output.txt
       - name: Check for performance regression
+        # FIXME(robustness): This parses TPS from unstructured console output.
+        # Prefer parsing benchmark_report.json (written by --report-path) instead:
+        #   tps = json.load(open('benchmark_report.json'))['summary']['tokens_per_second']
         if: success()
         run: |
           python -c "
@@ -144,6 +151,7 @@ jobs:
     name: Docker Build (CUDA)
     needs: [test-cpu]
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - name: Set up Docker Buildx
@@ -163,6 +171,7 @@ jobs:
     name: Security Scan
     needs: [lint]
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - name: Run Trivy vulnerability scanner
@@ -206,6 +215,7 @@ jobs:
     needs: [lint, test-cpu, test-macos-cpu, docker-build, security, perf-check, e2e-test]
     if: always()
     runs-on: ubuntu-latest
+    timeout-minutes: 3
     steps:
       - name: Check results
         run: |

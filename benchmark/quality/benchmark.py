@@ -23,6 +23,7 @@ import logging
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 from typing import Optional
 import torch
 from transformers import PreTrainedTokenizerBase
@@ -57,6 +58,8 @@ class QualityResults:
     comet: dict = field(default_factory=dict)
     comet_kiwi: dict = field(default_factory=dict)
     bertscore: dict = field(default_factory=dict)
+    bleu: dict = field(default_factory=dict)
+    chrf: dict = field(default_factory=dict)
     num_references: int = 0
     num_translated: int = 0
     duration_seconds: float = 0.0
@@ -65,6 +68,7 @@ class QualityResults:
     def to_dict(self) -> dict:
         return {"comet": self.comet,
                  "comet_kiwi": self.comet_kiwi, "bertscore": self.bertscore,
+                 "bleu": self.bleu, "chrf": self.chrf,
                  "num_references": self.num_references,
                  "num_translated": self.num_translated,
                  "duration_seconds": round(self.duration_seconds, 1),
@@ -72,11 +76,54 @@ class QualityResults:
 
     @property
     def scores_meet_targets(self) -> bool:
-        # BERTScore (reference-free neural metric) is the primary quality gate.
-        # >= 0.55 indicates the translation preserves meaning acceptably.
-        # >= 0.70 is strong (competitive with commercial systems).
+        """Check all available quality metrics against configured targets.
+
+        Evaluates every metric that has been computed (non-None system_score)
+        against its minimum target from benchmark/config/constants.py:
+
+        * BLEU >= QUALITY_BLEU_TARGET
+        * chrF++ >= QUALITY_CHRF_TARGET
+        * COMET-22 >= QUALITY_COMET_TARGET
+        * COMET-Kiwi >= QUALITY_COMET_TARGET
+        * BERTScore >= QUALITY_BERTSORE_TARGET
+
+        Metrics that were not computed (system_score is None) are skipped
+        so partial runs do not falsely fail.
+        """
+        from benchmark.config.constants import (
+            QUALITY_BLEU_TARGET,
+            QUALITY_CHRF_TARGET,
+            QUALITY_COMET_TARGET,
+            QUALITY_BERTSORE_TARGET,
+        )
+
+        targets_ok: list[bool] = []
+
+        # BERTScore
         bs = self.bertscore.get("system_score", 0) or 0.0
-        return bs >= 0.55
+        targets_ok.append(float(bs) >= QUALITY_BERTSORE_TARGET)
+
+        # COMET-22 (reference-based, when available)
+        cm = self.comet.get("system_score")
+        if cm is not None and isinstance(cm, (int, float)):
+            targets_ok.append(float(cm) >= QUALITY_COMET_TARGET)
+
+        # COMET-Kiwi (reference-free, when available)
+        ck = self.comet_kiwi.get("system_score")
+        if ck is not None and isinstance(ck, (int, float)):
+            targets_ok.append(float(ck) >= QUALITY_COMET_TARGET)
+
+        # BLEU (n-gram overlap, when available)
+        bl = self.bleu.get("score") or self.bleu.get("bleu")
+        if bl is not None and isinstance(bl, (int, float)):
+            targets_ok.append(float(bl) >= QUALITY_BLEU_TARGET)
+
+        # chrF++ (character + word n-gram overlap, when available)
+        cf = self.chrf.get("score") or self.chrf.get("chrF")
+        if cf is not None and isinstance(cf, (int, float)):
+            targets_ok.append(float(cf) >= QUALITY_CHRF_TARGET)
+
+        return all(targets_ok) if targets_ok else False
 
 
 def _build_batch(
@@ -98,7 +145,8 @@ def _build_batch(
     # ── Encoder-decoder path: NLLB-style forced-language prompting ──
     try:
         mt = engine.model_type if engine is not None else None
-    except Exception:
+    except Exception as e:
+        logger.warning("Could not determine model_type from engine: %s", e)
         mt = None
     if mt in ("encoder_decoder", "encoder-decoder"):
         # Build simple "translate: source → target" prefixes.
@@ -122,28 +170,50 @@ def _build_batch(
 
     # ── Autoregressive path: chat-template wrapping ──
     if hasattr(tokenizer, 'chat_template') and tokenizer.chat_template is not None:
+        # Per-tokenizer strategy cache — detect once which template style works,
+        # then reuse it for all texts in the batch.  This avoids retrying a
+        # failing structured template on every single sentence.
+        _strategy_cache = getattr(_build_batch, '_strategy_cache', {})
+        cache_key = id(tokenizer)
+        if cache_key in _strategy_cache:
+            strategy = _strategy_cache[cache_key]
+        else:
+            strategy = _strategy_cache.setdefault(cache_key, None)
+
         prompted_sources: list[str] = []
         for text in sources:
             prompt = None
-            try:
-                # Try TranslateGemma-style structured content with lang codes.
-                msgs = [{
-                    "role": "user",
-                    "content": [{
-                        "type": "text",
-                        "source_lang_code": "en",
-                        "target_lang_code": "tr",
-                        "text": text,
-                    }],
-                }]
-                result = tokenizer.apply_chat_template(
-                    msgs, tokenize=False, add_generation_prompt=True,
-                )
-                prompt = result if isinstance(result, str) else "".join(result)
-            except Exception:
-                pass
 
-            if prompt is None:
+            if strategy is None:
+                # First text: probe which template style works.
+                try:
+                    # Try TranslateGemma-style structured content with lang codes.
+                    msgs = [{
+                        "role": "user",
+                        "content": [{
+                            "type": "text",
+                            "source_lang_code": "en",
+                            "target_lang_code": "tr",
+                            "text": text,
+                        }],
+                    }]
+                    result = tokenizer.apply_chat_template(
+                        msgs, tokenize=False, add_generation_prompt=True,
+                    )
+                    prompt = result if isinstance(result, str) else "".join(result)
+                    strategy = "structured"
+                    _strategy_cache[cache_key] = strategy
+                    logger.debug("Translation prompting: structured template succeeded")
+                except Exception as exc:
+                    logger.warning(
+                        "Translation prompting: structured template failed for "
+                        "tokenizer %s (%s) — falling back to plain text",
+                        type(tokenizer).__name__, exc, exc_info=True,
+                    )
+
+            if prompt is None and strategy in (None, "structured"):
+                # strategy is None → probing fallback from above
+                # strategy is "structured" → cached but failed *this* time; fall through
                 try:
                     # Fall back to plain-text prompt (works with SmolLM, LLaMA, etc.).
                     fallback_msgs = [{
@@ -155,8 +225,23 @@ def _build_batch(
                         fallback_msgs, tokenize=False, add_generation_prompt=True,
                     )
                     prompt = result if isinstance(result, str) else "".join(result)
-                except Exception:
-                    pass
+                    if strategy is None:
+                        strategy = "plain"
+                        _strategy_cache[cache_key] = strategy
+                        logger.debug(
+                            "Translation prompting: plain-text template succeeded "
+                            "(structured unavailable)"
+                        )
+                except Exception as exc:
+                    if strategy is None:
+                        strategy = "raw"
+                        _strategy_cache[cache_key] = strategy
+                        logger.warning(
+                            "Translation prompting: all chat templates failed for "
+                            "tokenizer %s (%s) — using raw EN→TR prefix. "
+                            "This may produce poor translations.",
+                            type(tokenizer).__name__, exc, exc_info=True,
+                        )
 
             if prompt is None:
                 # Last resort: no template wrapping.
@@ -187,21 +272,43 @@ def _compute_metrics_parallel(
     hypotheses: list[str],
     references: list[str],
     sources: list[str],
-) -> tuple[dict, dict, dict, dict]:
+) -> tuple[dict, dict, dict, dict, dict]:
+    from concurrent.futures import TimeoutError
+
+    timeout_per_metric = 600  # seconds — per-metric timeout
     with ThreadPoolExecutor(max_workers=MAX_METRIC_WORKERS) as pool:
-        # Neural quality metrics — reference-based (COMET-22) and
-        # reference-free (BERTScore, COMET-Kiwi).  N-gram metrics (BLEU, chrF++)
-        # are omitted because they penalise legitimate wording variations and
-        # fail to capture semantic quality for morphologically rich EN→TR.
+        # Neural quality metrics — reference-based (COMET-22, BERTScore) and
+        # reference-free (COMET-Kiwi).  Plus n-gram metrics (BLEU, chrF++)
+        # for completeness.
         future_comet = pool.submit(compute_comet, sources, hypotheses, references)
         from benchmark.quality.metrics_comet import compute_comet_kiwi
         from benchmark.quality.metrics_bertscore import compute_bertscore
         future_comet_kiwi = pool.submit(compute_comet_kiwi, sources, hypotheses)
-        future_bertscore = pool.submit(compute_bertscore, sources, hypotheses)
-        comet = future_comet.result()
-        comet_kiwi = future_comet_kiwi.result()
-        bertscore = future_bertscore.result()
-    return comet, comet_kiwi, bertscore
+        future_bertscore = pool.submit(compute_bertscore, references, hypotheses)
+        future_bleu = pool.submit(compute_bleu, hypotheses, [[r] for r in references])
+        future_chrf = pool.submit(compute_chrf, hypotheses, [[r] for r in references])
+
+        # Collect results with per-metric timeouts; return partial results
+        # when a metric times out rather than losing all metrics.
+        def _get_with_timeout(future, name):
+            try:
+                return future.result(timeout=timeout_per_metric)
+            except TimeoutError:
+                logger.warning("%s timed out after %ds — returning empty result",
+                               name, timeout_per_metric)
+                return {"system_score": None, "error": "timeout",
+                        "segments_scores": []}
+            except Exception as e:
+                logger.warning("%s failed: %s", name, e)
+                return {"system_score": None, "error": str(e),
+                        "segments_scores": []}
+
+        comet = _get_with_timeout(future_comet, "COMET-22")
+        comet_kiwi = _get_with_timeout(future_comet_kiwi, "COMET-Kiwi")
+        bertscore = _get_with_timeout(future_bertscore, "BERTScore")
+        bleu = _get_with_timeout(future_bleu, "BLEU")
+        chrf = _get_with_timeout(future_chrf, "chrF++")
+    return comet, comet_kiwi, bertscore, bleu, chrf
 
 
 class QualityBenchmark:
@@ -257,10 +364,6 @@ class QualityBenchmark:
         hypotheses: list[str] = [""] * n
         bs = DEFAULT_BATCH_SIZE
 
-        # Minimal PipelineBatch-compatible object for backend protocol.
-        class _MiniBatch:
-            pass
-
         for batch_idx in range(0, n, bs):
             end = min(batch_idx + bs, n)
             batch_sources = sources[batch_idx:end]
@@ -271,7 +374,7 @@ class QualityBenchmark:
 
             # ── v3.0: Use backend protocol instead of model.generate() ──
             if hasattr(engine, '_backend') and engine._backend is not None:
-                mini_batch = _MiniBatch()
+                mini_batch = SimpleNamespace()
                 mini_batch.input_ids = input_ids
                 mini_batch.attention_mask = attention_mask
                 mini_batch.raw_texts = batch_sources
@@ -288,6 +391,17 @@ class QualityBenchmark:
 
                 for i, gen in enumerate(result.generations):
                     hypotheses[batch_idx + i] = gen.translated_text
+                    # Truncation detection: if generated output length
+                    # equals max_new_tokens, the translation was likely cut off.
+                    gen_len = len(tokenizer.encode(gen.translated_text))
+                    if gen_len >= max_new:
+                        logger.warning(
+                            "Possible truncation: batch %d item %d generated %d tokens "
+                            "(limit=%d) — consider increasing QUALITY_MAX_NEW_TOKENS. "
+                            "Source: %.100s...",
+                            batch_idx // bs, i, gen_len, max_new,
+                            batch_sources[i],
+                        )
             else:
                 # Legacy fallback: direct model.generate().
                 try:
@@ -312,6 +426,16 @@ class QualityBenchmark:
                         hypotheses[batch_idx + i] = tokenizer.decode(
                             new_toks, skip_special_tokens=True,
                         ).strip()
+                        # Truncation detection: if the model generated exactly
+                        # max_new_tokens, the output was likely cut off.
+                        if len(new_toks) >= max_new:
+                            logger.warning(
+                                "Possible truncation: batch %d item %d generated %d new "
+                                "tokens (limit=%d) — consider increasing "
+                                "QUALITY_MAX_NEW_TOKENS. Source: %.100s...",
+                                batch_idx // bs, i, len(new_toks), max_new,
+                                batch_sources[i],
+                            )
                 except Exception as e:
                     logger.warning(
                         "model.generate() failed for batch %d: %s — skipping",
@@ -332,9 +456,9 @@ class QualityBenchmark:
         )
 
         # ── Parallel metrics ──
-        logger.info("Computing quality metrics in parallel (COMET | COMET-Kiwi | BERTScore)...")
+        logger.info("Computing quality metrics in parallel (COMET | COMET-Kiwi | BERTScore | BLEU | chrF++)...")
         metric_start = time.monotonic()
-        comet, comet_kiwi, bertscore = _compute_metrics_parallel(hypotheses, references, sources)
+        comet, comet_kiwi, bertscore, bleu, chrf = _compute_metrics_parallel(hypotheses, references, sources)
         metric_duration = time.monotonic() - metric_start
         logger.info("All metrics computed in %.1f s (parallel)", metric_duration)
 
@@ -345,6 +469,7 @@ class QualityBenchmark:
 
         results = QualityResults(
             comet=comet, comet_kiwi=comet_kiwi, bertscore=bertscore,
+            bleu=bleu, chrf=chrf,
             num_references=len(references),
             num_translated=len([h for h in hypotheses if h]),
             duration_seconds=duration,

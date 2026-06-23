@@ -120,7 +120,15 @@ class BackendDetector:
     @staticmethod
     def _auto_detect() -> DeviceInfo:
         cuda_ok = torch.cuda.is_available()
-        mps_ok = torch.backends.mps.is_available()
+
+        # torch.backends.mps.is_available() can segfault on some Linux
+        # configurations (PyTorch < 2.3 with ancient GPU drivers).  Wrap it
+        # so a crash is caught and treated as "MPS not available".
+        mps_ok = False
+        try:
+            mps_ok = torch.backends.mps.is_available()
+        except (RuntimeError, AttributeError, SystemError):
+            mps_ok = False
 
         if cuda_ok:
             logger.info("Auto-detected CUDA with %d GPUs", torch.cuda.device_count())

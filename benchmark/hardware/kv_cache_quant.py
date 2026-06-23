@@ -130,7 +130,12 @@ def quantize_kv_tensor(
         if config.bits == 8:
             x_q = x_q.to(torch.int8)
         else:
-            x_q = _pack_int4(x_q.to(torch.int8))
+            # Symmetric INT4 storage: map [-8, 7] → unsigned [0, 15] using
+            # two's complement offset (add 16 for negative values) BEFORE
+            # packing.  _pack_int4 expects unsigned values in [0, 15].
+            # Without this offset, negative int values cast to uint8 wrap
+            # around (e.g., -1 → 255), producing garbage nibbles.
+            x_q = _pack_int4((x_q + 8).to(torch.uint8))
         return x_q, scales.squeeze(-1), None
     else:
         # Asymmetric: scale = (max - min) / (2^bits - 1), zp = -min / scale
@@ -178,13 +183,10 @@ def dequantize_kv_tensor(
 
     if config.symmetric:
         if config.bits == 4:
-            # _unpack_int4 returns unsigned [0,15], but symmetric INT4 is
-            # two's complement: [0,7] stay, [8,15] -> [-8,-1].
-            x_q = torch.where(
-                x_q >= 8,
-                x_q.float() - 16.0,
-                x_q.float(),
-            )
+            # _unpack_int4 returns unsigned [0, 15].  Symmetric INT4 uses
+            # two's complement: [0, 7] → [ -8, -1], [8, 15] → [0, 7].
+            # Subtract 8 to center around zero.
+            x_q = x_q.float() - 8.0
         x_f = x_q.float() * scales.float().unsqueeze(-1)
     else:
         x_f = (x_q.float() - zero_points.float().unsqueeze(-1)) * scales.float().unsqueeze(-1)
@@ -234,6 +236,14 @@ class QuantizedKVCache:
 
     def update(self, layer_idx: int, key: torch.Tensor, value: torch.Tensor):
         """Quantize and store K/V for a layer."""
+        head_dim = key.shape[-1]
+        if head_dim % self.config.group_size != 0:
+            logger.warning(
+                "head_dim %d is not a multiple of group_size %d — "
+                "quantize_kv_tensor will pad on every call, adding allocation overhead. "
+                "Consider setting group_size to a divisor of head_dim.",
+                head_dim, self.config.group_size,
+            )
         k_q, k_scales, k_zp = quantize_kv_tensor(key, self.config)
         v_q, v_scales, v_zp = quantize_kv_tensor(value, self.config)
         self._quantized[layer_idx] = (

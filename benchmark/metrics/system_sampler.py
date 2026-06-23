@@ -42,7 +42,7 @@ class SystemSampler:
         self._prev_read = 0
         self._prev_write = 0
         self._prev_time = 0.0
-        self._buffer_lock = threading.Lock()
+        self._buffer_lock = threading.RLock()
         # psutil.cpu_percent(interval=None) returns 0.0 on the first call because it
         # needs a prior snapshot to compute the delta.  We prime it once in start().
         self._cpu_initialized = False
@@ -51,39 +51,62 @@ class SystemSampler:
         self._start_time = start_time
         ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         self._log_file = self.output_dir / f"system_metrics_{ts}.jsonl"
-        # Prime psutil's CPU measurement — the first cpu_percent(interval=None) call
-        # always returns 0.0; this dummy call seeds the internal counter.
-        psutil.cpu_percent(interval=None)
-        self._cpu_initialized = True
         # Prime disk I/O baseline so the first sample() call produces real deltas.
         disk = psutil.disk_io_counters()
         if disk is not None:
             self._prev_read = disk.read_bytes
             self._prev_write = disk.write_bytes
             self._prev_time = time.monotonic()
+        # CPU priming is deferred to the first sample() call so the measurement
+        # interval is exactly the sampling interval, not the variable gap between
+        # start() and the first sample() thread iteration.
         logger.info(f"System sampler -> {self._log_file}")
 
     def sample(self) -> Optional[SystemSample]:
         if self._start_time is None:
             return None
-        elapsed = time.monotonic() - self._start_time
-        now = datetime.now(timezone.utc)
-        timestamp = now.strftime("%Y-%m-%dT%H:%M:%S.") + f"{now.microsecond // 1000:03d}Z"
+        wall_now = time.monotonic()
+        elapsed = wall_now - self._start_time
+        utc_now = datetime.now(timezone.utc)
+        timestamp = utc_now.strftime("%Y-%m-%dT%H:%M:%S.") + f"{utc_now.microsecond // 1000:03d}Z"
+        # Prime the CPU measurement on the first sample call so the interval
+        # between samples matches the actual sampling period, not the variable
+        # gap between start() and the first thread iteration.
+        if not self._cpu_initialized:
+            psutil.cpu_percent(interval=None)
+            self._cpu_initialized = True
         cpu = psutil.cpu_percent(interval=None)
         mem = psutil.virtual_memory()
         swap = psutil.swap_memory()
         disk = psutil.disk_io_counters()
-        now = time.monotonic()
         r_mbps = w_mbps = 0.0
         if disk is not None and self._prev_time > 0:
-            dt = now - self._prev_time
+            dt = wall_now - self._prev_time
             if dt > 0:
-                r_mbps = ((disk.read_bytes - self._prev_read) / (1024*1024)) / dt
-                w_mbps = ((disk.write_bytes - self._prev_write) / (1024*1024)) / dt
+                # Guard against counter wrap: if the counter has wrapped
+                # (e.g. on 32-bit systems), treat the sample as 0 delta.
+                read_delta = disk.read_bytes - self._prev_read
+                if read_delta < 0:
+                    logger.warning(
+                        "Disk read counter appears to have wrapped "
+                        "(prev=%d, cur=%d, delta=%d). Treating as 0.",
+                        self._prev_read, disk.read_bytes, read_delta,
+                    )
+                    read_delta = 0
+                write_delta = disk.write_bytes - self._prev_write
+                if write_delta < 0:
+                    logger.warning(
+                        "Disk write counter appears to have wrapped "
+                        "(prev=%d, cur=%d, delta=%d). Treating as 0.",
+                        self._prev_write, disk.write_bytes, write_delta,
+                    )
+                    write_delta = 0
+                r_mbps = (read_delta / (1024*1024)) / dt
+                w_mbps = (write_delta / (1024*1024)) / dt
         if disk is not None:
             self._prev_read = disk.read_bytes
             self._prev_write = disk.write_bytes
-        self._prev_time = now
+        self._prev_time = wall_now
         s = SystemSample(timestamp=timestamp, elapsed_s=round(elapsed, 3), cpu_util_pct=round(cpu, 1),
                         ram_used_mib=int(mem.used/(1024*1024)), ram_total_mib=int(mem.total/(1024*1024)),
                         disk_read_mbps=round(r_mbps, 2), disk_write_mbps=round(w_mbps, 2),
@@ -91,20 +114,17 @@ class SystemSampler:
         with self._buffer_lock:
             self._buffer.append(s.to_json())
             self.sample_count += 1
-        if len(self._buffer) >= self._flush_interval:
-            self.flush()
+            if len(self._buffer) >= self._flush_interval:
+                self._flush_locked()
         return s
 
     def flush(self) -> None:
+        """Public flush — acquires the buffer lock."""
         if not self._buffer or not self._log_file:
             return
         try:
             with self._buffer_lock:
-                if not self._buffer:
-                    return
-                with open(self._log_file, "a") as f:
-                    f.write("\n".join(self._buffer) + "\n")
-                self._buffer.clear()
+                self._flush_locked()
         except (PermissionError, FileNotFoundError, OSError) as e:
             logger.error(f"Flush failed — keeping buffer for next retry ({len(self._buffer)} entries): {e}")
             # Prevent unbounded buffer growth on persistent flush failures.
@@ -117,3 +137,11 @@ class SystemSampler:
                     f"Buffer exceeded MAX_METRICS_BUFFER_SIZE ({MAX_METRICS_BUFFER_SIZE}); "
                     f"dropped oldest {len(dropped)} system samples to prevent OOM"
                 )
+
+    def _flush_locked(self) -> None:
+        """Flush the buffer to disk.  Caller must hold ``self._buffer_lock``."""
+        if not self._buffer or not self._log_file:
+            return
+        with open(self._log_file, "a") as f:
+            f.write("\n".join(self._buffer) + "\n")
+        self._buffer.clear()

@@ -1,7 +1,7 @@
 """Entrypoint — python -m benchmark.
 
-Full CLI reference (v3.6)
--------------------------
+Full CLI reference
+-----------------
   python -m benchmark --config config.yaml            Full run
   python -m benchmark --config config.yaml --dry-run  10-batch smoke test
   python -m benchmark --config config.yaml --quick    5-minute evaluation
@@ -17,6 +17,8 @@ import argparse
 import sys
 import warnings
 import os as _os
+
+from benchmark.utils.version import VERSION
 
 # ── Suppress expected third-party warnings ─────────────────────────────
 warnings.filterwarnings("ignore", message=".*pynvml.*deprecated.*",
@@ -34,7 +36,7 @@ from benchmark.orchestration.harness import BenchmarkHarness
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Turkish Corpus Translation Benchmark Harness v3.6",
+        description=f"Turkish Corpus Translation Benchmark Harness v{VERSION}",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -132,6 +134,8 @@ Examples:
     )
     if _needs_inject:
         import yaml
+        if not _os.path.isfile(args.config):
+            sys.exit(f"Config file not found: {args.config}")
         with open(args.config, "r") as _f:
             _cfg = yaml.safe_load(_f) or {}
         _model = _cfg.setdefault("model", {})

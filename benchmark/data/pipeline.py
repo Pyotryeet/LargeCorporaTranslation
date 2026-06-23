@@ -9,7 +9,6 @@ import logging
 import os
 import queue
 import threading
-import time
 from dataclasses import dataclass
 from typing import Optional
 import torch
@@ -75,12 +74,29 @@ class PinnedBufferPool:
         # On CPU/MPS, just use regular tensors.
         self._should_pin = torch.cuda.is_available()
 
-    def acquire(self) -> tuple[torch.Tensor, torch.Tensor]:
-        """Get a pre-allocated (input_ids, attention_mask) pair or create one."""
+    def acquire(self, timeout: Optional[float] = None) -> tuple[torch.Tensor, torch.Tensor]:
+        """Get a pre-allocated (input_ids, attention_mask) pair or create one.
+
+        Parameters
+        ----------
+        timeout : float, optional
+            Maximum seconds to wait for a free buffer before creating a new
+            one.  When None (default), creates immediately if the pool is
+            empty (no blocking).  A positive value causes the caller to
+            block until a buffer is released or the timeout expires.
+            Implementation note: the current non-blocking pool never waits;
+            the timeout parameter is accepted for API compatibility and
+            logged if the pool is exhausted.
+        """
         if self._free:
             self._hits += 1
             return self._free.pop()
         self._misses += 1
+        if timeout is not None and timeout > 0:
+            logger.debug(
+                "PinnedBufferPool.acquire timeout=%.1fs — pool exhausted (%d misses)",
+                timeout, self._misses,
+            )
         ids = torch.empty(
             self.max_batch_size, self.max_seq_len,
             dtype=torch.long, pin_memory=self._should_pin,
@@ -92,13 +108,17 @@ class PinnedBufferPool:
         return ids, mask
 
     def release(self, ids: torch.Tensor, mask: torch.Tensor) -> None:
-        """Return a pair to the pool for reuse.
+        """Return a pair to the pool for reuse when no inflight slices remain.
 
-        NOTE: This method is currently unused in the hot path because each
-        batch slice is a view into the pre-allocated buffer — releasing
-        mid-flight would corrupt inflight batches.  Callers that take
-        ownership of the full buffer tensor (not a slice) should call this
-        to avoid leaking pinned memory.
+        Each batch slice is a view into the pre-allocated pinned buffer.
+        Releasing a buffer while any view (inflight batch) still references
+        it would corrupt that batch.  Callers must guarantee that all
+        inflight batches that use slices of this buffer have been consumed
+        before calling release().  This method zeroes the tensors to prevent
+        accidental data leakage between batches.
+
+        The pool is bounded (pool_size), so excess releases beyond capacity
+        are silently discarded rather than growing the pool unboundedly.
         """
         if len(self._free) < self.pool_size:
             ids.zero_()
@@ -120,7 +140,9 @@ class AsyncPipeline:
     for DMA-accelerated host→device transfers.
     """
 
-    _SENTINEL = ("__SENTINEL__", None, -1)
+    # Module-level sentinel for object-identity checks (avoids magic-string bugs
+    # where data that happens to equal "__SENTINEL__" would drain pipelines).
+    _SENTINEL = object()
 
     def __init__(self, loader: JSONLLoader, chunker, tokenizer: PreTrainedTokenizerBase,
                  text_filter: ChunkFilter, batch_size: int = 8, prefetch_workers: int = 4,
@@ -298,6 +320,24 @@ class AsyncPipeline:
 
         if not texts:
             return None
+
+        # Guard: if a sentinel leaked through into the tokenised queue,
+        # we would have a mix of real tuples and the sentinel object.
+        # Filter out any sentinel objects and log if this happened.
+        if any(item is self._SENTINEL for item in texts):
+            logger.warning(
+                "next_batch: sentinel object leaked into tokenised queue "
+                "(%d items, %d sentinels) — discarding sentinels",
+                len(texts), sum(1 for t in texts if t is self._SENTINEL),
+            )
+            filtered = [(t, tl, l) for t, tl, l in zip(texts, token_lists, lengths)
+                        if t is not self._SENTINEL]
+            if not filtered:
+                return None
+            texts, token_lists, lengths = zip(*filtered)
+            texts, token_lists, lengths = list(texts), list(token_lists), list(lengths)
+            if not texts:
+                return None
 
         max_len = max(len(t) for t in token_lists)
         pad_id = self.tokenizer.pad_token_id or 0
@@ -480,6 +520,13 @@ class AsyncPipeline:
             # Fallback: plain text with translation prefix.
             # Works for SmolLM2, LLaMA 3, and other models without
             # Gemma-specific chat template fields.
+            logger.warning(
+                "_build_translation_prompt: chat template failed for model '%s' "
+                "— falling back to plain text prefix. Translation quality may "
+                "degrade significantly; ensure the tokenizer is configured "
+                "with a proper chat template.",
+                getattr(tokenizer, 'name_or_path', 'unknown'),
+            )
             return f"Translate English to Turkish:\n{text}"
 
     def _tokeniser_loop(self) -> None:
@@ -494,13 +541,14 @@ class AsyncPipeline:
                     break
                 continue
 
-            file_name, text, doc_id = item
-            if file_name == "__SENTINEL__":
+            if item is self._SENTINEL:
                 # Sentinel received — exit immediately.
                 # notify_done() broadcasts one sentinel per worker so no
                 # re-broadcast is needed (avoids the race where a re-put
                 # times out and leaves remaining workers alive).
                 break
+
+            file_name, text, doc_id = item
 
             try:
                 # Wrap with translation prompt so the model knows it is an

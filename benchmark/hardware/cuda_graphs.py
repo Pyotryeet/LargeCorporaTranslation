@@ -1,5 +1,15 @@
 """CUDA Graph capture and replay for the decode loop (C1-CUDA).
 
+.. warning::
+   **DEPRECATED MODULE (2026-06-23).**  The CUDA graph infrastructure in this
+   module is captured but **never replayed** on the hot path.  The decode loop
+   (``AutoregressiveBackend._extreme_decode``) intentionally uses the standard
+   model forward pass because the graphs do not support accumulated KV-cache
+   inputs.  This module is retained for reference and future use once static
+   KV-cache buffers are implemented.  Do NOT add new callers — any code that
+   instantiates ``CUDAGraphDecoder`` or ``CUDAGraphPool`` will pay the capture
+   cost without ever benefiting from the graph.
+
 Eliminates per-token kernel launch overhead by capturing the entire
 single-step decode forward pass as a CUDA graph.  Once captured, each
 decode iteration becomes a single ``graph.replay()`` call instead of
@@ -16,12 +26,48 @@ Reference:
 from __future__ import annotations
 
 import logging
+import warnings
 from typing import Any, Dict, List, Optional
 
 import torch
 import torch.nn as nn
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Deprecation guard — emit once per process
+# ---------------------------------------------------------------------------
+
+_DEPRECATION_WARNED = False
+
+
+def _warn_deprecated() -> None:
+    global _DEPRECATION_WARNED
+    if not _DEPRECATION_WARNED:
+        _DEPRECATION_WARNED = True
+        warnings.warn(
+            "benchmark.hardware.cuda_graphs is DEPRECATED.  The CUDA graph "
+            "infrastructure is captured but NEVER replayed on the hot path "
+            "(see AutoregressiveBackend._extreme_decode).  Instantiating "
+            "CUDAGraphDecoder or CUDAGraphPool incurs the capture cost "
+            "without any benefit.  This module will be removed in a future "
+            "version once static KV-cache buffers are implemented.",
+            FutureWarning,  # FutureWarning is displayed by default (unlike DeprecationWarning)
+            stacklevel=2,
+        )
+
+
+# Emit deprecation warning on import so that importers see it even if they
+# never instantiate a class (e.g. static inspection, linting, autodoc).
+_DEPRECATION_IMPORT_WARNED = False
+if not _DEPRECATION_IMPORT_WARNED:
+    _DEPRECATION_IMPORT_WARNED = True
+    warnings.warn(
+        "Importing benchmark.hardware.cuda_graphs is DEPRECATED.  "
+        "This module will be removed once static KV-cache buffers are implemented.",
+        FutureWarning,
+        stacklevel=2,
+    )
 
 # ---------------------------------------------------------------------------
 # Module-level constants (used as constructor defaults and warm-up params)
@@ -84,6 +130,7 @@ class CUDAGraphDecoder:
         head_dim: int = DEFAULT_HEAD_DIM,
         dtype: torch.dtype = torch.bfloat16,
     ) -> None:
+        _warn_deprecated()
         if not torch.cuda.is_available():
             raise RuntimeError("CUDAGraphDecoder requires CUDA")
 
@@ -273,6 +320,9 @@ class CUDAGraphPool:
     vLLM-style: captures a graph for each supported batch size (powers of 2
     plus configurable intermediate sizes) so the decode loop can pick the
     closest one and pad to it.  This avoids paying capture cost mid-run.
+
+    .. warning::
+       **DEPRECATED.**  This pool is never used on the hot path.
     """
 
     def __init__(
@@ -282,6 +332,7 @@ class CUDAGraphPool:
         max_seq_len: int = 2048,
         **kwargs: Any,
     ) -> None:
+        _warn_deprecated()
         self.model: nn.Module = model
         self.max_seq_len: int = max_seq_len
         self.kwargs: Dict[str, Any] = kwargs

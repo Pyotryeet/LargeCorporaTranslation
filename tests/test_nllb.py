@@ -1,5 +1,6 @@
 """Tests for NLLB encoder-decoder backend — loading, translation, pipeline."""
 
+import gc
 import sys
 import types
 from pathlib import Path
@@ -85,7 +86,12 @@ class TestNLLBBackendE2E:
 
     @pytest.fixture(scope="class")
     def backend(self):
-        """Load NLLB 600M distilled on CPU."""
+        """Load NLLB 600M distilled on CPU.
+
+        Teardown: explicit del + gc.collect() to release the 600M model memory.
+        Without this, the model stays resident in memory until the test process
+        exits, consuming ~2.4 GB of RAM for the duration of the test suite.
+        """
         from benchmark.hardware.backend import DeviceInfo
         from benchmark.inference.backends.protocol import BackendConfig
         from benchmark.inference.backends.nllb import NLLBBackend
@@ -109,7 +115,18 @@ class TestNLLBBackendE2E:
         )
         be = NLLBBackend(config)
         be.load()
-        return be
+        yield be
+        # ── Teardown: force-unload the 600M model ──
+        if hasattr(be, 'model') and be.model is not None:
+            be.model.cpu()
+            del be.model
+        if hasattr(be, 'tokenizer') and be.tokenizer is not None:
+            del be.tokenizer
+        del be
+        gc.collect()
+        # On CUDA, also clear the cache.
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
     def test_load_sets_attributes(self, backend):
         """After load(), key attributes are populated."""

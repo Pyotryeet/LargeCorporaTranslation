@@ -16,6 +16,24 @@ class BatchAssembler:
         self.max_batch_size = max_batch_size
 
     def collate(self, items: list[tuple[str, list[int], int]]) -> tuple[Any, Any, list[int], list[str]]:
+        """Collate a list of (text, token_ids, length) tuples into batch tensors.
+
+        Returns (input_ids, attention_mask, lengths, texts).
+
+        Raises
+        ------
+        ValueError
+            If ``items`` is empty — an empty batch cannot be collated into
+            valid model input tensors and indicates a pipeline bug upstream.
+        """
+        if not items:
+            raise ValueError(
+                "BatchAssembler.collate() received an empty items list.  "
+                "An empty batch cannot be collated into valid model input "
+                "tensors.  Check the pipeline for a bug that produces "
+                "zero-element batches."
+            )
+
         texts = [i[0] for i in items]
         token_lists = [i[1] for i in items]
         lengths = [i[2] for i in items]

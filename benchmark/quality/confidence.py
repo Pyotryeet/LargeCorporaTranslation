@@ -80,11 +80,18 @@ class ConfidenceEstimator:
         token_threshold: float = 0.1,  # individual token prob below this → flagged
         length_alpha: float = 0.6,    # BLEU-style length penalty exponent
         min_tokens: int = 3,
+        seed: int | None = None,        # seed for reproducible pseudo-random draws;
+                                        # set to None for non-deterministic sampling.
+                                        # NOTE: Currently not consumed by any method
+                                        # in this class.  External callers that need
+                                        # reproducibility should set torch.manual_seed()
+                                        # and numpy.random.seed() directly.
     ):
         self.threshold = threshold
         self.token_threshold = token_threshold
         self.length_alpha = length_alpha
         self.min_tokens = min_tokens
+        self.seed = seed
 
     def evaluate(
         self,
@@ -143,7 +150,7 @@ class ConfidenceEstimator:
 
         # Sequence confidence: exp(mean(log_prob) / length_penalty).
         seq_confidence = math.exp(mean_lp / max(lp_val, CONFIDENCE_LP_FLOOR))
-        seq_confidence = min(seq_confidence, CONFIDENCE_CLAMP_MAX)  # clamp confidence ceiling to [0, 1]
+        seq_confidence = min(seq_confidence, CONFIDENCE_CLAMP_MAX)  # clamp confidence ceiling to (0.0, 1.0]
 
         return SequenceConfidence(
             tokens=tokens,
@@ -171,6 +178,15 @@ class ConfidenceEstimator:
 
         log_probs_raw = torch.nn.functional.log_softmax(logits, dim=-1)
         token_ids_flat = token_ids.squeeze()
+
+        # Warn when logits sequence length differs from token_ids length —
+        # this usually indicates a generation vs. logits misalignment.
+        if log_probs_raw.shape[0] != len(token_ids_flat):
+            logger.warning(
+                "evaluate_from_logits: logits seq_len=%d != token_ids len=%d — "
+                "truncating to min length",
+                log_probs_raw.shape[0], len(token_ids_flat),
+            )
 
         # Extract log_prob for the chosen token at each position.
         log_probs = []

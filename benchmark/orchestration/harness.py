@@ -22,6 +22,7 @@ v2.0: Passes backend info to AsyncPipeline for pinned memory decisions.
 """
 
 import logging
+import gc
 import hashlib
 import json
 import os
@@ -30,6 +31,13 @@ from pathlib import Path
 from typing import Literal, Optional, TYPE_CHECKING
 
 import torch
+
+try:
+    import psutil as _psutil
+    HAS_PSUTIL = True
+except ImportError:
+    _psutil = None  # type: ignore[assignment]
+    HAS_PSUTIL = False
 
 from benchmark.config.schema import BenchmarkConfig
 from benchmark.hardware.backend import detect_backend, DeviceInfo
@@ -61,6 +69,17 @@ logger = logging.getLogger(__name__)
 
 class BenchmarkHarness:
     """Top-level orchestrator — one instance per run."""
+
+    # Prometheus metrics exporter port.  Configurable via the
+    # ``PROMETHEUS_PORT`` environment variable or the
+    # ``benchmark.runtime.prometheus_port`` config field.
+    # Falls back to 9090 when neither is set.
+    @staticmethod
+    def _resolve_prometheus_port(config) -> int:
+        port = os.environ.get("PROMETHEUS_PORT")
+        if port is not None:
+            return int(port)
+        return getattr(config.runtime, "prometheus_port", 9090) or 9090
 
     def __init__(
         self,
@@ -104,6 +123,7 @@ class BenchmarkHarness:
         self.checkpoint_mgr: CheckpointManager | None = None
         self.signal_handler: SignalHandler | None = None
         self._prometheus: Optional['PrometheusExporter'] = None  # type: ignore[valid-type]
+        self._cached_config_hash: str = ""
         self._setup()
 
     # ── Setup ────────────────────────────────────────────────────────────
@@ -217,7 +237,6 @@ class BenchmarkHarness:
         # CPU-side memory may be held by freed-but-not-reclaimed arenas
         # (CPython's pymalloc, PyTorch's caching allocator).  An explicit
         # GC pass lets the various allocators release whatever they can.
-        import gc
         gc.collect()
         if device_info.backend == "mps" and hasattr(torch.mps, "empty_cache"):
             torch.mps.empty_cache()
@@ -294,29 +313,60 @@ class BenchmarkHarness:
         return self._run_translation_loop(batch_size, env_snapshot, device_info)
 
     # ── Translation loop ─────────────────────────────────────────────────
+    def _resolve_duration(self) -> int:
+        """Determine target duration in seconds from run mode and overrides."""
+        if self.duration_override is not None and self.duration_override > 0:
+            return self.duration_override
+        if self.duration_override is not None:
+            logger.warning("duration_override=0 is invalid; using config default")
+        if self.run_mode == "dry-run":
+            return 60
+        if self.run_mode == "quick":
+            return 300
+        return self.config.runtime.target_duration_seconds
+
     def _run_translation_loop(
         self, batch_size: int, env_snapshot: dict, device_info: DeviceInfo,
     ) -> dict:
-        """Core translation loop — shared by full, quick, dry-run, translate-only."""
-
-        # Determine duration
-        if self.duration_override is not None and self.duration_override > 0:
-            target_duration = self.duration_override
-        elif self.duration_override is not None:
-            # duration_override is 0 — use config default with warning
-            logger.warning("duration_override=0 is invalid; using config default")
-            target_duration = self.config.runtime.target_duration_seconds
-        elif self.run_mode == "dry-run":
-            target_duration = 60
-        elif self.run_mode == "quick":
-            target_duration = 300
-        else:
-            target_duration = self.config.runtime.target_duration_seconds
-
-        # Warm-up
+        """Translation loop — full, quick, dry-run, translate-only."""
+        target_duration = self._resolve_duration()
         self.engine.warmup(batches=10 if self.run_mode == "dry-run" else 20)
+        return self._run_translation_core(
+            batch_size=batch_size,
+            target_duration=target_duration,
+            env_snapshot=env_snapshot,
+            device_info=device_info,
+            batches_completed=0,
+            total_tokens=0,
+            resume_path=None,
+            resume_base_batches=0,
+        )
 
-        # Data pipeline — passes backend for pinned memory decisions (P0-04)
+    # ── Continuous batching (CUDA, PagedAttention, batch_size >= 8) ──────────
+
+    def _run_translation_core(
+        self,
+        batch_size: int,
+        target_duration: int,
+        env_snapshot: dict,
+        device_info: DeviceInfo,
+        batches_completed: int,
+        total_tokens: int,
+        *,
+        resume_path: Path | None = None,
+        resume_base_batches: int = 0,
+        loader_seek_doc_id: int = 0,
+        extra_runtime_fields: dict | None = None,
+    ) -> dict:
+        """Shared translation core — used by both new runs and resume.
+
+        All the heavy translation-loop logic lives here.  ``_run_translation_loop``
+        and ``_run_resume`` are thin wrappers that compute the initial state
+        and then delegate to this method.
+        """
+        resume_tag = " (resumed)" if resume_path else ""
+
+        # Data pipeline — passes backend for pinned memory decisions (P0-04).
         # On MPS, in-memory shuffle loads 100K docs → 320 MB Python strings
         # that fragment the heap and aren't reclaimed to the OS.  Sequential
         # iteration is memory-safe.
@@ -332,6 +382,9 @@ class BenchmarkHarness:
             max_shuffle_memory_gb=self.config.data.shuffle_max_memory_gb,
             shuffle_temp_dir=self.config.data.shuffle_temp_dir,
         )
+        if loader_seek_doc_id > 0:
+            loader.seek_to(loader_seek_doc_id)
+
         chunker = TextChunker(
             self.engine.tokenizer,
             self.config.model.max_input_tokens,
@@ -348,52 +401,25 @@ class BenchmarkHarness:
             backend=device_info.backend,  # ← v2.0: pinned memory on CUDA
         )
 
-        # Metrics
-        self.metrics = MetricsCollector(
-            self.run_dir / "metrics",
-            device_info,
-            self.config.runtime.metrics_sample_rate_hz,
-        )
-
-        # Start Prometheus metrics server if observability is enabled.
-        if self.observability_enabled or self.config.runtime.observability_enabled:
-            from benchmark.observability.prometheus_metrics import PrometheusExporter
-            self._prometheus = PrometheusExporter(port=9090)
-            self._prometheus.start()
-            self.metrics.set_prometheus_exporter(self._prometheus)
-
-        self.checkpoint_mgr = CheckpointManager(
-            self.run_dir,
-            self.config.runtime.checkpoint_interval_seconds,
-        )
-        self.signal_handler = SignalHandler()
-
-        # Register cleanup: pipeline + metrics get flushed on signal.
-        register_cleanup("pipeline_stop", self.pipeline.stop_prefetch)
-        register_cleanup("metrics_stop", self.metrics.stop)
-        register_cleanup("metrics_flush", lambda: (
-            self.metrics.device_sampler.flush(),
-            self.metrics.system_sampler.flush(),
-            self.metrics.batch_logger.flush(),
-        ))
+        self._init_translation_infra(device_info)
 
         logger.info(
-            "Starting translation run: %ds, batch_size=%d, mode=%s",
-            target_duration, batch_size, self.run_mode,
+            "Starting translation run: %ds, batch_size=%d, mode=%s%s",
+            target_duration, batch_size, self.run_mode, resume_tag,
         )
 
         # ── MPS: trim Metal driver pools before data pipeline starts ───
         if device_info.backend == "mps" and hasattr(torch.mps, "empty_cache"):
             torch.mps.empty_cache()
-            import psutil as _ps, gc as _gc
-            _gc.collect()
-            _proc = _ps.Process()
-            _rss = _proc.memory_info().rss / (1024**3)
-            _drv = torch.mps.driver_allocated_memory() / (1024**3)
-            logger.info(
-                "Pre-shuffle memory: RSS %.1f GB  driver %.1f GB",
-                _rss, _drv,
-            )
+            gc.collect()
+            if HAS_PSUTIL:
+                _proc = _psutil.Process()
+                _rss = _proc.memory_info().rss / (1024**3)
+                _drv = torch.mps.driver_allocated_memory() / (1024**3)
+                logger.info(
+                    "Pre-shuffle memory: RSS %.1f GB  driver %.1f GB",
+                    _rss, _drv,
+                )
 
         self.pipeline.start_prefetch()
         timer = PrecisionTimer()
@@ -402,8 +428,6 @@ class BenchmarkHarness:
 
         last_checkpoint = timer.elapsed()
         last_heartbeat = timer.elapsed()
-        batches_completed = 0
-        total_tokens = 0
         killed_by_signal = False
         oom_aborted = False
 
@@ -437,10 +461,6 @@ class BenchmarkHarness:
                     continue
 
                 # P0-06: Re-check signal before expensive model.generate() call.
-                # The outer while-loop check is only evaluated between batches,
-                # so a Ctrl+C that arrives right after next_batch() returns would
-                # not be seen until translate() finishes (up to ~30 s).  This
-                # second check shortens worst-case shutdown latency to near-zero.
                 if self.signal_handler.killed.is_set():
                     logger.error(
                         "Killed by signal %d — stopping immediately (pre-translate check). "
@@ -487,30 +507,39 @@ class BenchmarkHarness:
                     )
                     oom_aborted = self._handle_oom(
                         batch, loader, timer, batches_completed, total_tokens,
-                        batch_size, oom_aborted,
+                        batch_size,
                     )
                     if oom_aborted:
                         break
                     batch_size = self.engine._configured_batch_size
-                except (RuntimeError, MemoryError) as exc:
-                    # MPS reports OOM as RuntimeError with specific messages;
-                    # CPU OOM surfaces as MemoryError.  Handle identically to
-                    # CUDA OOM — checkpoint, halve batch size, re-warm.
-                    msg = str(exc)
+                except MemoryError as exc:
+                    logger.error(
+                        "CPU OOM at batch %d (batch_size=%d): %s",
+                        batches_completed, batch_size, exc,
+                    )
+                    oom_aborted = self._handle_oom(
+                        batch, loader, timer, batches_completed,
+                        total_tokens, batch_size,
+                    )
+                    if oom_aborted:
+                        break
+                    batch_size = self.engine._configured_batch_size
+                except RuntimeError as exc:
+                    msg = str(exc).casefold()
                     is_mps_oom = any(
-                        kw in msg for kw in (
-                            "MPS", "mps", "Placeholder storage",
+                        kw.casefold() in msg for kw in (
+                            "MPS", "Placeholder storage",
                             "not enough memory", "out of memory",
                         )
                     )
-                    if is_mps_oom or isinstance(exc, MemoryError):
+                    if is_mps_oom:
                         logger.error(
-                            "MPS/CPU OOM at batch %d (batch_size=%d): %s",
-                            batches_completed, batch_size, msg[:200],
+                            "MPS OOM at batch %d (batch_size=%d): %s",
+                            batches_completed, batch_size, str(exc)[:200],
                         )
                         oom_aborted = self._handle_oom(
                             batch, loader, timer, batches_completed,
-                            total_tokens, batch_size, oom_aborted,
+                            total_tokens, batch_size,
                         )
                         if oom_aborted:
                             break
@@ -522,12 +551,11 @@ class BenchmarkHarness:
                 if now - last_heartbeat >= self.config.runtime.heartbeat_interval_seconds:
                     tps = self.metrics.get_rolling_throughput()
                     logger.info(
-                        "[%4.0fs] batches=%d tokens=%s tps=%.0f node=%s",
+                        "[%4.0fs] batches=%d tokens=%s tps=%.0f%s node=%s",
                         now, batches_completed, format(total_tokens, ','), tps,
-                        device_info.name,
+                        resume_tag, device_info.name,
                     )
                     last_heartbeat = now
-                    # Push pipeline-level metrics to Prometheus.
                     if self._prometheus is not None:
                         qd = self.pipeline.queue_depth()
                         self._prometheus.record_pipeline(queue_depth=qd)
@@ -553,21 +581,25 @@ class BenchmarkHarness:
                 final=True,
             )
             run_duration = timer.elapsed()
+            new_batches = batches_completed - resume_base_batches
             if killed_by_signal:
                 logger.error(
-                    "Run aborted by signal %d: %d batches, %s tokens in %.1fs",
+                    "Run aborted by signal %d: %d batches (%d new), %s tokens in %.1fs",
                     self.signal_handler.signal_number or 0,
-                    batches_completed, format(total_tokens, ','), run_duration,
+                    batches_completed, new_batches,
+                    format(total_tokens, ','), run_duration,
                 )
             elif oom_aborted:
                 logger.info(
-                    "Run complete: %d batches, %s tokens in %.1fs (aborted: OOM recovery exhausted)",
-                    batches_completed, format(total_tokens, ','), run_duration,
+                    "Run complete: %d batches (%d new), %s tokens in %.1fs (OOM recovery exhausted)",
+                    batches_completed, new_batches,
+                    format(total_tokens, ','), run_duration,
                 )
             else:
                 logger.info(
-                    "Run complete: %d batches, %s tokens in %.1fs",
-                    batches_completed, format(total_tokens, ','), run_duration,
+                    "Run complete: %d batches (%d new), %s tokens in %.1fs",
+                    batches_completed, new_batches,
+                    format(total_tokens, ','), run_duration,
                 )
 
         # ── Quality benchmark (skip for translate-only, skip if killed, skip if OOM-aborted) ──
@@ -577,14 +609,11 @@ class BenchmarkHarness:
             if ref_path.exists():
                 logger.info("Running quality benchmark...")
                 quality_bench = QualityBenchmark(self.config.data.reference_set_path)
-                # Dry-run is a 60s smoke test — limit quality to 32 references
-                # to avoid spending 2+ hours on 1960 reference sentences.
                 max_q_refs = 32 if self.run_mode == "dry-run" else None
                 quality_results = quality_bench.run(self.engine, max_references=max_q_refs)
                 if quality_results is not None and self._prometheus is not None:
                     self._prometheus.record_quality(
-                        bleu=None,  # BLEU not computed (omitted from parallel metric computation)
-                        chrf=None,  # chrF++ not computed (omitted)
+                        bleu=None, chrf=None,
                         comet=quality_results.comet.get('system_score'),
                         bertscore=quality_results.bertscore.get('system_score'),
                         comet_kiwi=quality_results.comet_kiwi.get('system_score'),
@@ -604,40 +633,38 @@ class BenchmarkHarness:
         mean_tps = metrics_summary.get("batch", {}).get("mean_tps", 0)
         std_tps = metrics_summary.get("batch", {}).get("std_tps", 0)
         n_batches = metrics_summary.get("batch", {}).get("total_batches", 1)
-        # Parametric CI (SEM-based) — always computed.
-        extrapolation = extrapolator.compute(mean_tps, std_tps, device_info.num_devices,
-                                             n_batches=n_batches)
-        # Bootstrap CI (resampling-based) — computed when per-batch TPS
-        # data is available.  More robust than parametric for skewed
-        # distributions and small samples.  The bootstrap fields are
-        # merged into the extrapolation dict alongside the parametric CI.
+        median_tps = metrics_summary.get("batch", {}).get("median_tps")
+        extrapolation = extrapolator.compute(
+            mean_tps, std_tps, device_info.num_devices,
+            n_batches=n_batches, median_tps=median_tps,
+        )
         tps_samples = metrics_summary.get("batch", {}).get("tps_values")
         if tps_samples and len(tps_samples) >= 5:
             try:
                 bootstrap = extrapolator.compute_bootstrap(
                     tps_samples, num_gpus=device_info.num_devices,
                 )
-                # Merge bootstrap fields — keep parametric CI as primary
-                # for backward compatibility, bootstrap as supplementary.
                 extrapolation["bootstrap_days_lower"] = bootstrap.get("bootstrap_days_lower")
                 extrapolation["bootstrap_days_upper"] = bootstrap.get("bootstrap_days_upper")
                 extrapolation["bootstrap_method"] = bootstrap.get("method", "bootstrap")
             except Exception as e:
                 logger.debug("Bootstrap extrapolation failed: %s — using parametric CI only", e)
 
-        config_dict = self.config.model_dump() if hasattr(self.config, "model_dump") else {}
-        config_hash = hashlib.sha256(json.dumps(config_dict, sort_keys=True).encode()).hexdigest()[:16]
+        config_hash = self._compute_config_hash()
+        runtime_fields = {
+            "actual_duration_seconds": round(run_duration, 1),
+            "batches_completed": batches_completed,
+            "total_tokens_translated": total_tokens,
+            "mode": self.run_mode,
+            "config_hash": config_hash,
+        }
+        if extra_runtime_fields:
+            runtime_fields.update(extra_runtime_fields)
 
         report = {
-            "config": config_dict,
+            "config": self.config.model_dump() if hasattr(self.config, "model_dump") else {},
             "environment": env_snapshot,
-            "runtime": {
-                "actual_duration_seconds": round(run_duration, 1),
-                "batches_completed": batches_completed,
-                "total_tokens_translated": total_tokens,
-                "mode": self.run_mode,
-                "config_hash": config_hash,
-            },
+            "runtime": runtime_fields,
             "metrics": metrics_summary,
             "quality": quality_results.to_dict() if quality_results else {},
             "extrapolation": extrapolation,
@@ -660,15 +687,7 @@ class BenchmarkHarness:
         from benchmark.inference.continuous_batcher import ContinuousBatcher
         from benchmark.inference.paged_attention import PagedKVCache
 
-        # Determine duration.
-        if self.duration_override is not None and self.duration_override > 0:
-            target_duration = self.duration_override
-        elif self.run_mode == "dry-run":
-            target_duration = 60
-        elif self.run_mode == "quick":
-            target_duration = 300
-        else:
-            target_duration = self.config.runtime.target_duration_seconds
+        target_duration = self._resolve_duration()
 
         # Warm-up.
         self.engine.warmup(batches=10 if self.run_mode == "dry-run" else 20)
@@ -697,31 +716,7 @@ class BenchmarkHarness:
             backend=device_info.backend,
         )
 
-        # ── Metrics ──
-        self.metrics = MetricsCollector(
-            self.run_dir / "metrics",
-            device_info,
-            self.config.runtime.metrics_sample_rate_hz,
-        )
-        if self.observability_enabled or self.config.runtime.observability_enabled:
-            from benchmark.observability.prometheus_metrics import PrometheusExporter
-            self._prometheus = PrometheusExporter(port=9090)
-            self._prometheus.start()
-            self.metrics.set_prometheus_exporter(self._prometheus)
-
-        self.checkpoint_mgr = CheckpointManager(
-            self.run_dir,
-            self.config.runtime.checkpoint_interval_seconds,
-        )
-        self.signal_handler = SignalHandler()
-
-        register_cleanup("pipeline_stop", self.pipeline.stop_prefetch)
-        register_cleanup("metrics_stop", self.metrics.stop)
-        register_cleanup("metrics_flush", lambda: (
-            self.metrics.device_sampler.flush(),
-            self.metrics.system_sampler.flush(),
-            self.metrics.batch_logger.flush(),
-        ))
+        self._init_translation_infra(device_info)
 
         # ── PagedAttention pool ──
         backend = self.engine.backend
@@ -808,20 +803,23 @@ class BenchmarkHarness:
                         if self._prometheus is not None:
                             self._prometheus.record_error()
                         # Drain running sequences to free paged blocks.
-                        for sid in list(batcher._running.keys()):
-                            try:
-                                batcher._paged_kv.free(sid)
-                            except Exception:
-                                pass
-                        batcher._running.clear()
-                        batcher._active_order.clear()
-                        batcher._paged_cache = None
+                        batcher.drain_running()
                         oom_aborted = True
                         break
-                    except (RuntimeError, MemoryError) as exc:
-                        msg = str(exc)
-                        if any(kw in msg for kw in ("MPS", "mps", "out of memory", "memory")):
-                            logger.error("CB MPS/CPU OOM: %s", exc)
+                    except MemoryError as exc:
+                        # CPU OOM in continuous batcher — drain and abort.
+                        logger.error("CB CPU OOM: %s", exc)
+                        batcher.drain_running()
+                        oom_aborted = True
+                        break
+                    except RuntimeError as exc:
+                        # RuntimeError may be MPS OOM.  Use casefold() for
+                        # locale-independent matching.
+                        msg = str(exc).casefold()
+                        if any(kw.casefold() in msg for kw in
+                               ("MPS", "out of memory", "memory")):
+                            logger.error("CB MPS OOM: %s", exc)
+                            batcher.drain_running()
                             oom_aborted = True
                             break
                         raise
@@ -930,17 +928,27 @@ class BenchmarkHarness:
         mean_tps = metrics_summary.get("batch", {}).get("mean_tps", 0)
         std_tps = metrics_summary.get("batch", {}).get("std_tps", 0)
         n_batches = metrics_summary.get("batch", {}).get("total_batches", 1)
+        median_tps = metrics_summary.get("batch", {}).get("median_tps")
         extrapolation = extrapolator.compute(
-            mean_tps, std_tps, device_info.num_devices, n_batches=n_batches,
+            mean_tps, std_tps, device_info.num_devices,
+            n_batches=n_batches, median_tps=median_tps,
         )
+        tps_samples = metrics_summary.get("batch", {}).get("tps_values")
+        if tps_samples and len(tps_samples) >= 5:
+            try:
+                bootstrap = extrapolator.compute_bootstrap(
+                    tps_samples, num_gpus=device_info.num_devices,
+                )
+                extrapolation["bootstrap_days_lower"] = bootstrap.get("bootstrap_days_lower")
+                extrapolation["bootstrap_days_upper"] = bootstrap.get("bootstrap_days_upper")
+                extrapolation["bootstrap_method"] = bootstrap.get("method", "bootstrap")
+            except Exception as e:
+                logger.debug("Bootstrap extrapolation failed: %s — using parametric CI only", e)
 
-        config_dict = self.config.model_dump() if hasattr(self.config, "model_dump") else {}
-        config_hash = hashlib.sha256(
-            json.dumps(config_dict, sort_keys=True).encode()
-        ).hexdigest()[:16]
+        config_hash = self._compute_config_hash()
 
         report = {
-            "config": config_dict,
+            "config": self.config.model_dump() if hasattr(self.config, "model_dump") else {},
             "environment": env_snapshot,
             "runtime": {
                 "actual_duration_seconds": round(run_duration, 1),
@@ -970,11 +978,10 @@ class BenchmarkHarness:
         quality_bench = QualityBenchmark(self.config.data.reference_set_path)
         quality_results = quality_bench.run(self.engine)
 
-        config_dict = self.config.model_dump() if hasattr(self.config, "model_dump") else {}
-        config_hash = hashlib.sha256(json.dumps(config_dict, sort_keys=True).encode()).hexdigest()[:16]
+        config_hash = self._compute_config_hash()
 
         report = {
-            "config": config_dict,
+            "config": self.config.model_dump() if hasattr(self.config, "model_dump") else {},
             "environment": env_snapshot,
             "quality": quality_results.to_dict(),
             "runtime": {
@@ -985,6 +992,66 @@ class BenchmarkHarness:
         JSONReportWriter().write(self.run_dir, report)
         return report
 
+    # ── Helpers ───────────────────────────────────────────────────────────
+
+    def _compute_config_hash(self) -> str:
+        """Return a deterministic 16-char hex hash of the current config.
+
+        Computed once and cached — subsequent calls return the cached value.
+        """
+        if self._cached_config_hash:
+            return self._cached_config_hash
+        config_dict = self.config.model_dump() if hasattr(self.config, "model_dump") else {}
+        self._cached_config_hash = hashlib.sha256(
+            json.dumps(config_dict, sort_keys=True).encode()
+        ).hexdigest()[:16]
+        return self._cached_config_hash
+
+    def _start_prometheus_if_enabled(self) -> None:
+        """Start the Prometheus metrics exporter if observability is enabled.
+
+        Creates exactly one :class:`PrometheusExporter` instance, starts its
+        HTTP server, and wires it into the active metrics collector.  Safe to
+        call multiple times — subsequent calls are no-ops.
+        """
+        if self._prometheus is not None:
+            return
+        if not (self.observability_enabled or self.config.runtime.observability_enabled):
+            return
+        from benchmark.observability.prometheus_metrics import PrometheusExporter
+        self._prometheus = PrometheusExporter(
+            port=self._resolve_prometheus_port(self.config),
+        )
+        self._prometheus.start()
+        if self.metrics is not None:
+            self.metrics.set_prometheus_exporter(self._prometheus)
+
+    def _init_translation_infra(self, device_info: DeviceInfo) -> None:
+        """Shared setup for metrics, checkpoint, signal handler, and cleanup.
+
+        Called once per translation run (both standard and continuous-batching
+        paths).  Registers cleanup callbacks in FIFO order and starts the
+        Prometheus exporter when observability is enabled.
+        """
+        self.metrics = MetricsCollector(
+            self.run_dir / "metrics",
+            device_info,
+            self.config.runtime.metrics_sample_rate_hz,
+        )
+        self._start_prometheus_if_enabled()
+        self.checkpoint_mgr = CheckpointManager(
+            self.run_dir,
+            self.config.runtime.checkpoint_interval_seconds,
+        )
+        self.signal_handler = SignalHandler()
+        register_cleanup("pipeline_stop", self.pipeline.stop_prefetch)
+        register_cleanup("metrics_stop", self.metrics.stop)
+        register_cleanup("metrics_flush", lambda: (
+            self.metrics.device_sampler.flush(),
+            self.metrics.system_sampler.flush(),
+            self.metrics.batch_logger.flush(),
+        ))
+
     # ── Shared OOM handler — called from both translation and resume loops ───
 
     _OOM_BATCH_SIZE_MIN = 1
@@ -993,7 +1060,7 @@ class BenchmarkHarness:
     def _handle_oom(
         self, batch, loader, timer,
         batches_completed: int, total_tokens: int,
-        batch_size: int, oom_aborted: bool,
+        batch_size: int,
     ) -> bool:
         """Handle OOM across all backends (CUDA, MPS, CPU).
 
@@ -1016,7 +1083,6 @@ class BenchmarkHarness:
         # deallocated when update_batch_size creates a new pool below.
         # Just drop the reference and let the GC collect.
         del batch
-        import gc
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
@@ -1055,9 +1121,9 @@ class BenchmarkHarness:
     ) -> dict:
         """Resume translation from a checkpoint directory.
 
-        Loads the latest checkpoint from *resume_dir*, seeks the data loader
-        to the saved file/offset, restores the batch and token counters,
-        and continues the translation loop from where it left off.
+        Loads the latest checkpoint, restores counters, seeks the data
+        loader, subtracts elapsed time from the duration budget, and
+        delegates to the shared ``_run_translation_core``.
         """
         resume_path = Path(self.resume_dir)
         if not resume_path.exists():
@@ -1076,345 +1142,37 @@ class BenchmarkHarness:
 
         batches_completed = cp["batches_completed"]
         total_tokens = cp["total_tokens_translated"]
-        current_file = cp.get("current_file_name", "")
         current_doc_id = cp.get("current_doc_id", 0)
         previously_elapsed = cp.get("elapsed_seconds", 0)
 
         logger.info(
-            "Resuming from checkpoint: %d batches, %d tokens, file=%s doc_id=%d, elapsed=%.1fs",
-            batches_completed, total_tokens, current_file, current_doc_id,
+            "Resuming from checkpoint: %d batches, %d tokens, "
+            "file=%s doc_id=%d, elapsed=%.1fs",
+            batches_completed, total_tokens,
+            cp.get("current_file_name", ""), current_doc_id,
             previously_elapsed,
         )
 
-        # ── Warm-up with reduced batches (model should still be in memory) ──
+        # Warm-up with reduced batches (model should still be in memory).
         self.engine.warmup(batches=5)
 
-        # ── Data pipeline with seek to checkpoint position ──
-        loader = JSONLLoader(
-            self.config.data.input_paths,
-            shuffle=self.config.data.shuffle,
-            seed=self.config.runtime.seed,
-            max_shuffle_memory_gb=self.config.data.shuffle_max_memory_gb,
-            shuffle_temp_dir=self.config.data.shuffle_temp_dir,
-        )
-        if current_doc_id > 0:
-            loader.seek_to(current_doc_id)
-
-        chunker = TextChunker(
-            self.engine.tokenizer,
-            self.config.model.max_input_tokens,
-            self.config.data.chunk_overlap_tokens,
-        )
-        filt = ChunkFilter(
-            min_tokens=self.config.data.min_chunk_tokens,
-            max_garbage_ratio=self.config.data.max_garbage_ratio,
-        )
-        self.pipeline = AsyncPipeline(
-            loader, chunker, self.engine.tokenizer, filt,
-            batch_size=batch_size,
-            prefetch_workers=self.config.data.prefetch_workers,
-            backend=device_info.backend,
-        )
-
-        # ── Metrics + checkpointing ──
-        self.metrics = MetricsCollector(
-            self.run_dir / "metrics",
-            device_info,
-            self.config.runtime.metrics_sample_rate_hz,
-        )
-        self.checkpoint_mgr = CheckpointManager(
-            self.run_dir,
-            self.config.runtime.checkpoint_interval_seconds,
-        )
-
-        # Start Prometheus metrics server if observability is enabled.
-        if self.observability_enabled or self.config.runtime.observability_enabled:
-            from benchmark.observability.prometheus_metrics import PrometheusExporter
-            self._prometheus = PrometheusExporter(port=9090)
-            self._prometheus.start()
-            self.metrics.set_prometheus_exporter(self._prometheus)
-
-        self.signal_handler = SignalHandler()
-
-        register_cleanup("pipeline_stop", self.pipeline.stop_prefetch)
-        register_cleanup("metrics_stop", self.metrics.stop)
-        register_cleanup("metrics_flush", lambda: (
-            self.metrics.device_sampler.flush(),
-            self.metrics.system_sampler.flush(),
-            self.metrics.batch_logger.flush(),
-        ))
-
-        # Subtract already-elapsed time from the duration budget so a resumed
-        # run does not silently exceed the intended total runtime.
-        if self.duration_override is not None and self.duration_override > 0:
-            full_duration = self.duration_override
-        elif self.duration_override is not None:
-            logger.warning("duration_override=0 is invalid; using config default")
-            full_duration = self.config.runtime.target_duration_seconds
-        else:
-            full_duration = self.config.runtime.target_duration_seconds
+        # Subtract already-elapsed time from the duration budget.
+        full_duration = self._resolve_duration()
         remaining = full_duration - previously_elapsed
-        target_duration = max(remaining, 60)  # floor of 60 s so the loop still runs
+        target_duration = max(remaining, 60)  # floor of 60 s
 
-        logger.info(
-            "Resuming translation loop: target=%ds, batch_size=%d",
-            target_duration, batch_size,
-        )
-
-        self.pipeline.start_prefetch()
-        timer = PrecisionTimer()
-        timer.start()
-        self.metrics.start(timer.start_time())
-
-        # Register checkpoint cleanup AFTER timer is created so the
-        # lambda can safely reference timer.elapsed().
-        register_cleanup(
-            "checkpoint_save",
-            lambda: self.checkpoint_mgr.save(
-                batches_completed, total_tokens,
-                current_file_name=loader.current_position[0],
-                current_doc_id=loader.current_position[1],
-                elapsed_seconds=timer.elapsed(),
-                final=True,
-            ),
-        )
-
-        last_checkpoint = timer.elapsed()
-        last_heartbeat = timer.elapsed()
-        killed_by_signal = False
-        oom_aborted = False
-
-        MIN_BATCH_SIZE = 1
-
-        try:
-            while timer.elapsed() < target_duration:
-                if self.signal_handler.killed.is_set():
-                    logger.error(
-                        "Killed by signal %d — stopping. "
-                        "batches=%d tokens=%s",
-                        self.signal_handler.signal_number or 0,
-                        batches_completed,
-                        format(total_tokens, ','),
-                    )
-                    self.signal_handler.cleanup()
-                    killed_by_signal = True
-                    break
-
-                batch = self.pipeline.next_batch()
-                if batch is None:
-                    if self.pipeline.draining():
-                        break
-                    continue
-
-                # P0-06: Re-check signal before expensive model.generate() call.
-                # The outer while-loop check is only evaluated between batches,
-                # so a Ctrl+C that arrives right after next_batch() returns would
-                # not be seen until translate() finishes (up to ~30 s).  This
-                # second check shortens worst-case shutdown latency to near-zero.
-                if self.signal_handler.killed.is_set():
-                    logger.error(
-                        "Killed by signal %d — stopping immediately (pre-translate check). "
-                        "batches=%d tokens=%s",
-                        self.signal_handler.signal_number or 0,
-                        batches_completed,
-                        format(total_tokens, ','),
-                    )
-                    self.pipeline.release_batch(batch)
-                    self.signal_handler.cleanup()
-                    killed_by_signal = True
-                    break
-
-                try:
-                    result = self.engine.translate(batch)
-                    self.pipeline.release_batch(batch)
-                    self.metrics.log_batch(result)
-                    if self._prometheus is not None:
-                        self._prometheus.record_batch(
-                            tokens=result.output_tokens_total,
-                            latency_ms=result.total_latency_ms,
-                            prefill_ms=(
-                                result.prefill_time_ms
-                                if hasattr(result, 'prefill_time_ms') and result.prefill_time_ms is not None
-                                else (result.phase_timings.get('prefill_ms', 0)
-                                      if hasattr(result, 'phase_timings') and result.phase_timings is not None
-                                      else 0)
-                            ),
-                            decode_ms=(
-                                result.decode_time_ms
-                                if hasattr(result, 'decode_time_ms') and result.decode_time_ms is not None
-                                else (result.phase_timings.get('decode_ms', 0)
-                                      if hasattr(result, 'phase_timings') and result.phase_timings is not None
-                                      else 0)
-                            ),
-                            batch_size=result.batch_size,
-                        )
-                    batches_completed += 1
-                    total_tokens += result.output_tokens_total
-                except torch.cuda.OutOfMemoryError as exc:
-                    logger.error(
-                        "CUDA OOM at batch %d (batch_size=%d): %s",
-                        batches_completed, batch_size, exc,
-                    )
-                    oom_aborted = self._handle_oom(
-                        batch, loader, timer, batches_completed, total_tokens,
-                        batch_size, oom_aborted,
-                    )
-                    if oom_aborted:
-                        break
-                    batch_size = self.engine._configured_batch_size
-                except (RuntimeError, MemoryError) as exc:
-                    # MPS reports OOM as RuntimeError with specific messages;
-                    # CPU OOM surfaces as MemoryError.  Handle identically to
-                    # CUDA OOM — checkpoint, halve batch size, re-warm.
-                    msg = str(exc)
-                    is_mps_oom = any(
-                        kw in msg for kw in (
-                            "MPS", "mps", "Placeholder storage",
-                            "not enough memory", "out of memory",
-                        )
-                    )
-                    if is_mps_oom or isinstance(exc, MemoryError):
-                        logger.error(
-                            "MPS/CPU OOM at batch %d (batch_size=%d): %s",
-                            batches_completed, batch_size, msg[:200],
-                        )
-                        oom_aborted = self._handle_oom(
-                            batch, loader, timer, batches_completed,
-                            total_tokens, batch_size, oom_aborted,
-                        )
-                        if oom_aborted:
-                            break
-                        batch_size = self.engine._configured_batch_size
-                    else:
-                        raise
-
-                now = timer.elapsed()
-                if now - last_heartbeat >= self.config.runtime.heartbeat_interval_seconds:
-                    tps = self.metrics.get_rolling_throughput()
-                    logger.info(
-                        "[%4.0fs] batches=%d tokens=%s tps=%.0f (resumed) node=%s",
-                        now, batches_completed, format(total_tokens, ','), tps,
-                        device_info.name,
-                    )
-                    last_heartbeat = now
-                    # Push pipeline-level metrics to Prometheus.
-                    if self._prometheus is not None:
-                        qd = self.pipeline.queue_depth()
-                        self._prometheus.record_pipeline(queue_depth=qd)
-                if now - last_checkpoint >= self.config.runtime.checkpoint_interval_seconds:
-                    fname, doc_id = self._current_data_position(loader)
-                    self.checkpoint_mgr.save(
-                        batches_completed, total_tokens,
-                        current_file_name=fname, current_doc_id=doc_id,
-                        elapsed_seconds=now,
-                    )
-                    last_checkpoint = now
-
-        finally:
-            self.metrics.stop()
-            if self._prometheus is not None:
-                self._prometheus.stop()
-            self.pipeline.stop_prefetch()
-            fname, doc_id = self._current_data_position(loader)
-            self.checkpoint_mgr.save(
-                batches_completed, total_tokens,
-                current_file_name=fname, current_doc_id=doc_id,
-                elapsed_seconds=timer.elapsed(),
-                final=True,
-            )
-            run_duration = timer.elapsed()
-            if killed_by_signal:
-                logger.error(
-                    "Resume run aborted by signal %d: %d batches (%d new), %s tokens in %.1fs",
-                    self.signal_handler.signal_number or 0,
-                    batches_completed, batches_completed - cp["batches_completed"],
-                    format(total_tokens, ','), run_duration,
-                )
-            elif oom_aborted:
-                logger.info(
-                    "Resume run complete: %d batches (%d new), %s tokens in %.1fs (aborted: OOM recovery exhausted)",
-                    batches_completed, batches_completed - cp["batches_completed"],
-                    format(total_tokens, ','), run_duration,
-                )
-            else:
-                logger.info(
-                    "Resume run complete: %d batches (%d new), %s tokens in %.1fs",
-                    batches_completed, batches_completed - cp["batches_completed"],
-                    format(total_tokens, ','), run_duration,
-                )
-
-        # ── Quality benchmark (skip if killed by signal or OOM-aborted) ──
-        quality_results = None
-        if not killed_by_signal and not oom_aborted:
-            logger.info("Running quality benchmark...")
-            quality_bench = QualityBenchmark(self.config.data.reference_set_path)
-            # Dry-run is a 60s smoke test — limit quality to 32 references
-            # to avoid spending 2+ hours on 1960 reference sentences.
-            max_q_refs = 32 if self.run_mode == "dry-run" else None
-            quality_results = quality_bench.run(self.engine, max_references=max_q_refs)
-            if quality_results is not None and self._prometheus is not None:
-                self._prometheus.record_quality(
-                    bleu=None,  # BLEU not computed (omitted from parallel metric computation)
-                    chrf=None,  # chrF++ not computed (omitted)
-                    comet=quality_results.comet.get('system_score'),
-                    bertscore=quality_results.bertscore.get('system_score'),
-                    comet_kiwi=quality_results.comet_kiwi.get('system_score'),
-                )
-
-        # ── Reports ──
-        logger.info("Generating reports...")
-        aggregator = MetricsAggregator(self.run_dir / "metrics")
-        metrics_summary = aggregator.aggregate()
-
-        extrapolator = ExtrapolationModel(
-            total_tokens=self.config.extrapolation.total_clearnet_non_tr_tokens,
-            gpu_cost_per_hour=self.config.extrapolation.gpu_cost_per_hour_usd,
-        )
-        mean_tps = metrics_summary.get("batch", {}).get("mean_tps", 0)
-        std_tps = metrics_summary.get("batch", {}).get("std_tps", 0)
-        n_batches = metrics_summary.get("batch", {}).get("total_batches", 1)
-        # Parametric CI (SEM-based) — always computed.
-        extrapolation = extrapolator.compute(mean_tps, std_tps, device_info.num_devices,
-                                             n_batches=n_batches)
-        # Bootstrap CI (resampling-based) — computed when per-batch TPS
-        # data is available.  More robust than parametric for skewed
-        # distributions and small samples.  The bootstrap fields are
-        # merged into the extrapolation dict alongside the parametric CI.
-        tps_samples = metrics_summary.get("batch", {}).get("tps_values")
-        if tps_samples and len(tps_samples) >= 5:
-            try:
-                bootstrap = extrapolator.compute_bootstrap(
-                    tps_samples, num_gpus=device_info.num_devices,
-                )
-                # Merge bootstrap fields — keep parametric CI as primary
-                # for backward compatibility, bootstrap as supplementary.
-                extrapolation["bootstrap_days_lower"] = bootstrap.get("bootstrap_days_lower")
-                extrapolation["bootstrap_days_upper"] = bootstrap.get("bootstrap_days_upper")
-                extrapolation["bootstrap_method"] = bootstrap.get("method", "bootstrap")
-            except Exception as e:
-                logger.debug("Bootstrap extrapolation failed: %s — using parametric CI only", e)
-
-        config_dict = self.config.model_dump() if hasattr(self.config, "model_dump") else {}
-        config_hash = hashlib.sha256(json.dumps(config_dict, sort_keys=True).encode()).hexdigest()[:16]
-
-        report = {
-            "config": config_dict,
-            "environment": env_snapshot,
-            "runtime": {
-                "actual_duration_seconds": round(run_duration, 1),
-                "batches_completed": batches_completed,
-                "total_tokens_translated": total_tokens,
+        return self._run_translation_core(
+            batch_size=batch_size,
+            target_duration=target_duration,
+            env_snapshot=env_snapshot,
+            device_info=device_info,
+            batches_completed=batches_completed,
+            total_tokens=total_tokens,
+            resume_path=resume_path,
+            resume_base_batches=batches_completed,
+            loader_seek_doc_id=current_doc_id,
+            extra_runtime_fields={
                 "mode": "resume",
                 "resumed_from": str(resume_path),
-                "config_hash": config_hash,
             },
-            "metrics": metrics_summary,
-            "quality": quality_results.to_dict() if quality_results else {},
-            "extrapolation": extrapolation,
-            "filter_stats": filt.stats.to_dict(),
-        }
-
-        JSONReportWriter().write(self.run_dir, report)
-        MarkdownReportWriter().write(self.run_dir, report)
-        logger.info("Report written to %s/report/", self.run_dir)
-        return report
+        )

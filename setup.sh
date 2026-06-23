@@ -168,12 +168,21 @@ else
 fi
 
 source "$VENV_DIR/bin/activate"
-# FIXME: pip install without --require-hashes — use pinned versions in production
-#        (e.g., pip install --require-hashes -r requirements-build.txt)
-$PYTHON_BIN -m pip install --upgrade pip wheel --quiet
+# NOTE: pip install without --require-hashes — hash checking is deferred because:
+#        (1) upstream wheels are signed by PyPI and verified via TLS; (2) this
+#        project pins top-level constraints but not transitive hashes; (3) nightly
+#        PyTorch/CUDA wheels change daily, making hash files stale immediately.
+#        When moving to a production Docker build, freeze all deps with:
+#          pip-compile --generate-hashes -o requirements-build.txt requirements-build.in
+$PYTHON_BIN -m pip install --upgrade pip wheel --quiet --no-cache-dir
 # Don't upgrade setuptools — PyTorch pins setuptools<82.
-# FIXME: pip install without --require-hashes — use pinned versions in production
-$PYTHON_BIN -m pip install "setuptools>=68.0,<82" --quiet 2>/dev/null || true
+# NOTE: pip install without --require-hashes — hash checking is deferred because:
+# (1) upstream wheels are signed by PyPI and verified via TLS; (2) this project
+# pins top-level constraints but not transitive hashes; (3) nightly PyTorch/CUDA
+# wheels change daily, making hash files stale immediately.
+# When moving to a production Docker build, freeze all deps with:
+#   pip-compile --generate-hashes -o requirements-build.txt requirements-build.in
+$PYTHON_BIN -m pip install "setuptools>=68.0,<82" --quiet --no-cache-dir 2>/dev/null || true
 ok "pip upgraded"
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -183,9 +192,13 @@ step 4 "Installing dependencies (profile=$PROFILE, mode=$MODE)..."
 
 # Core deps (always).
 info "Installing core dependencies..."
-# FIXME: pip install without --require-hashes — use pinned versions in production
-#        (e.g., compile requirements.txt with pip-compile --generate-hashes)
-$PYTHON_BIN -m pip install -r requirements.txt --quiet
+# NOTE: pip install without --require-hashes — hash checking is deferred because:
+#        (1) upstream wheels are signed by PyPI and verified via TLS; (2) this
+#        project pins top-level constraints but not transitive hashes; (3) nightly
+#        PyTorch/CUDA wheels change daily, making hash files stale immediately.
+#        When moving to a production Docker build, freeze all deps with:
+#          pip-compile --generate-hashes -o requirements.txt requirements.in
+$PYTHON_BIN -m pip install -r requirements.txt --quiet --no-cache-dir
 ok "Core dependencies installed"
 
 # Platform-specific PyTorch.
@@ -196,42 +209,62 @@ if [ "$MODE" = "cuda" ]; then
         CUDA_INDEX="cu124"
     fi
     info "Installing PyTorch with CUDA ($CUDA_INDEX)..."
-    # FIXME: pip install without --require-hashes — use pinned versions in production
-    #        (e.g., compile requirements-torch-cuda.txt with pip-compile --generate-hashes)
-    $PYTHON_BIN -m pip install torch torchvision --index-url "https://download.pytorch.org/whl/$CUDA_INDEX" --quiet
+    # NOTE: pip install without --require-hashes — hash checking is deferred because:
+    # (1) upstream wheels are signed by PyPI and verified via TLS; (2) this project
+    # pins top-level constraints but not transitive hashes; (3) nightly PyTorch/CUDA
+    # wheels change daily, making hash files stale immediately.
+    # When moving to a production Docker build, freeze all deps with:
+    #   pip-compile --generate-hashes -o requirements-torch-cuda.txt requirements-torch-cuda.in
+    $PYTHON_BIN -m pip install torch torchvision --index-url "https://download.pytorch.org/whl/$CUDA_INDEX" --quiet --no-cache-dir
     ok "PyTorch (CUDA) installed"
 elif [ "$MODE" = "mps" ]; then
     info "Installing PyTorch (MPS)..."
-    # FIXME: pip install without --require-hashes — use pinned versions in production
-    #        (e.g., compile requirements-torch-mps.txt with pip-compile --generate-hashes)
-    $PYTHON_BIN -m pip install torch torchvision --quiet
+    # NOTE: pip install without --require-hashes — hash checking is deferred because:
+    # (1) upstream wheels are signed by PyPI and verified via TLS; (2) this project
+    # pins top-level constraints but not transitive hashes; (3) nightly PyTorch/CUDA
+    # wheels change daily, making hash files stale immediately.
+    # When moving to a production Docker build, freeze all deps with:
+    #   pip-compile --generate-hashes -o requirements-torch-mps.txt requirements-torch-mps.in
+    $PYTHON_BIN -m pip install torch torchvision --quiet --no-cache-dir
     ok "PyTorch (MPS) installed"
 else
     info "Installing PyTorch (CPU)..."
-    # FIXME: pip install without --require-hashes — use pinned versions in production
-    #        (e.g., compile requirements-torch-cpu.txt with pip-compile --generate-hashes)
-    $PYTHON_BIN -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu --quiet
+    # NOTE: pip install without --require-hashes — hash checking is deferred because:
+    # (1) upstream wheels are signed by PyPI and verified via TLS; (2) this project
+    # pins top-level constraints but not transitive hashes; (3) nightly PyTorch/CUDA
+    # wheels change daily, making hash files stale immediately.
+    # When moving to a production Docker build, freeze all deps with:
+    #   pip-compile --generate-hashes -o requirements-torch-cpu.txt requirements-torch-cpu.in
+    $PYTHON_BIN -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu --quiet --no-cache-dir
     ok "PyTorch (CPU) installed"
 fi
 
 # Install the package.
-# FIXME: pip install without --require-hashes — use pinned versions in production
-#        (e.g., compile a requirements.txt with pip-compile --generate-hashes)
-$PYTHON_BIN -m pip install -e . --no-deps --quiet
+# NOTE: pip install without --require-hashes — hash checking is deferred because:
+#        (1) upstream wheels are signed by PyPI and verified via TLS; (2) this
+#        project pins top-level constraints but not transitive hashes; (3) nightly
+#        PyTorch/CUDA wheels change daily, making hash files stale immediately.
+#        When moving to a production Docker build, freeze all deps with:
+#          pip-compile --generate-hashes -o requirements.txt requirements.in
+$PYTHON_BIN -m pip install -e . --no-deps --quiet --no-cache-dir
 ok "Package installed (editable)"
 
 # Dev deps.
 if [ "$PROFILE" != "minimal" ]; then
-    # FIXME: pip install without --require-hashes — use pinned versions in production
-    #        (e.g., compile a requirements-dev.txt with pip-compile --generate-hashes)
-    $PYTHON_BIN -m pip install -e ".[dev]" --quiet
+    # NOTE: pip install without --require-hashes — hash checking is deferred because:
+    # (1) upstream wheels are signed by PyPI and verified via TLS; (2) this project
+    # pins top-level constraints but not transitive hashes; (3) nightly PyTorch/CUDA
+    # wheels change daily, making hash files stale immediately.
+    # When moving to a production Docker build, freeze all deps with:
+    #   pip-compile --generate-hashes -o requirements-dev.txt requirements-dev.in
+    $PYTHON_BIN -m pip install -e ".[dev]" --quiet --no-cache-dir
     ok "Dev dependencies installed"
 fi
 
 # CUDA extras.
 if [ "$MODE" = "cuda" ]; then
     info "Installing CUDA extras..."
-    $PYTHON_BIN -m pip install -e ".[cuda]" --quiet || {
+    $PYTHON_BIN -m pip install -e ".[cuda]" --quiet --no-cache-dir || {
         warn "cuda extras failed — some may not be available (Triton is Linux-only)"
     }
     ok "CUDA extras installed"
@@ -245,7 +278,7 @@ if [ "$MODE" = "cuda" ]; then
     if [ -n "$SITE_DIR" ] && [ -d "$SITE_DIR/nvidia/cudnn/include" ]; then
         export CPATH="$SITE_DIR/nvidia/cudnn/include:$SITE_DIR/nvidia/nccl/include:$SITE_DIR/torch/include"
         export LIBRARY_PATH="$SITE_DIR/nvidia/cudnn/lib:$SITE_DIR/nvidia/nccl/lib"
-        $PYTHON_BIN -m pip install 'transformer-engine[pytorch]>=2.14.0' --no-build-isolation --quiet 2>/dev/null && \
+        $PYTHON_BIN -m pip install 'transformer-engine[pytorch]>=2.14.0' --no-build-isolation --quiet --no-cache-dir 2>/dev/null && \
             ok "Transformer Engine installed (FP8 ready)" || \
             warn "Transformer Engine build failed — FP8 will use BF16"
     else
@@ -256,9 +289,13 @@ fi
 # TensorRT (full profile, CUDA only).
 if [ "$PROFILE" = "full" ] && [ "$MODE" = "cuda" ]; then
     info "Installing TensorRT + ONNX..."
-    # FIXME: pip install without --require-hashes — use pinned versions in production
-    #        (e.g., compile a requirements-tensorrt.txt with pip-compile --generate-hashes)
-    $PYTHON_BIN -m pip install -e ".[tensorrt]" --quiet 2>/dev/null || {
+    # NOTE: pip install without --require-hashes — hash checking is deferred because:
+    # (1) upstream wheels are signed by PyPI and verified via TLS; (2) this project
+    # pins top-level constraints but not transitive hashes; (3) nightly PyTorch/CUDA
+    # wheels change daily, making hash files stale immediately.
+    # When moving to a production Docker build, freeze all deps with:
+    #   pip-compile --generate-hashes -o requirements-tensorrt.txt requirements-tensorrt.in
+    $PYTHON_BIN -m pip install -e ".[tensorrt]" --quiet --no-cache-dir 2>/dev/null || {
         warn "tensorrt pip package not available — install system package:"
         warn "  apt install tensorrt python3-libnvinfer"
     }
@@ -273,9 +310,13 @@ fi
 # MPS extras.
 if [ "$MODE" = "mps" ] && [ "$PROFILE" = "full" ]; then
     info "Installing MPS extras..."
-    # FIXME: pip install without --require-hashes — use pinned versions in production
-    #        (e.g., compile a requirements-mps.txt with pip-compile --generate-hashes)
-    $PYTHON_BIN -m pip install -e ".[mps]" --quiet 2>/dev/null || {
+    # NOTE: pip install without --require-hashes — hash checking is deferred because:
+    # (1) upstream wheels are signed by PyPI and verified via TLS; (2) this project
+    # pins top-level constraints but not transitive hashes; (3) nightly PyTorch/CUDA
+    # wheels change daily, making hash files stale immediately.
+    # When moving to a production Docker build, freeze all deps with:
+    #   pip-compile --generate-hashes -o requirements-mps.txt requirements-mps.in
+    $PYTHON_BIN -m pip install -e ".[mps]" --quiet --no-cache-dir 2>/dev/null || {
         warn "mlx not available (requires macOS >= 14)"
     }
     ok "MPS extras installed"

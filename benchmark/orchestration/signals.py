@@ -40,7 +40,14 @@ def register_cleanup(name: str, fn: Callable[..., Any]) -> None:
 
 
 def _run_cleanup() -> None:
-    """Execute all registered cleanup callbacks, then free GPU memory."""
+    """Execute all registered cleanup callbacks, then free GPU memory.
+
+    All callbacks MUST be synchronous file I/O operations — any async
+    I/O spawned by a callback would need its own completion barrier,
+    which is not yet implemented.  The final call to
+    :func:`logging.shutdown` in the caller ensures log handlers are
+    flushed before ``sys.exit``.
+    """
     with _cleanup_lock:
         callbacks = list(_cleanup_callbacks)
         _cleanup_callbacks.clear()
@@ -56,11 +63,15 @@ def _run_cleanup() -> None:
         if torch.cuda.is_available():
             torch.cuda.synchronize()
             torch.cuda.empty_cache()
+            # Save and restore the current device — iterating
+            # set_device() permanently changes the active device.
+            saved_device = torch.cuda.current_device()
             for i in range(torch.cuda.device_count()):
                 torch.cuda.set_device(i)
                 torch.cuda.synchronize()
                 torch.cuda.empty_cache()
                 torch.cuda.reset_peak_memory_stats(i)
+            torch.cuda.set_device(saved_device)
             logger.debug("CUDA memory cleared across all %d device(s)", torch.cuda.device_count())
     except (RuntimeError, torch.cuda.CudaError, torch.cuda.OutOfMemoryError):
         pass
@@ -93,14 +104,21 @@ class SignalHandler:
     >>> signals.cleanup()  # called in finally, safe to call multiple times.
     """
 
+    # Track the latest instance so atexit only fires once.
+    _current_instance: "SignalHandler | None" = None
+
     def __init__(self) -> None:
+        # If a previous instance exists, restore it before installing ours.
+        if SignalHandler._current_instance is not None:
+            try:
+                SignalHandler._current_instance.restore()
+            except Exception:
+                pass
+        SignalHandler._current_instance = self
+
         self.killed = threading.Event()
         self._needs_cleanup = False
         self._signal_count = 0
-        # No self._lock: intentionally lock-free.  CPython signal handlers
-        # execute on the main thread — a lock acquired here would deadlock
-        # if the interrupted code already holds it.  Simple integer
-        # arithmetic is GIL-protected and safe for signal handlers.
         self.signal_number: int | None = None
 
         # Save originals for restore.
@@ -144,7 +162,7 @@ class SignalHandler:
         try:
             _run_cleanup()
         except Exception:
-            pass
+            logger.exception("atexit cleanup failed — data may be lost")
 
     def cleanup(self) -> None:
         """Manually trigger cleanup. Called from the main loop when self.killed is set.
@@ -160,8 +178,8 @@ class SignalHandler:
                 sig_name,
             )
             _run_cleanup()
-            # Brief pause to let I/O flush, then exit.
-            time.sleep(0.1)
+            # Flush all logging handlers before exiting.
+            logging.shutdown()
             sys.exit(128 + (self.signal_number or signal.SIGTERM))
 
     def restore(self) -> None:

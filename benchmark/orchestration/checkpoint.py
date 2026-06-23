@@ -56,28 +56,35 @@ class CheckpointManager:
                       "final": final}
         tmp_path = self.checkpoint_dir / "checkpoint.tmp"
         try:
+            # Write checkpoint data OUTSIDE the lock to avoid holding
+            # a mutex across synchronous I/O (fsync on network filesystems
+            # can block for hundreds of milliseconds).
+            with open(tmp_path, "w") as f:
+                json.dump(checkpoint, f)
+                f.flush()
+                os.fsync(f.fileno())
+            # Only hold the lock around the rename and rotation —
+            # these are the atomic operations that need protection.
+            needs_final_fsync = False
             with self._lock:
-                with open(tmp_path, "w") as f:
-                    json.dump(checkpoint, f)
-                    # json.dump writes to kernel buffer; fsync ensures data
-                    # reaches disk so we don't lose it on crash.
-                    f.flush()
-                    os.fsync(f.fileno())
-                # os.rename is atomic on ext4/xfs but NOT on NFS — data may
-                # be lost on network filesystems.
                 ts = now.strftime("%Y%m%d_%H%M%S")
                 final_path = self.checkpoint_dir / f"checkpoint_{ts}.json"
                 os.rename(str(tmp_path), str(final_path))
-                # For final checkpoints fsync the directory fd so the rename
-                # is durable even on filesystems with lazy directory updates.
-                if final:
-                    dir_fd = os.open(self.checkpoint_dir, os.O_RDONLY)
-                    try:
-                        os.fsync(dir_fd)
-                    finally:
-                        os.close(dir_fd)
+                needs_final_fsync = final
                 logger.debug(f"Checkpoint saved: {final_path.name}")
                 self._rotate()
+            # For final checkpoints fsync the directory fd so the rename
+            # is durable even on filesystems with lazy directory updates.
+            # fsync is blocking I/O — do it OUTSIDE the lock so we don't
+            # stall other threads that need the checkpoint directory.
+            if needs_final_fsync:
+                dir_fd = None
+                try:
+                    dir_fd = os.open(self.checkpoint_dir, os.O_RDONLY)
+                    os.fsync(dir_fd)
+                finally:
+                    if dir_fd is not None:
+                        os.close(dir_fd)
             return final_path
         except OSError as e:
             logger.warning(f"Checkpoint save failed: {e}")
@@ -100,20 +107,25 @@ class CheckpointManager:
                 logger.warning("Checkpoint %s corrupt, trying older: %s", f.name, e)
                 continue
 
-            # Version check — warn on missing or mismatched version.
+            # Version check.
+            # A missing version field is tolerated (older checkpoints
+            # predate the version field) but logged as a warning.
+            # A mismatched version is REJECTED — the checkpoint schema
+            # has changed and fields may not be compatible.
             version = cp.get("version")
             if version is None:
                 logger.warning(
                     "Checkpoint %s has no version field — "
-                    "may be from a different version of the benchmark",
+                    "may be from an older version of the benchmark",
                     f.name,
                 )
             elif version != 1:
-                logger.warning(
+                logger.error(
                     "Checkpoint %s has version=%s but expected version=1 — "
-                    "fields may have changed",
+                    "schema may be incompatible, skipping",
                     f.name, version,
                 )
+                continue
 
             logger.info("Loaded checkpoint: %s", f.name)
             return cp
@@ -128,12 +140,13 @@ class CheckpointManager:
     def _rotate(self) -> None:
         files = sorted(self.checkpoint_dir.glob("checkpoint_*.json"))
         while len(files) > self._rotation:
+            oldest = files[0]
             try:
-                files[0].unlink()
+                oldest.unlink()
                 files.pop(0)
             except OSError:
                 logger.warning(
                     "Failed to rotate checkpoint %s — skipping rotation for this save",
-                    files[0],
+                    oldest,
                 )
                 break

@@ -7,6 +7,18 @@ Kernels:
   1. fused_rms_norm_residual — RMSNorm(x + residual) in 1 kernel.
   2. fused_swiglu_gate_up — SiLU(gate) * up in 1 kernel.
 
+Naming convention
+-----------------
+All Triton kernel functions in this module are prefixed ``_tr_`` to avoid
+name collisions with:
+  - PyTorch autograd functions (unprefixed).
+  - Inline Triton kernels defined inside closures in ``fused_ops.py``
+    (those are named ``_rms_norm_residual_kernel`` — same purpose,
+    different compilation unit).  The ``_tr_`` prefix is deliberate:
+    two kernels with the SAME name in different modules cause Triton
+    JIT-cache ambiguity when both modules are loaded in the same process.
+  - Future kernel variants (TL2, wgmma).
+
 Requirements: triton>=2.3.0, CUDA SM80+ (H200 = SM90).
 All functions gracefully fall back to eager PyTorch on CPU/MPS.
 """
@@ -38,7 +50,7 @@ except ImportError:
 if HAS_TRITON:
 
     @triton.jit
-    def _rms_norm_residual_kernel(
+    def _tr_rms_norm_residual_kernel(
         x_ptr, residual_ptr, weight_ptr, out_ptr, new_residual_ptr,
         N, eps,
         BLOCK_N: tl.constexpr,
@@ -66,7 +78,7 @@ if HAS_TRITON:
 
 
     @triton.jit
-    def _swiglu_kernel(
+    def _tr_swiglu_kernel(
         a_ptr, w_gate_ptr, w_up_ptr, out_ptr,
         M, N, K,
         stride_am, stride_ak,
@@ -145,7 +157,7 @@ def fused_rms_norm_residual(
     grid = (x_2d.shape[0],)
     BLOCK_N = min(triton.next_power_of_2(N), 1024)
 
-    _rms_norm_residual_kernel[grid](
+    _tr_rms_norm_residual_kernel[grid](
         x_2d, residual_2d, weight, out, new_res, N, eps,
         BLOCK_N=BLOCK_N,
     )
@@ -184,7 +196,7 @@ def fused_swiglu_gate_up(
 
     grid = (triton.cdiv(M, BLOCK_M), triton.cdiv(N, BLOCK_N))
 
-    _swiglu_kernel[grid](
+    _tr_swiglu_kernel[grid](
         hidden_2d, gate_proj_weight, up_proj_weight, out,
         M, N, K,
         hidden_2d.stride(0), hidden_2d.stride(1),

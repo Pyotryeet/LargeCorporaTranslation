@@ -1,12 +1,15 @@
-"""BERTScore — reference-free semantic evaluation for translation quality.
+"""BERTScore — reference-hypothesis semantic similarity via BERTScore.
 
-BERTScore uses a pretrained multilingual BERT model (bert-base-multilingual-cased)
-to compute cosine similarity between source and hypothesis token embeddings.
-It is reference-free (source+hypothesis only), correlates better with human
-judgment than BLEU, and handles Turkish morphology naturally.
+BERTScore computes cosine similarity between reference and hypothesis token
+embeddings using a pretrained multilingual BERT model
+(bert-base-multilingual-cased).  It evaluates how well the hypothesis
+aligns with the reference translation semantically, complementing n-gram
+metrics by capturing meaning rather than surface form overlap.
 
-COMET-Kiwi is the academic standard but its models are gated on HuggingFace.
-BERTScore is ungated, widely cited, and gives sensible scores for EN-TR.
+BERTScore correlates better with human judgment than BLEU and handles
+Turkish morphology naturally.  However, it is not a substitute for
+reference-based metrics (COMET-22, BLEU, chrF++) in formal evaluation
+settings.
 """
 
 import logging
@@ -58,15 +61,16 @@ def _get_bertscore_scorer() -> Optional["BERTScorer"]:
 
 
 def compute_bertscore(
-    sources: list[str],
+    references: list[str],
     hypotheses: list[str],
 ) -> dict:
-    """Compute reference-free BERTScore for EN→TR translation quality.
+    """Compute reference-hypothesis semantic similarity via BERTScore.
 
-    BERTScore computes the similarity between source and hypothesis
-    token embeddings using a multilingual BERT model.  It is reference-free,
-    making it suitable when only single references exist or when the
-    reference wording differs from legitimate model output.
+    BERTScore computes the cosine similarity between reference and hypothesis
+    token embeddings using a multilingual BERT model.  This metric evaluates
+    semantic alignment between reference translations and hypothesis
+    translations, providing a complementary perspective to n-gram overlap
+    metrics that captures meaning rather than surface form.
 
     Returns
     -------
@@ -79,7 +83,7 @@ def compute_bertscore(
             "error": "bert-score not installed",
             "segments_scores": [],
         }
-    if not sources or not hypotheses:
+    if not references or not hypotheses:
         logger.warning("Empty data for BERTScore")
         return {"system_score": 0.0, "segments_scores": []}
 
@@ -92,7 +96,9 @@ def compute_bertscore(
                 "segments_scores": [],
             }
 
-        P, R, F1 = scorer.score(hypotheses, sources)
+        # BERTScorer.score(cands, refs) — candidates are hypotheses,
+        # references are the golden translations.
+        P, R, F1 = scorer.score(hypotheses, references)
         scores = [float(f) for f in F1]
         sys_score = sum(scores) / len(scores) if scores else 0.0
 
@@ -109,7 +115,7 @@ def compute_bertscore(
             "precision": round(float(P.mean()), 4),
             "recall": round(float(R.mean()), 4),
             "model": BS_DEFAULT_MODEL,
-            "method": "bertscore_reference_free",
+            "method": "bertscore_reference_based",
         }
     except Exception as e:
         logger.error("BERTScore evaluation failed: %s", e)

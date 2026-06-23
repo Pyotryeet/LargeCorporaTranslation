@@ -294,6 +294,16 @@ def apply_tensor_parallelism(
             f"Rank {rank} is outside the TP group ranks {config.ranks}."
         )
 
+    # Map process rank to local CUDA device index.
+    # In single-node setups rank==device_index, but in multi-node setups
+    # (e.g., torchrun with CUDA_VISIBLE_DEVICES) rank 0 and rank 1 are
+    # two different processes each seeing a single GPU at index 0.
+    # PyTorch maps the local rank to the device automatically when using
+    # torchrun — we detect the local CUDA device via ``torch.cuda.current_device()``
+    # rather than assuming ``rank`` is the device index.
+    local_device = torch.cuda.current_device() if torch.cuda.is_available() else 0
+    device_str = f"cuda:{local_device}"
+
     # -- locate submodules -------------------------------------------------
     layers = _maybe_get_attr(
         model,
@@ -387,8 +397,8 @@ def apply_tensor_parallelism(
 
     # -- replicate embedding ------------------------------------------------
     if config.replicate_embedding and embed is not None:
-        embed.to(rank)
-        logger.debug("Rank %d: embedding replicated (not sharded).", rank)
+        embed.to(torch.device(device_str))
+        logger.debug("Rank %d: embedding replicated (not sharded) on %s.", rank, device_str)
 
     # -- replicate LM head + all-reduce wrapper -----------------------------
     if config.replicate_lm_head and lm_head is not None:
@@ -436,8 +446,8 @@ def apply_tensor_parallelism(
                 )
 
     # -- move model to the correct device ----------------------------------
-    model.to(rank)
-    logger.info("Rank %d: model sharded and moved to GPU %d.", rank, rank)
+    model.to(torch.device(device_str))
+    logger.info("Rank %d: model sharded and moved to %s.", rank, device_str)
 
     return model
 

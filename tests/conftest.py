@@ -1,10 +1,20 @@
 import json
 import os
+import warnings
 import pytest
 from pathlib import Path
 
 TESTS_DIR = Path(__file__).parent
 FIXTURE_DIR = TESTS_DIR / "fixtures"
+
+# ---------------------------------------------------------------------------
+# Strict fixtures mode — set TR_STRICT_FIXTURES=1 to fail tests when real
+# data is unavailable, instead of silently falling back to auto-generated
+# synthetic garbage that produces green CI with zero signal.
+# ---------------------------------------------------------------------------
+_STRICT_FIXTURES = os.environ.get("TR_STRICT_FIXTURES", "").lower() in (
+    "1", "true", "yes", "on",
+)
 
 # ---------------------------------------------------------------------------
 # Paths to REAL project data -- these are the primary sources for tests.
@@ -25,12 +35,42 @@ _FIXTURE_GOLDEN_JSONL = FIXTURE_DIR / "golden_en_tr.jsonl"
 _LAST_RESORT_NUM_DOCS = 100
 
 
+def _fail_or_warn_on_fallback(fixture_name: str, real_path: Path, fixture_path: Path):
+    """Fail in strict mode, warn otherwise when falling back to auto-generated data.
+
+    In strict mode (TR_STRICT_FIXTURES=1), tests fail immediately when real data
+    is unavailable.  This prevents silently passing tests on synthetic data that
+    produces meaningless green CI results.
+    """
+    msg = (
+        f"{fixture_name} has no real data available. "
+        f"Real data not found at {real_path}. "
+        f"Fixture not found at {fixture_path}. "
+    )
+    if _STRICT_FIXTURES:
+        pytest.fail(
+            msg + "TR_STRICT_FIXTURES=1 is set — refusing to generate synthetic data."
+        )
+    warnings.warn(
+        msg + "Auto-generating synthetic data. Results are MEANINGLESS.",
+        UserWarning,
+        stacklevel=3,
+    )
+
+
 def _auto_generate_jsonl(path, num_docs):
     """LAST RESORT: auto-generate a synthetic JSONL fixture.
 
     WARNING: Tests backed by auto-generated data are NOT meaningful.
     Delete the generated file and provide real data before trusting results.
     """
+    warnings.warn(
+        f"Auto-generating synthetic JSONL fixture at {path!s}. "
+        f"Tests backed by auto-generated data are NOT meaningful. "
+        f"Provide real data at data/input/ or tests/fixtures/.",
+        UserWarning,
+        stacklevel=2,
+    )
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         for i in range(num_docs):
@@ -55,6 +95,13 @@ def _auto_generate_jsonl_gz(path, num_docs):
     WARNING: Tests backed by auto-generated data are NOT meaningful.
     Delete the generated file and provide real data before trusting results.
     """
+    warnings.warn(
+        f"Auto-generating synthetic gzipped JSONL fixture at {path!s}. "
+        f"Tests backed by auto-generated data are NOT meaningful. "
+        f"Provide real data at data/input/ or tests/fixtures/.",
+        UserWarning,
+        stacklevel=2,
+    )
     import gzip
 
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -132,6 +179,9 @@ def sample_jsonl_path():
         return str(_FIXTURE_INPUT_JSONL)
 
     # 3 -- LAST RESORT (generates meaningless data)
+    _fail_or_warn_on_fallback(
+        "sample_jsonl_path", _REAL_FINEWEB_GZ, _FIXTURE_INPUT_JSONL,
+    )
     return _auto_generate_jsonl(_FIXTURE_INPUT_JSONL, _LAST_RESORT_NUM_DOCS)
 
 
@@ -155,6 +205,9 @@ def sample_jsonl_gz_path():
         return str(_FIXTURE_INPUT_GZ)
 
     # 3 -- LAST RESORT (generates meaningless data)
+    _fail_or_warn_on_fallback(
+        "sample_jsonl_gz_path", _REAL_FINEWEB_GZ, _FIXTURE_INPUT_GZ,
+    )
     return _auto_generate_jsonl_gz(_FIXTURE_INPUT_GZ, _LAST_RESORT_NUM_DOCS)
 
 

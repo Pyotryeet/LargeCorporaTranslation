@@ -10,6 +10,7 @@ import torch
 
 VERSION = "3.6"
 
+# Canonical PEP 396 attribute — equivalent to VERSION (kept for compatibility).
 __version__ = VERSION
 __version_info__: tuple[int, ...] = tuple(int(p) for p in VERSION.split("."))
 

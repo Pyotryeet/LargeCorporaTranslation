@@ -82,10 +82,22 @@ class TestSafeModeFlagPropagation:
         assert params["safe_mode"].default is False
 
     def test_cli_parser_has_safe_mode_flag(self):
-        """--safe-mode is registered as a CLI flag."""
-        import argparse
-        # Verify the CLI parser accepts --safe-mode.
-        parser = argparse.ArgumentParser()
-        parser.add_argument("--safe-mode", action="store_true")
-        args = parser.parse_args(["--safe-mode"])
-        assert args.safe_mode is True
+        """--safe-mode is registered as a CLI flag in the real benchmark parser."""
+        # Test the actual benchmark CLI parser, not a fresh argparse stub.
+        # We cannot call main() directly (it creates a BenchmarkHarness and
+        # requires a config file), so we inspect the source of the main()
+        # function to verify --safe-mode is registered and wired correctly.
+        import inspect
+        from benchmark.__main__ import main
+
+        source = inspect.getsource(main)
+        assert "--safe-mode" in source, (
+            "--safe-mode not found in benchmark.__main__.main() parser definition"
+        )
+        assert 'action="store_true"' in source.split("--safe-mode")[1][:100], (
+            "--safe-mode must be a store_true flag"
+        )
+        # Verify the flag maps to safe_mode= in the harness constructor.
+        assert "safe_mode=args.safe_mode" in source, (
+            "--safe-mode must propagate to BenchmarkHarness(safe_mode=...)"
+        )

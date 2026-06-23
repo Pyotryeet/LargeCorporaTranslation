@@ -218,8 +218,55 @@ class TRTEngineBuilder:
 
             return str(engine_path)
 
-        except (RuntimeError, trt.Error if HAS_TRT else Exception) as e:
-            logger.error("TensorRT engine build FAILED: %s", e, exc_info=True)
+        except Exception as e:
+            # Provide an actionable diagnostic tailored to common failure modes.
+            err_msg = str(e).lower()
+            hints = []
+            if "out of memory" in err_msg or "oom" in err_msg:
+                hints.append(
+                    "GPU out of memory — reduce max_batch or max_input_tokens, "
+                    "or lower workspace limit via "
+                    "config.set_memory_pool_limit(trt.MemoryPoolType.WORKSPACE, N)."
+                )
+            elif "onnx" in err_msg:
+                hints.append(
+                    "ONNX export/parse error — check that the model supports "
+                    "torch.onnx.export (no data-dependent control flow, no "
+                    "custom autograd functions).  Use opset_version=17 or later."
+                )
+            elif "cuda" in err_msg or "cudnn" in err_msg or "nvcc" in err_msg:
+                hints.append(
+                    "CUDA/TensorRT compatibility error — verify that the "
+                    "installed TensorRT version matches the CUDA toolkit "
+                    "(tensorrt>=10.0 requires CUDA 12.4+)."
+                )
+            elif "calibration" in err_msg or "calibrat" in err_msg:
+                hints.append(
+                    "Calibration failed — ensure calibration_data provides "
+                    "100+ representative text samples covering the expected "
+                    "input distribution (diverse sentence lengths, punctuation, "
+                    "special tokens)."
+                )
+            elif "serialized" in err_msg or "returned none" in err_msg:
+                hints.append(
+                    "Builder returned None — usually caused by an unsupported "
+                    "op in the ONNX graph.  Inspect ONNX with "
+                    "'onnx.checker.check_model()' and verify all ops are "
+                    "in the TensorRT operator support matrix."
+                )
+            hint_text = " " + " ".join(hints) if hints else ""
+            logger.error(
+                "TensorRT engine build FAILED for model_path=%r precision=%s "
+                "max_batch=%d max_input=%d max_output=%d: %s.%s",
+                model_path,
+                precision,
+                max_batch,
+                max_input_tokens,
+                max_output_tokens,
+                e,
+                hint_text,
+                exc_info=True,
+            )
             # Clean up partial engine.
             engine_path.unlink(missing_ok=True)
             return None
@@ -307,8 +354,25 @@ class TRTEngineBuilder:
             return onnx_path
 
         except (RuntimeError, ValueError, TypeError) as e:
-            logger.error("ONNX export failed: %s", e)
-            return None
+            err_msg = str(e).lower()
+            hints = []
+            if "trace" in err_msg or "dynamic" in err_msg:
+                hints.append(
+                    "The model may contain data-dependent control flow or "
+                    "dynamic shapes unsupported by torch.onnx.export.  "
+                    "Try wrapping the forward pass to use static shapes."
+                )
+            elif "dtype" in err_msg or "type" in err_msg:
+                hints.append(
+                    "Unsupported dtype in model parameters or inputs.  "
+                    "Ensure all tensors are float32 or float16 — bfloat16 "
+                    "is not supported by ONNX opset 17."
+                )
+            if hints:
+                logger.error("ONNX export failed: %s.  %s", e, "  ".join(hints))
+            else:
+                logger.error("ONNX export failed (max_batch=%d, max_input=%d): %s",
+                             max_batch, max_input, e)
 
     def _build_trt_engine(
         self,
