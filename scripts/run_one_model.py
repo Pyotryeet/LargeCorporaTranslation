@@ -82,17 +82,28 @@ def run_one_model(model_def: dict) -> dict:
 
     t0 = time.monotonic()
 
-    engine = InferenceEngine(
-        model_path=path, tokenizer_path="",
-        device_info=plat,
-        decoding_params=DecodingParams(max_new_tokens=128, temperature=0.0),
-        use_flash_attention=is_cuda,
-        use_torch_compile=is_cuda,  # CUDA: compile ON, MPS/CPU: OFF
-        max_input_tokens=128,
-        backend_type=be_type,
-        extra=extra,
-    )
-    engine.load()
+    try:
+        engine = InferenceEngine(
+            model_path=path, tokenizer_path="",
+            device_info=plat,
+            decoding_params=DecodingParams(max_new_tokens=128, temperature=0.0),
+            use_flash_attention=is_cuda,
+            use_torch_compile=is_cuda,  # CUDA: compile ON, MPS/CPU: OFF
+            max_input_tokens=128,
+            backend_type=be_type,
+            extra=extra,
+        )
+        engine.load()
+    except Exception as e:
+        load_s = time.monotonic() - t0
+        err_msg = str(e)[:300]
+        print(f"  ✗ Load failed after {load_s:.1f}s: {err_msg}")
+        return {
+            "model": name, "model_path": path, "backend_type": be_type,
+            "error": f"Load: {err_msg}", "load_seconds": round(load_s, 1),
+            "mean_tps": 0, "batches_completed": 0, "total_tokens_translated": 0,
+            "platform": plat.backend,
+        }
     load_s = time.monotonic() - t0
     print(f"  Loaded in {load_s:.1f}s")
 
@@ -101,10 +112,14 @@ def run_one_model(model_def: dict) -> dict:
         tuner = BatchSizeTuner()
         batch_size = tuner.tune(engine.model, engine.tokenizer,
                                plat.device, plat.backend, 128)
-        max_bs = 128 if is_cuda else 4   # MPS: keep batch small to avoid MPSGraph shader bloat
-        batch_size = min(batch_size, max_bs)
+        if is_cuda:
+            # H200: let the tuner decide — GPU memory is the real limit
+            # tuner caps at ~256 based on KV-cache performance model
+            batch_size = max(batch_size, 128)  # floor: at least 128 on 140 GB GPU
+        else:
+            batch_size = min(batch_size, 4)
     except Exception:
-        batch_size = 4 if is_cuda else 1
+        batch_size = 128 if is_cuda else 1
     print(f"  Batch size: {batch_size}")
 
     # Warmup
@@ -114,12 +129,14 @@ def run_one_model(model_def: dict) -> dict:
     except Exception as e:
         print(f"  Warmup warning: {e}")
 
-    # Translation loop
+    # Translation loop — more tokenization workers on CUDA to feed the GPU
     loader = JSONLLoader([INPUT_GLOB], shuffle=True, seed=SEED)
     chunker = TextChunker(engine.tokenizer, 128, 50)
     filt = ChunkFilter(min_tokens=10, max_garbage_ratio=0.95)
+    n_workers = 8 if is_cuda else 2
     pipeline = AsyncPipeline(loader, chunker, engine.tokenizer, filt,
-                            batch_size=batch_size, prefetch_workers=2,
+                            batch_size=batch_size, prefetch_workers=n_workers,
+                            max_queue_size=64 if is_cuda else 32,
                             backend=plat.backend)
 
     run_dir = Path("data/output") / f"bm_{name.replace(' ','_').replace('/','_')}"

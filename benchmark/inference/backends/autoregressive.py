@@ -510,19 +510,21 @@ def _try_load_qat_model(
     except Exception as e:
         logger.debug("HF native QAT load failed: %s — trying fallback", e)
 
-    # ── Path 3: Standard fallback ──
+    # ── Path 3: Standard fallback via _load_model_with_fallback ──
     # If all quantized paths fail, load as standard BF16/FP16 weights.
-    # QAT-CT models will succeed here since they use standard weight formats.
+    # Uses _load_model_with_fallback which tries AutoModel then falls back
+    # to direct class import — handles new architectures (gemma4) not yet
+    # in AutoModel's config mapping for the installed transformers version.
+    # QAT-CT models use standard BF16 weight formats and should succeed here.
     try:
-        model = AutoModelForCausalLM.from_pretrained(
-            model_path,
-            torch_dtype=dtype,
+        model = _load_model_with_fallback(
+            model_path, dtype,
             trust_remote_code=False,
             low_cpu_mem_usage=True,
             device_map=device_map or "auto" if backend_name == "cuda" else None,
             **_local_kwargs(model_path),
         )
-        logger.info("QAT model loaded via standard path (BF16/FP16)")
+        logger.info("QAT model loaded via _load_model_with_fallback (BF16/FP16)")
         return model
     except Exception as e:
         logger.error("All QAT loading paths failed for %s: %s", model_path, e)
@@ -1053,7 +1055,16 @@ class AutoregressiveBackend(InferenceBackend):
                 parent_name, _, child_name = name.rpartition(".")
                 parent = self.model.get_submodule(parent_name) if parent_name else self.model
                 replacement = FusedRMSNorm(weight, eps)
-                torch.nn.utils.parametrize.remove_parametrizations(original, tensor_name="weight", leave_parametrized=False)
+                # remove_parametrizations cleans up any existing parametrizations
+                # before module replacement.  With FP8 te.Linear active, some
+                # modules may not have parametrizations — ValueError is safe to
+                # ignore (nothing to clean up).
+                try:
+                    torch.nn.utils.parametrize.remove_parametrizations(
+                        original, tensor_name="weight", leave_parametrized=False,
+                    )
+                except ValueError:
+                    pass
                 setattr(parent, child_name, replacement)
                 # NOTE: we intentionally do NOT keep a reference to the original
                 # module.  There is no fallback code path, and retaining it doubles
