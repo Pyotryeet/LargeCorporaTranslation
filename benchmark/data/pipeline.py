@@ -39,7 +39,7 @@ _TEMPLATE_WARNED: set[str] = set()
 # 256k-entry dict from the SentencePiece C++ backend and take ~200 ms.  Caching
 # the result per tokenizer identity avoids O(N_chunks × N_threads) overhead.
 # Values: "nllb" | "madlad" | "chat" | "plain"
-_PROMPT_STYLE: dict[int, str] = {}
+_PROMPT_STYLE: dict[str, str] = {}
 
 # ── Module-level constants (imported from central constants) ─────────────────
 _LOADER_JOIN_TIMEOUT = LOADER_JOIN_TIMEOUT
@@ -187,8 +187,12 @@ class AsyncPipeline:
             self._pinned_pool = PinnedBufferPool(batch_size, self.max_input_tokens, pool_size=4)
 
         # — Queues —
-        self._raw_queue: queue.Queue = queue.Queue(maxsize=max_queue_size)
-        self._tokenised_queue: queue.Queue = queue.Queue(maxsize=max_queue_size * 4)
+        # Auto-clamp: tokenised_queue must hold ≥ batch_size items or the
+        # pipeline deadlocks (producers fill queue then block on put(),
+        # consumer waits for batch_size items that can never arrive).
+        _min_q = max(max_queue_size, batch_size // 4 + 1)
+        self._raw_queue: queue.Queue = queue.Queue(maxsize=_min_q)
+        self._tokenised_queue: queue.Queue = queue.Queue(maxsize=_min_q * 4)
 
         # — Threading —
         self._loader_thread: Optional[threading.Thread] = None
@@ -508,8 +512,11 @@ class AsyncPipeline:
         materialises a 256k-entry dict from SentencePiece) on every chunk.
         """
 
-        # ── Classify tokenizer once (cache by object id → cheap, thread-safe) ──
-        tok_key = id(tokenizer)
+        # ── Classify tokenizer once — use name_or_path as a stable key. ──
+        # id(tokenizer) varies per thread when workers call _get_tokenizer()→
+        # AutoTokenizer.from_pretrained() (creates a new object per thread).
+        # name_or_path is the same HuggingFace model ID for all threads.
+        tok_key = getattr(tokenizer, 'name_or_path', '') or str(hash(tokenizer.__class__.__name__))
         style = _PROMPT_STYLE.get(tok_key)
         if style is None:
             if hasattr(tokenizer, 'src_lang') and tokenizer.src_lang is not None:
@@ -633,6 +640,19 @@ class AsyncPipeline:
                 with self._chunk_counter_lock:
                     self.total_chunks_produced += 1
                 chunk_produced += 1
-                self._tokenised_queue.put((text, token_ids, token_count))
+                # put() with timeout — if the queue is full and the pipeline
+                # is shutting down, the worker must detect _running=False and exit.
+                # Blocking put() with no timeout creates a deadlock: all workers
+                # stuck on a full queue never check _running or see sentinels.
+                while self._running.is_set():
+                    try:
+                        self._tokenised_queue.put(
+                            (text, token_ids, token_count), timeout=1.0,
+                        )
+                        break
+                    except queue.Full:
+                        pass  # retry: check _running flag
+                if not self._running.is_set():
+                    break  # shutdown
 
         logger.debug("Tokenizer worker exiting after %d chunks", chunk_produced)

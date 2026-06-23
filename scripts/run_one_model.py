@@ -117,7 +117,15 @@ def run_one_model(model_def: dict) -> dict:
         tuner = BatchSizeTuner()
         batch_size = tuner.tune(engine.model, engine.tokenizer,
                                plat.device, plat.backend, 128)
-        if not is_cuda:
+        if is_enc_dec and is_cuda:
+            # Encoder-decoder models (NLLB, MADLAD) use 256k-vocab SentencePiece
+            # tokenizers that bottleneck at ~15 chunks/sec under GIL.  At bs=1740
+            # the first batch takes >120s to assemble — the entire benchmark window
+            # is consumed by tokenization, GPU sits idle, and the while-loop guard
+            # silently discards the batch after timer.elapsed() exceeds RUN_DURATION.
+            # Cap at 512 — fills in ~34s, leaves 86s for actual translation.
+            batch_size = min(batch_size, 512)
+        elif not is_cuda:
             batch_size = min(batch_size, 4)
     except Exception:
         batch_size = 128 if is_cuda else 1
@@ -139,17 +147,11 @@ def run_one_model(model_def: dict) -> dict:
     loader = JSONLLoader([INPUT_GLOB], shuffle=True, seed=SEED)
     chunker = TextChunker(engine.tokenizer, 128, 50)
     filt = ChunkFilter(min_tokens=10, max_garbage_ratio=0.95)
-    # Encoder-decoder tokenizers (NLLB, MADLAD) have 256k-vocab SentencePiece
-    # that's ~10× slower than 32k-vocab LLaMA tokenizers.  At batch_size=1740
-    # we need ~109 worker-seconds to fill one batch.  Scale workers and queue
-    # depth to match: queue must hold ≥ 2× batch_size or tokenization blocks.
-    is_enc_dec = be_type == "encoder_decoder"
-    n_workers = 32 if is_enc_dec else (8 if is_cuda else 2)
-    # Queue depth: tokenised_queue = max_queue_size * 4.  Must be > batch_size.
-    queue_depth = max(batch_size * 2 // 4 + 1, 64)
+    # Encoder-decoder tokenizers (NLLB, MADLAD) need more workers for their
+    # 256k-vocab SentencePiece — ~10× slower than 32k-vocab LLaMA tokenizers.
+    n_workers = 16 if is_enc_dec else (8 if is_cuda else 2)
     pipeline = AsyncPipeline(loader, chunker, engine.tokenizer, filt,
                             batch_size=batch_size, prefetch_workers=n_workers,
-                            max_queue_size=queue_depth,
                             backend=plat.backend)
 
     # Pre-buffer: start tokenization 10s before the timer so the first
