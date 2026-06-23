@@ -112,6 +112,16 @@ class BatchSizeTuner:
 
             # ── Performance-model initial guess ──
             # Skip when GPU detection failed (total_mem_gb=0 would collapse cap to 1).
+            # NOTE: The performance model provides an informational estimate but does
+            # NOT cap the binary search.  The model systematically overestimates
+            # per‑sequence KV‑cache because: (a) KV_CACHE_MAX_SEQ_LEN=512 but the
+            # actual test uses max_input_tokens=128 with TEST_GENERATION_TOKENS=10
+            # → 138 max total tokens, and (b) most sequences hit EOS early.
+            # Capping at the estimate prevented the OOM binary search from finding
+            # the TRUE limit — on H200 with NLLB‑600M, est=559 but actual capacity
+            # was 1600+ (only 29 GB of 210 GB used at bs=475).
+            # The estimate is logged for diagnostics; the binary search (below)
+            # tests up to |cap| and finds the real OOM boundary.
             if total_mem_gb > 0:
                 # Try to read actual model config for accurate KV-cache estimate.
                 try:
@@ -135,28 +145,33 @@ class BatchSizeTuner:
                         h_dim = cfg.hidden_size // max(n_attn, 1)
                     h_dim = h_dim or KV_CACHE_HEAD_DIM
 
+                    # Use the actual test sequence length for the estimate, not 512.
+                    # The tuner's _test_batch uses max_input_tokens + TEST_GENERATION_TOKENS.
+                    test_seq_len = min(max_input_tokens + TEST_GENERATION_TOKENS, KV_CACHE_MAX_SEQ_LEN)
                     kv_per_seq = (n_layers * KV_CACHE_KV_FACTOR *
                                   n_kv_heads * h_dim *
-                                  KV_CACHE_MAX_SEQ_LEN * KV_CACHE_BYTES_PER_ELEM)
+                                  test_seq_len * KV_CACHE_BYTES_PER_ELEM)
                     usable_mem = total_mem_gb * (1024**3) * mem_frac
                     est = int(usable_mem / kv_per_seq) if kv_per_seq > 0 else cap
-                    cap = min(cap, max(est, MIN_BATCH_SIZE))
                     logger.info(
                         "Performance model (from config): n_layers=%d n_kv_heads=%d "
-                        "head_dim=%d → kv_per_seq=%.1fMB → est_cap=%d",
-                        n_layers, n_kv_heads, h_dim, kv_per_seq / BYTES_PER_MB, cap,
+                        "head_dim=%d test_seq_len=%d → kv_per_seq=%.1fMB → est=%d "
+                        "(informational — binary search uncapped)",
+                        n_layers, n_kv_heads, h_dim, test_seq_len,
+                        kv_per_seq / BYTES_PER_MB, est,
                     )
                 except Exception:
                     # Fallback to hardcoded defaults.
+                    test_seq_len = min(max_input_tokens + TEST_GENERATION_TOKENS, KV_CACHE_MAX_SEQ_LEN)
                     kv_per_seq = (KV_CACHE_NUM_LAYERS * KV_CACHE_KV_FACTOR *
                                   KV_CACHE_NUM_KV_HEADS * KV_CACHE_HEAD_DIM *
-                                  KV_CACHE_MAX_SEQ_LEN * KV_CACHE_BYTES_PER_ELEM)
+                                  test_seq_len * KV_CACHE_BYTES_PER_ELEM)
                     usable_mem = total_mem_gb * (1024**3) * mem_frac
                     est = int(usable_mem / kv_per_seq) if kv_per_seq > 0 else cap
-                    cap = min(cap, max(est, MIN_BATCH_SIZE))
                     logger.info(
-                        "Performance model (defaults): kv_per_seq=%.1fMB, est_cap=%d",
-                        kv_per_seq / BYTES_PER_MB, cap,
+                        "Performance model (defaults): kv_per_seq=%.1fMB, est=%d "
+                        "(informational — binary search uncapped)",
+                        kv_per_seq / BYTES_PER_MB, est,
                     )
         else:
             cap = self._default_max_mps

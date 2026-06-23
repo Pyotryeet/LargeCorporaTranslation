@@ -182,23 +182,73 @@ class NLLBBackend(InferenceBackend):
             from benchmark.config.constants import (
                 GPU_MEMORY_BUDGET_FRACTION, GPU_MEMORY_RESERVE_BYTES,
             )
-            max_memory = {}
-            for i in range(self.device_info.num_devices if self.device_info else 1):
-                total = torch.cuda.get_device_properties(i).total_memory
-                usable = max(
-                    int(total * GPU_MEMORY_BUDGET_FRACTION) - GPU_MEMORY_RESERVE_BYTES,
-                    4 * 1024 ** 3,
+            n_devs = self.device_info.num_devices if self.device_info else 1
+
+            # ── Single-GPU optimisation for small models ──
+            # device_map="auto" splits even a 615M-parameter model across
+            # 2 GPUs, creating a pipeline bubble: GPU 0 runs the encoder,
+            # GPU 1 runs the decoder, and they take turns being idle.
+            # For models that fit comfortably on one GPU (< 5 GB in FP8),
+            # load onto a single device to eliminate the inter‑GPU bubble
+            # and keep both encoder + compute on the same GPU.
+            single_gpu = False
+            if n_devs > 1:
+                try:
+                    from transformers import AutoConfig as _AutoConfig
+                    _cfg = _AutoConfig.from_pretrained(
+                        self.model_path, trust_remote_code=False,
+                        **_local_kwargs(self.model_path),
+                    )
+                    # Rough size estimate from config: hidden_size² × layers × 4
+                    # (Q/K/V/O projections) + MLP (hidden × intermediate × 2)
+                    # + embedding (vocab × hidden).  Conservative — overestimates.
+                    _h = getattr(_cfg, "hidden_size", 0) or getattr(_cfg, "d_model", 1024)
+                    _n = getattr(_cfg, "num_hidden_layers", 0) or getattr(_cfg, "decoder_layers", 12)
+                    _i = getattr(_cfg, "intermediate_size", 0) or getattr(_cfg, "ffn_dim", 4 * _h)
+                    _est_params = (4 * _h * _h * _n + 3 * _h * _i * _n)  # attn + MLP
+                    _est_bytes = _est_params * 2  # BF16 bytes
+                    single_gpu_mem = torch.cuda.get_device_properties(0).total_memory
+                    # Use ≤ 10 % of one GPU for the model itself.
+                    single_gpu = _est_bytes < single_gpu_mem * 0.10
+                except Exception:
+                    single_gpu = False
+
+            if single_gpu:
+                _est_mb = _est_bytes / (1024**2)
+                _gpu_gb = single_gpu_mem / (1024**3)
+                logger.info(
+                    "Single-GPU mode: model fits on one GPU "
+                    "(est %.0f MB on %d× %.0f GB GPUs)",
+                    _est_mb, n_devs, _gpu_gb,
                 )
-                max_memory[i] = usable
-            self.model = AutoModelForSeq2SeqLM.from_pretrained(
-                self.model_path,
-                torch_dtype=dtype,
-                trust_remote_code=False,
-                low_cpu_mem_usage=True,
-                device_map="auto",
-                max_memory=max_memory,
-                **_local_kwargs(self.model_path),
-            )
+                self.model = AutoModelForSeq2SeqLM.from_pretrained(
+                    self.model_path,
+                    torch_dtype=dtype,
+                    trust_remote_code=False,
+                    low_cpu_mem_usage=True,
+                    # Explicit None → no sharding, load to device 0.
+                    device_map=None,
+                    **_local_kwargs(self.model_path),
+                )
+                self.model = self.model.to(self.devices[0])
+            else:
+                max_memory = {}
+                for i in range(n_devs):
+                    total = torch.cuda.get_device_properties(i).total_memory
+                    usable = max(
+                        int(total * GPU_MEMORY_BUDGET_FRACTION) - GPU_MEMORY_RESERVE_BYTES,
+                        4 * 1024 ** 3,
+                    )
+                    max_memory[i] = usable
+                self.model = AutoModelForSeq2SeqLM.from_pretrained(
+                    self.model_path,
+                    torch_dtype=dtype,
+                    trust_remote_code=False,
+                    low_cpu_mem_usage=True,
+                    device_map="auto",
+                    max_memory=max_memory,
+                    **_local_kwargs(self.model_path),
+                )
         elif self.backend_name == "mps":
             try:
                 self.model = AutoModelForSeq2SeqLM.from_pretrained(
