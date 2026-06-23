@@ -503,60 +503,76 @@ class AsyncPipeline:
     def _build_translation_prompt(text: str, tokenizer) -> str:
         """Wrap raw English text in the model's translation prompt format.
 
-        For decoder-only models (TranslateGemma, LLaMA):
-          Uses the tokenizer's native chat template to instruct the model
-          that this is an en→tr translation task.
-
-        For encoder-decoder models (NLLB, M2M100, MADLAD-400):
-          Returns the raw text with language-control prefix where needed.
-          NLLB/M2M100 tokenizers have ``src_lang`` set and handle the
-          language prefix automatically.  MADLAD-400 uses a ``<2tr>``
-          prefix token to indicate the target language.
+        The prompt style is detected once per tokenizer identity and cached.
+        Avoids expensive operations like ``tokenizer.get_vocab()`` (which
+        materialises a 256k-entry dict from SentencePiece) on every chunk.
         """
-        # NLLB / M2M100: tokenizer handles language prefix via src_lang.
-        if hasattr(tokenizer, 'src_lang') and tokenizer.src_lang is not None:
-            return text
 
-        # MADLAD-400: T5-based encoder-decoder.  Language is indicated by
-        # a ``<2xx>`` token prepended to the source text (ISO 639-2 code
-        # mapped to a T5 sentinel token).  ``<2tr>`` = Turkish.
-        # Detection: MADLAD's tokenizer has ``<2tr>`` in its vocabulary.
-        try:
-            vocab = tokenizer.get_vocab()
-            if "<2tr>" in vocab:
-                return "<2tr> " + text
-        except (AttributeError, TypeError):
-            pass
+        # ── Classify tokenizer once (cache by object id → cheap, thread-safe) ──
+        tok_key = id(tokenizer)
+        style = _PROMPT_STYLE.get(tok_key)
+        if style is None:
+            if hasattr(tokenizer, 'src_lang') and tokenizer.src_lang is not None:
+                style = "nllb"
+            else:
+                # Check for MADLAD-400: has '<2tr>' in vocabulary.
+                try:
+                    if "<2tr>" in tokenizer.get_vocab():
+                        style = "madlad"
+                    else:
+                        style = "unknown"  # probe further below
+                except (AttributeError, TypeError):
+                    style = "unknown"
 
-        # Decoder-only: try the translation chat template first.
-        msgs = [{
-            "role": "user",
-            "content": [{
-                "type": "text",
-                "source_lang_code": "en",
-                "target_lang_code": "tr",
-                "text": text,
-            }],
-        }]
-        try:
+            if style == "unknown":
+                # Not NLLB, not MADLAD — must be a decoder-only model.
+                # Try the chat template; if it fails, use plain text.
+                msgs = [{
+                    "role": "user",
+                    "content": [{
+                        "type": "text",
+                        "source_lang_code": "en",
+                        "target_lang_code": "tr",
+                        "text": text,
+                    }],
+                }]
+                try:
+                    tokenizer.apply_chat_template(
+                        msgs, tokenize=False, add_generation_prompt=True,
+                    )
+                    style = "chat"
+                except Exception:
+                    style = "plain"
+                    _model = getattr(tokenizer, 'name_or_path', '') or str(tok_key)
+                    if _model not in _TEMPLATE_WARNED:
+                        _TEMPLATE_WARNED.add(_model)
+                        logger.warning(
+                            "_build_translation_prompt: chat template failed for "
+                            "'%s' — falling back to plain text prefix.",
+                            _model,
+                        )
+
+            _PROMPT_STYLE[tok_key] = style
+
+        # ── Apply cached style ──
+        if style == "nllb":
+            return text  # tokenizer adds eng_Latn prefix automatically
+        elif style == "madlad":
+            return "<2tr> " + text
+        elif style == "chat":
+            msgs = [{
+                "role": "user",
+                "content": [{
+                    "type": "text",
+                    "source_lang_code": "en",
+                    "target_lang_code": "tr",
+                    "text": text,
+                }],
+            }]
             return tokenizer.apply_chat_template(
                 msgs, tokenize=False, add_generation_prompt=True,
             )
-        except Exception:
-            # Fallback: plain text with translation prefix.
-            # Works for SmolLM2, LLaMA 3, and other models without
-            # Gemma-specific chat template fields.
-            # Warn once per tokenizer (id-based; thread-safe since CPython
-            # dict writes are atomic for small keys).
-            _model = getattr(tokenizer, 'name_or_path', '') or str(id(tokenizer))
-            if _model not in _TEMPLATE_WARNED:
-                _TEMPLATE_WARNED.add(_model)
-                logger.warning(
-                    "_build_translation_prompt: chat template failed for model "
-                    "'%s' — falling back to plain text prefix. Only tracing "
-                    "once; subsequent failures are suppressed.",
-                    _model,
-                )
+        else:  # style == "plain"
             return f"Translate English to Turkish:\n{text}"
 
     def _tokeniser_loop(self) -> None:
