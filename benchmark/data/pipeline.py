@@ -33,6 +33,14 @@ logger = logging.getLogger(__name__)
 # Warn once per tokenizer identity instead of per chunk (which would flood).
 _TEMPLATE_WARNED: set[str] = set()
 
+# ── Per-tokenizer prompt-style cache ───────────────────────────────────────────
+# _build_translation_prompt probes tokenizer properties (has src_lang? is MADLAD?)
+# on every chunk.  Some probes — especially tokenizer.get_vocab() — materialise a
+# 256k-entry dict from the SentencePiece C++ backend and take ~200 ms.  Caching
+# the result per tokenizer identity avoids O(N_chunks × N_threads) overhead.
+# Values: "nllb" | "madlad" | "chat" | "plain"
+_PROMPT_STYLE: dict[int, str] = {}
+
 # ── Module-level constants (imported from central constants) ─────────────────
 _LOADER_JOIN_TIMEOUT = LOADER_JOIN_TIMEOUT
 _WORKER_JOIN_TIMEOUT = WORKER_JOIN_TIMEOUT

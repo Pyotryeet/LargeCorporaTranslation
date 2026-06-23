@@ -30,19 +30,15 @@ echo "  Started: $(date '+%Y-%m-%d %H:%M:%S')"
 echo "======================================================================"
 
 # ── Model list ──
-# Phase 1: NLLB family (proven EN→TR, fastest paths)
+# Phase 1: MADLAD-400 family (Google T5-based, 450-language MT)
 PYTHON_MODELS=(
-    "nllb_600m"
-    "nllb_1.3b"
-    "nllb_3.3b"
     "madlad_3b"
     "madlad_10b"
-    "smollm2"
-    "translategemma"
 )
 
-# Phase 2: Google QAT variants (Python backend)
-PYTHON_QAT_MODELS=(
+# Phase 2: Google Gemma models (autoregressive + QAT variants)
+PYTHON_MODELS+=(
+    "translategemma"
     "gemma_e2b_qat_w4a16_ct"
     "gemma_e4b_qat_w4a16_ct"
     "gemma_e2b_qat_mobile_transformers"
@@ -51,33 +47,29 @@ PYTHON_QAT_MODELS=(
     "gemma_e4b_qat_mobile_ct"
 )
 
-# Phase 3: llama.cpp GGUF — only on MPS where we have llama.cpp built
-LLAMA_MODELS=()
-if [ "$PLATFORM" = "mps" ]; then
-    echo "  (llama.cpp models skipped — Google QAT GGUF timed out on MPS)"
-fi
+# Phase 3: NLLB family (Meta/Facebook encoder-decoder, proven EN→TR)
+PYTHON_MODELS+=(
+    "nllb_600m"
+    "nllb_1.3b"
+    "nllb_3.3b"
+)
 
-TOTAL=$(( ${#PYTHON_MODELS[@]} + ${#PYTHON_QAT_MODELS[@]} + ${#LLAMA_MODELS[@]} ))
-echo "  Python (NLLB+AR): ${#PYTHON_MODELS[@]}"
-echo "  Python QAT:       ${#PYTHON_QAT_MODELS[@]}"
-echo "  llama.cpp GGUF:   ${#LLAMA_MODELS[@]}"
-echo "  Total:            $TOTAL"
+# Phase 4: SmolLM2 (HuggingFace open-source)
+PYTHON_MODELS+=(
+    "smollm2"
+)
 
-# ── Run Phase 1: Core Python models ──
+TOTAL=${#PYTHON_MODELS[@]}
+echo "  Total models: $TOTAL"
+echo "    MADLAD-400:     2"
+echo "    Google Gemma:    9"
+echo "    NLLB (Meta):     3"
+echo "    SmolLM2:         1"
+
+# ── Run all models ──
 for i in "${!PYTHON_MODELS[@]}"; do
     model="${PYTHON_MODELS[$i]}"
     idx=$((i + 1))
-    echo ""
-    echo "===== [$idx/$TOTAL] $model ====="
-    python -u scripts/run_one_model.py "$model" 2>&1 | tee "/tmp/bm_${model}.log" || true
-    python3 -c "import gc; gc.collect(); import torch; torch.cuda.empty_cache() if torch.cuda.is_available() else None" 2>/dev/null || true
-    sleep 2
-done
-
-# ── Run Phase 2: Python QAT models ──
-for i in "${!PYTHON_QAT_MODELS[@]}"; do
-    model="${PYTHON_QAT_MODELS[$i]}"
-    idx=$(( ${#PYTHON_MODELS[@]} + i + 1 ))
     echo ""
     echo "===== [$idx/$TOTAL] $model ====="
     python -u scripts/run_one_model.py "$model" 2>&1 | tee "/tmp/bm_${model}.log" || true
