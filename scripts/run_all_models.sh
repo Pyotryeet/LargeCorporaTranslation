@@ -29,36 +29,31 @@ echo "  Duration per model: 120s translation + BERTScore quality eval"
 echo "  Started: $(date '+%Y-%m-%d %H:%M:%S')"
 echo "======================================================================"
 
-# ── Model list ──
-# Phase 1: MADLAD-400 family (Google T5-based, 450-language MT)
+# ── Model list — most problematic first (fail fast), stable models last ──
+# Phase 1: Autoregressive (most crash-prone — FP8 + fused kernel + compile)
 PYTHON_MODELS=(
-    "madlad_3b"
-    "madlad_10b"
+    "smollm2"          # fused kernel + FP8 te.Linear crash risk
+    "translategemma"   # same FP8 crash risk
 )
 
-# Phase 2: Google Gemma models (autoregressive)
+# Phase 2: MADLAD-400 (encoder-decoder, stable now, but large downloads)
 PYTHON_MODELS+=(
-    "translategemma"
+    "madlad_3b"        # 3B — fast download, good test
+    "madlad_10b"       # 10B — 21GB download, slow
 )
 
-# Phase 3: NLLB family (Meta/Facebook encoder-decoder, proven EN→TR)
+# Phase 3: NLLB family (most reliable, proven EN→TR translators)
 PYTHON_MODELS+=(
-    "nllb_600m"
+    "nllb_600m"        # fastest TPS in class
     "nllb_1.3b"
     "nllb_3.3b"
 )
 
-# Phase 4: SmolLM2 (HuggingFace open-source)
-PYTHON_MODELS+=(
-    "smollm2"
-)
-
 TOTAL=${#PYTHON_MODELS[@]}
 echo "  Total models: $TOTAL"
-echo "    MADLAD-400:     2"
-echo "    Google Gemma:    9"
-echo "    NLLB (Meta):     3"
-echo "    SmolLM2:         1"
+echo "    Autoregressive (test first):  2"
+echo "    MADLAD-400:                   2"
+echo "    NLLB (Meta):                  3"
 
 # ── Run all models ──
 for i in "${!PYTHON_MODELS[@]}"; do
