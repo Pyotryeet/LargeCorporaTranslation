@@ -756,7 +756,7 @@ class AutoregressiveBackend(InferenceBackend):
         # inlined by inductor as part of the compiled graph.  If compile
         # runs first, the fused ops are injected into an already-compiled
         # model and each call incurs a graph break + dispatcher overhead.
-        if self._use_fused_kernels and self.backend_name == "cuda":
+        if self._use_fused_kernels and self.backend_name == "cuda" and not self.use_torch_compile:
             self._inject_fused_kernels()
 
         # ── 8. torch.compile + max-autotune (EXTREME) ──
@@ -1053,7 +1053,10 @@ class AutoregressiveBackend(InferenceBackend):
                 parent_name, _, child_name = name.rpartition(".")
                 parent = self.model.get_submodule(parent_name) if parent_name else self.model
                 replacement = FusedRMSNorm(weight, eps)
-                torch.nn.utils.parametrize.remove_parametrizations(original, tensor_name="weight", leave_parametrized=False)
+                try:
+                    torch.nn.utils.parametrize.remove_parametrizations(original, tensor_name="weight", leave_parametrized=False)
+                except ValueError:
+                    pass
                 setattr(parent, child_name, replacement)
                 # NOTE: we intentionally do NOT keep a reference to the original
                 # module.  There is no fallback code path, and retaining it doubles

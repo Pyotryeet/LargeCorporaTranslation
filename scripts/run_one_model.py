@@ -423,45 +423,6 @@ if __name__ == "__main__":
             "path": "google/translategemma-4b-it",
             "backend_type": "auto",
         },
-        # Google QAT mobile-ct (compressed-tensors, BF16 weights after training)
-        "gemma_e4b_qat_mobile_ct": {
-            "name": "Gemma-4-E4B-QAT-mobile-ct",
-            "path": "google/gemma-4-E4B-it-qat-mobile-ct",
-            "backend_type": "auto",
-            "extra": {"quantization": "bf16"},
-        },
-        "gemma_e2b_qat_mobile_ct": {
-            "name": "Gemma-4-E2B-QAT-mobile-ct",
-            "path": "google/gemma-4-E2B-it-qat-mobile-ct",
-            "backend_type": "auto",
-            "extra": {"quantization": "bf16"},
-        },
-        # Google QAT mobile-transformers (Q4_0 pre-quantised weights)
-        "gemma_e4b_qat_mobile_transformers": {
-            "name": "Gemma-4-E4B-QAT-mobile-transformers",
-            "path": "google/gemma-4-E4B-it-qat-mobile-transformers",
-            "backend_type": "auto",
-            "extra": {"quantization": "bf16"},
-        },
-        "gemma_e2b_qat_mobile_transformers": {
-            "name": "Gemma-4-E2B-QAT-mobile-transformers",
-            "path": "google/gemma-4-E2B-it-qat-mobile-transformers",
-            "backend_type": "auto",
-            "extra": {"quantization": "bf16"},
-        },
-        # Google QAT w4a16-ct (W4A16 compressed-tensors for vLLM/SGLang)
-        "gemma_e4b_qat_w4a16_ct": {
-            "name": "Gemma-4-E4B-QAT-w4a16-ct",
-            "path": "google/gemma-4-E4B-it-qat-w4a16-ct",
-            "backend_type": "auto",
-            "extra": {"quantization": "int4"},
-        },
-        "gemma_e2b_qat_w4a16_ct": {
-            "name": "Gemma-4-E2B-QAT-w4a16-ct",
-            "path": "google/gemma-4-E2B-it-qat-w4a16-ct",
-            "backend_type": "auto",
-            "extra": {"quantization": "int4"},
-        },
     }
 
     LLAMA_MODELS_DIR = Path.home() / "Documents/ComputerScience/Projects/llama/models"
