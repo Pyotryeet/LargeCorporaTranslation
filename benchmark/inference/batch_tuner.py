@@ -83,7 +83,17 @@ class BatchSizeTuner:
                 single_gpu_mem_gb = 0
                 total_mem_gb = 0
 
-            if single_gpu_mem_gb >= LARGE_GPU_THRESHOLD_GB:
+            # Safety: if GPU detection failed, use conservative defaults
+            # rather than computing usable_mem = 0 which collapses cap to 1.
+            if total_mem_gb <= 0:
+                cap = DEFAULT_MAX_CUDA_SMALL
+                mem_frac = MEMORY_USABLE_FRACTION_SMALL
+                logger.warning(
+                    "GPU memory detection failed — using conservative defaults: "
+                    "cap=%d, mem_frac=%.0f%%",
+                    cap, mem_frac * 100,
+                )
+            elif single_gpu_mem_gb >= LARGE_GPU_THRESHOLD_GB:
                 # H200-class: 141 GB per GPU — use high cap, high memory fraction.
                 cap = DEFAULT_MAX_CUDA  # 2048
                 mem_frac = MEMORY_USABLE_FRACTION  # 0.75
@@ -101,40 +111,53 @@ class BatchSizeTuner:
                 )
 
             # ── Performance-model initial guess ──
-            # Try to read actual model config for accurate KV-cache estimate.
-            try:
-                cfg = getattr(model, "config", None)
-                n_layers = getattr(cfg, "num_hidden_layers", None) or getattr(cfg, "decoder_layers", None) or KV_CACHE_NUM_LAYERS
-                n_kv_heads = getattr(cfg, "num_key_value_heads", None) or getattr(cfg, "num_attention_heads", None) or KV_CACHE_NUM_KV_HEADS
-                h_dim = getattr(cfg, "head_dim", None) or getattr(cfg, "d_model", None)
-                if h_dim is None and hasattr(cfg, "hidden_size"):
-                    n_attn = getattr(cfg, "num_attention_heads", None) or n_kv_heads
-                    h_dim = cfg.hidden_size // max(n_attn, 1)
-                h_dim = h_dim or KV_CACHE_HEAD_DIM
+            # Skip when GPU detection failed (total_mem_gb=0 would collapse cap to 1).
+            if total_mem_gb > 0:
+                # Try to read actual model config for accurate KV-cache estimate.
+                try:
+                    cfg = getattr(model, "config", None)
+                    n_layers = (
+                        getattr(cfg, "num_hidden_layers", None)
+                        or getattr(cfg, "decoder_layers", None)
+                        or KV_CACHE_NUM_LAYERS
+                    )
+                    n_kv_heads = (
+                        getattr(cfg, "num_key_value_heads", None)
+                        or getattr(cfg, "num_attention_heads", None)
+                        or KV_CACHE_NUM_KV_HEADS
+                    )
+                    h_dim = (
+                        getattr(cfg, "head_dim", None)
+                        or getattr(cfg, "d_model", None)
+                    )
+                    if h_dim is None and hasattr(cfg, "hidden_size"):
+                        n_attn = getattr(cfg, "num_attention_heads", None) or n_kv_heads
+                        h_dim = cfg.hidden_size // max(n_attn, 1)
+                    h_dim = h_dim or KV_CACHE_HEAD_DIM
 
-                kv_per_seq = (n_layers * KV_CACHE_KV_FACTOR *
-                              n_kv_heads * h_dim *
-                              KV_CACHE_MAX_SEQ_LEN * KV_CACHE_BYTES_PER_ELEM)
-                usable_mem = total_mem_gb * (1024**3) * mem_frac
-                est = int(usable_mem / kv_per_seq) if kv_per_seq > 0 else cap
-                cap = min(cap, max(est, MIN_BATCH_SIZE))
-                logger.info(
-                    "Performance model (from config): n_layers=%d n_kv_heads=%d head_dim=%d "
-                    "→ kv_per_seq=%.1fMB → est_cap=%d",
-                    n_layers, n_kv_heads, h_dim, kv_per_seq / BYTES_PER_MB, cap,
-                )
-            except Exception:
-                # Fallback to hardcoded defaults.
-                kv_per_seq = (KV_CACHE_NUM_LAYERS * KV_CACHE_KV_FACTOR *
-                              KV_CACHE_NUM_KV_HEADS * KV_CACHE_HEAD_DIM *
-                              KV_CACHE_MAX_SEQ_LEN * KV_CACHE_BYTES_PER_ELEM)
-                usable_mem = total_mem_gb * (1024**3) * mem_frac
-                est = int(usable_mem / kv_per_seq) if kv_per_seq > 0 else cap
-                cap = min(cap, max(est, MIN_BATCH_SIZE))
-                logger.info(
-                    "Performance model (defaults): kv_per_seq=%.1fMB, est_cap=%d",
-                    kv_per_seq / BYTES_PER_MB, cap,
-                )
+                    kv_per_seq = (n_layers * KV_CACHE_KV_FACTOR *
+                                  n_kv_heads * h_dim *
+                                  KV_CACHE_MAX_SEQ_LEN * KV_CACHE_BYTES_PER_ELEM)
+                    usable_mem = total_mem_gb * (1024**3) * mem_frac
+                    est = int(usable_mem / kv_per_seq) if kv_per_seq > 0 else cap
+                    cap = min(cap, max(est, MIN_BATCH_SIZE))
+                    logger.info(
+                        "Performance model (from config): n_layers=%d n_kv_heads=%d "
+                        "head_dim=%d → kv_per_seq=%.1fMB → est_cap=%d",
+                        n_layers, n_kv_heads, h_dim, kv_per_seq / BYTES_PER_MB, cap,
+                    )
+                except Exception:
+                    # Fallback to hardcoded defaults.
+                    kv_per_seq = (KV_CACHE_NUM_LAYERS * KV_CACHE_KV_FACTOR *
+                                  KV_CACHE_NUM_KV_HEADS * KV_CACHE_HEAD_DIM *
+                                  KV_CACHE_MAX_SEQ_LEN * KV_CACHE_BYTES_PER_ELEM)
+                    usable_mem = total_mem_gb * (1024**3) * mem_frac
+                    est = int(usable_mem / kv_per_seq) if kv_per_seq > 0 else cap
+                    cap = min(cap, max(est, MIN_BATCH_SIZE))
+                    logger.info(
+                        "Performance model (defaults): kv_per_seq=%.1fMB, est_cap=%d",
+                        kv_per_seq / BYTES_PER_MB, cap,
+                    )
         else:
             cap = self._default_max_mps
 

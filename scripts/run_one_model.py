@@ -107,16 +107,13 @@ def run_one_model(model_def: dict) -> dict:
     load_s = time.monotonic() - t0
     print(f"  Loaded in {load_s:.1f}s")
 
-    # Batch tuning — CUDA can handle much larger batches
+    # Batch tuning — tuner does a binary search OOM test and applies
+    # a 15% safety margin.  The returned batch_size is authoritative.
     try:
         tuner = BatchSizeTuner()
         batch_size = tuner.tune(engine.model, engine.tokenizer,
                                plat.device, plat.backend, 128)
-        if is_cuda:
-            # H200: let the tuner decide — GPU memory is the real limit
-            # tuner caps at ~256 based on KV-cache performance model
-            batch_size = max(batch_size, 128)  # floor: at least 128 on 140 GB GPU
-        else:
+        if not is_cuda:
             batch_size = min(batch_size, 4)
     except Exception:
         batch_size = 128 if is_cuda else 1
