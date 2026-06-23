@@ -198,9 +198,8 @@ def _build_batch(
             prompt = None
 
             if strategy is None:
-                # First text: probe which template style works.
+                # First text only: probe whether structured template works.
                 try:
-                    # Try TranslateGemma-style structured content with lang codes.
                     msgs = [{
                         "role": "user",
                         "content": [{
@@ -216,22 +215,32 @@ def _build_batch(
                     prompt = result if isinstance(result, str) else "".join(result)
                     strategy = "structured"
                     _strategy_cache[cache_key] = strategy
-                    logger.debug("Translation prompting: structured template succeeded")
-                except Exception as exc:
-                    logger.warning(
-                        "Translation prompting: structured template failed for "
-                        "tokenizer %s (%s) — falling back to plain text",
-                        type(tokenizer).__name__, exc, exc_info=True,
-                    )
-
-            if prompt is None and strategy in (None, "structured"):
-                # Structured template failed — use plain text prefix directly.
-                # SmolLM2 (GPT2TokenizerFast) cannot handle list-of-dict "content"
-                # in Jinja templates. Skip the second chat template attempt entirely.
-                prompt = f"Translate English to Turkish:\n{text}"
-                if strategy is None:
+                except Exception:
+                    # Structured template failed — cache "plain" so all subsequent
+                    # texts use the raw prefix without retrying.
                     strategy = "plain"
                     _strategy_cache[cache_key] = strategy
+
+            if prompt is None:
+                if strategy == "structured":
+                    # Regenerate structured template (works for this tokenizer).
+                    msgs = [{
+                        "role": "user",
+                        "content": [{
+                            "type": "text",
+                            "source_lang_code": "en",
+                            "target_lang_code": "tr",
+                            "text": text,
+                        }],
+                    }]
+                    result = tokenizer.apply_chat_template(
+                        msgs, tokenize=False, add_generation_prompt=True,
+                    )
+                    prompt = result if isinstance(result, str) else "".join(result)
+                else:
+                    # Strategy is "plain" (structured unavailable for this tokenizer)
+                    # or None (shouldn't happen — caught above).  Use raw prefix.
+                    prompt = f"Translate English to Turkish:\n{text}"
 
             prompted_sources.append(prompt)
     else:

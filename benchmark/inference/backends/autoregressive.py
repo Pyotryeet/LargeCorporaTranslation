@@ -1277,14 +1277,21 @@ class AutoregressiveBackend(InferenceBackend):
         # On MPS short sequences create throwaway MPSGraph compilations that
         # waste IOAccelerator memory (3-5 GB) with no benefit.
         if self.backend_name != "mps":
+            # FP8 Transformer Engine requires leading tensor dims to be
+            # multiples of 8.  With batch=1 and a short warmup sentence
+            # (~12-20 tokens), the product 1×12=12 fails the constraint.
+            # Use batch=8 as a minimum so all warmup paths are FP8-compatible.
+            warmup_bs_short = 8 if self.backend_name == "cuda" else 1
             logger.info(
-                "AR warmup Phase 1: short sequences — warming CUDA allocator "
+                "AR warmup Phase 1: short sequences (bs=%d) — warming CUDA allocator "
                 "(kernel compilation, memory pool growth, cuBLAS autotuning). "
                 "Forward outputs are discarded; these passes exist only to drive "
-                "the CUDA stack into a steady state before measured work begins."
+                "the CUDA stack into a steady state before measured work begins.",
+                warmup_bs_short,
             )
             txt = "This is a warm-up sentence for translation benchmarking."
-            ids = self.tokenizer.encode(txt, return_tensors="pt").to(device)
+            ids_single = self.tokenizer.encode(txt, return_tensors="pt").to(device)
+            ids = ids_single.repeat(warmup_bs_short, 1)
             mask = torch.ones_like(ids).to(device)
             for _ in range(max(batches // 2, WARMUP_SHORT_BATCHES)):
                 with torch.no_grad(), self._fp8_context():
@@ -1294,11 +1301,16 @@ class AutoregressiveBackend(InferenceBackend):
             logger.info("  Phase 1 (short): %.1fs", time.monotonic() - ws)
 
         # Phase 2: production-sized warmup — match the configured batch
-        # size so MPSGraph compilations are reusable in the translation loop.
+        # size so torch.compile CUDA graphs are reusable in the decode loop.
         warmup_bs = getattr(self, '_configured_batch_size', 1)
         if self.backend_name == "mps":
             warmup_bs = max(warmup_bs, 1)
             n_iters = 2  # one compile + one verify — more adds no benefit on MPS
+        elif self.backend_name == "cuda":
+            # FP8 TE Linear: batch must be divisible by 8.
+            if warmup_bs < 8:
+                warmup_bs = 8
+            n_iters = max(batches // 2, WARMUP_LONG_BATCHES)
         else:
             warmup_bs = 1
             n_iters = max(batches // 2, WARMUP_LONG_BATCHES)

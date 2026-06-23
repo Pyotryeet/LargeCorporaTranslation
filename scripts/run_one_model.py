@@ -227,7 +227,7 @@ def run_one_model(model_def: dict) -> dict:
             mb.raw_texts = srcs; mb.batch_id = 0
             tres = engine.translate(mb)
             hyps = [g.translated_text for g in tres.generations]
-            bs_r = compute_bertscore(srcs, hyps)
+            bs_r = compute_bertscore(refs, hyps)
             quality = {
                 "bertscore": bs_r.get("system_score"),
                 "num_references": len(refs),
