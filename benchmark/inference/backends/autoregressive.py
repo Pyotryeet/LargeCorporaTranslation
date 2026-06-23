@@ -751,12 +751,14 @@ class AutoregressiveBackend(InferenceBackend):
         if self.precision_config.uses_transformer_engine and not self._safe_mode:
             self._apply_te_fp8()
 
-        # ── 7. Fused kernel injection (EXTREME) ──
-        # MUST run BEFORE torch.compile so the Triton fused kernels are
-        # inlined by inductor as part of the compiled graph.  If compile
-        # runs first, the fused ops are injected into an already-compiled
-        # model and each call incurs a graph break + dispatcher overhead.
-        if self._use_fused_kernels and self.backend_name == "cuda" and not self.use_torch_compile:
+        # ── 7. Fused kernel injection (DISABLED — compile-incompatible) ──
+        # Custom Triton fused kernels (fused_ops.py) are ONLY safe inside
+        # torch.compile's inductor graph, which inlines them via the registered
+        # torch.library ops.  Without compile, the raw Triton launch fails with
+        # "Pointer argument cannot be accessed from Triton (cpu tensor?)".
+        # Since compile is disabled (PyTorch 2.11 cudagraph_trees regression),
+        # fused kernel injection is also disabled — eager PyTorch ops are used.
+        if False:  # was: self._use_fused_kernels and backend=="cuda" and not compile
             self._inject_fused_kernels()
 
         # ── 8. torch.compile + max-autotune (EXTREME) ──
