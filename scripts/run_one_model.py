@@ -38,6 +38,18 @@ RUN_DURATION = 120
 QUALITY_MAX_REFS = 32
 SEED = 42
 
+# Auto-detect data paths — check local first, then /data/ (H200 mount)
+def _find_file(relative: str) -> str:
+    if os.path.exists(relative):
+        return relative
+    alt = "/" + relative
+    if os.path.exists(alt):
+        return alt
+    return relative  # let the caller fail with a clear FileNotFoundError
+
+REFERENCE_SET = _find_file(REFERENCE_SET)
+# INPUT_GLOB handled by JSONLLoader which supports multiple patterns
+
 
 def run_one_model(model_def: dict) -> dict:
     """Run a single model and return TPS + quality results."""
@@ -50,11 +62,12 @@ def run_one_model(model_def: dict) -> dict:
     is_cuda = plat.backend == "cuda"
     is_mps = plat.backend == "mps"
 
-    # Platform-specific config
+    # Platform-specific config — single source of truth for warmup behavior.
+    # Model definitions do NOT set skip_warmup; the platform decides.
     if is_cuda:
-        extra["skip_warmup"] = False  # CUDA: full warmup for cuBLAS + graphs
+        extra["skip_warmup"] = False  # full warmup: cuBLAS autotuning + graph capture
     else:
-        extra["skip_warmup"] = True   # MPS/CPU: skip (IOAccelerator waste)
+        extra["skip_warmup"] = True   # MPS/CPU: skip (IOAccelerator waste on MPS)
 
     print(f"\n{'='*60}")
     print(f"  {name}")
@@ -88,7 +101,7 @@ def run_one_model(model_def: dict) -> dict:
         tuner = BatchSizeTuner()
         batch_size = tuner.tune(engine.model, engine.tokenizer,
                                plat.device, plat.backend, 128)
-        max_bs = 128 if is_cuda else 16
+        max_bs = 128 if is_cuda else 4   # MPS: keep batch small to avoid MPSGraph shader bloat
         batch_size = min(batch_size, max_bs)
     except Exception:
         batch_size = 4 if is_cuda else 1
@@ -221,6 +234,8 @@ def run_llama_model(model_def: dict) -> dict:
     is_diffusion = model_def.get("is_diffusion", False)
     hf_dl = model_def.get("hf_dl", "")
 
+    plat = detect_backend("auto")
+
     if not llama_bin.exists():
         return {"model": name, "error": f"Binary missing: {llama_bin}"}
     if not gguf_path.exists():
@@ -313,7 +328,7 @@ def run_llama_model(model_def: dict) -> dict:
         "total_tokens_translated": total_tokens,
         "run_duration_seconds": round(dur, 1),
         "bertscore": quality.get("bertscore"),
-        "platform": "mps",
+        "platform": plat.backend if plat else "unknown",
     }
 
 
@@ -331,71 +346,69 @@ if __name__ == "__main__":
             "name": "NLLB-200-distilled-600M",
             "path": "facebook/nllb-200-distilled-600M",
             "backend_type": "encoder_decoder",
-            "extra": {"nllb_source_lang": "eng_Latn", "nllb_target_lang": "tur_Latn", "num_beams": 1, "skip_warmup": True},
+            "extra": {"nllb_source_lang": "eng_Latn", "nllb_target_lang": "tur_Latn", "num_beams": 1},
         },
         "nllb_1.3b": {
             "name": "NLLB-200-distilled-1.3B",
             "path": "facebook/nllb-200-distilled-1.3B",
             "backend_type": "encoder_decoder",
-            "extra": {"nllb_source_lang": "eng_Latn", "nllb_target_lang": "tur_Latn", "num_beams": 1, "skip_warmup": True},
+            "extra": {"nllb_source_lang": "eng_Latn", "nllb_target_lang": "tur_Latn", "num_beams": 1},
         },
         "nllb_3.3b": {
             "name": "NLLB-200-3.3B",
             "path": "facebook/nllb-200-3.3B",
             "backend_type": "encoder_decoder",
-            "extra": {"nllb_source_lang": "eng_Latn", "nllb_target_lang": "tur_Latn", "num_beams": 1, "skip_warmup": True},
+            "extra": {"nllb_source_lang": "eng_Latn", "nllb_target_lang": "tur_Latn", "num_beams": 1},
         },
         # Autoregressive (proven translators)
         "smollm2": {
             "name": "SmolLM2-1.7B-Instruct",
             "path": "HuggingFaceTB/SmolLM2-1.7B-Instruct",
             "backend_type": "auto",
-            "extra": {"skip_warmup": True},
         },
         "translategemma": {
             "name": "TranslateGemma-4B",
             "path": "google/translategemma-4b-it",
             "backend_type": "auto",
-            "extra": {"skip_warmup": True},
         },
-        # ── Google QAT mobile-ct (compressed-tensors, BF16 weights after training) ──
+        # Google QAT mobile-ct (compressed-tensors, BF16 weights after training)
         "gemma_e4b_qat_mobile_ct": {
             "name": "Gemma-4-E4B-QAT-mobile-ct",
             "path": "google/gemma-4-E4B-it-qat-mobile-ct",
             "backend_type": "auto",
-            "extra": {"skip_warmup": True, "quantization": "bf16"},
+            "extra": {"quantization": "bf16"},
         },
         "gemma_e2b_qat_mobile_ct": {
             "name": "Gemma-4-E2B-QAT-mobile-ct",
             "path": "google/gemma-4-E2B-it-qat-mobile-ct",
             "backend_type": "auto",
-            "extra": {"skip_warmup": True, "quantization": "bf16"},
+            "extra": {"quantization": "bf16"},
         },
-        # ── Google QAT mobile-transformers (Q4_0 pre-quantised weights) ──
+        # Google QAT mobile-transformers (Q4_0 pre-quantised weights)
         "gemma_e4b_qat_mobile_transformers": {
             "name": "Gemma-4-E4B-QAT-mobile-transformers",
             "path": "google/gemma-4-E4B-it-qat-mobile-transformers",
             "backend_type": "auto",
-            "extra": {"skip_warmup": True, "quantization": "bf16"},
+            "extra": {"quantization": "bf16"},
         },
         "gemma_e2b_qat_mobile_transformers": {
             "name": "Gemma-4-E2B-QAT-mobile-transformers",
             "path": "google/gemma-4-E2B-it-qat-mobile-transformers",
             "backend_type": "auto",
-            "extra": {"skip_warmup": True, "quantization": "bf16"},
+            "extra": {"quantization": "bf16"},
         },
-        # ── Google QAT w4a16-ct (W4A16 compressed-tensors for vLLM/SGLang) ──
+        # Google QAT w4a16-ct (W4A16 compressed-tensors for vLLM/SGLang)
         "gemma_e4b_qat_w4a16_ct": {
             "name": "Gemma-4-E4B-QAT-w4a16-ct",
             "path": "google/gemma-4-E4B-it-qat-w4a16-ct",
             "backend_type": "auto",
-            "extra": {"skip_warmup": True, "quantization": "int4"},
+            "extra": {"quantization": "int4"},
         },
         "gemma_e2b_qat_w4a16_ct": {
             "name": "Gemma-4-E2B-QAT-w4a16-ct",
             "path": "google/gemma-4-E2B-it-qat-w4a16-ct",
             "backend_type": "auto",
-            "extra": {"skip_warmup": True, "quantization": "int4"},
+            "extra": {"quantization": "int4"},
         },
     }
 
