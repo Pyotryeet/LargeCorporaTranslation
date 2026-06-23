@@ -45,16 +45,26 @@ def run_one_model(model_def: dict) -> dict:
     path = model_def["path"]
     be_type = model_def.get("backend_type", "auto")
     extra = dict(model_def.get("extra", {}))
-    extra["skip_warmup"] = True  # MPS: skip warmup (shader waste)
 
     plat = detect_backend("auto")
     is_cuda = plat.backend == "cuda"
     is_mps = plat.backend == "mps"
 
+    # Platform-specific config
+    if is_cuda:
+        extra["skip_warmup"] = False  # CUDA: full warmup for cuBLAS + graphs
+    else:
+        extra["skip_warmup"] = True   # MPS/CPU: skip (IOAccelerator waste)
+
     print(f"\n{'='*60}")
     print(f"  {name}")
     print(f"  Path: {path}  |  Backend: {be_type}")
-    print(f"  Platform: {plat.backend}  |  Torch: {torch.__version__}")
+    if is_cuda:
+        gpu_name = torch.cuda.get_device_name(0)
+        gpu_mem = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+        print(f"  GPU: {gpu_name} ({gpu_mem:.0f} GB)  |  Torch: {torch.__version__}")
+    else:
+        print(f"  Platform: {plat.backend}  |  Torch: {torch.__version__}")
     print(f"{'='*60}")
 
     t0 = time.monotonic()
@@ -64,7 +74,7 @@ def run_one_model(model_def: dict) -> dict:
         device_info=plat,
         decoding_params=DecodingParams(max_new_tokens=128, temperature=0.0),
         use_flash_attention=is_cuda,
-        use_torch_compile=False,  # MPS: no compile (deadlocks)
+        use_torch_compile=is_cuda,  # CUDA: compile ON, MPS/CPU: OFF
         max_input_tokens=128,
         backend_type=be_type,
         extra=extra,
@@ -73,19 +83,21 @@ def run_one_model(model_def: dict) -> dict:
     load_s = time.monotonic() - t0
     print(f"  Loaded in {load_s:.1f}s")
 
-    # Batch tuning
+    # Batch tuning — CUDA can handle much larger batches
     try:
         tuner = BatchSizeTuner()
         batch_size = tuner.tune(engine.model, engine.tokenizer,
                                plat.device, plat.backend, 128)
-        batch_size = min(batch_size, 16 if is_cuda else 4)
+        max_bs = 128 if is_cuda else 16
+        batch_size = min(batch_size, max_bs)
     except Exception:
-        batch_size = 1
+        batch_size = 4 if is_cuda else 1
     print(f"  Batch size: {batch_size}")
 
-    # Warmup (single compile pass)
+    # Warmup
+    warmup_batches = 20 if is_cuda else 3
     try:
-        engine.warmup(batches=3)
+        engine.warmup(batches=warmup_batches)
     except Exception as e:
         print(f"  Warmup warning: {e}")
 
