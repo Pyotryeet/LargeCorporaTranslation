@@ -119,6 +119,11 @@ def run_one_model(model_def: dict) -> dict:
         batch_size = 128 if is_cuda else 1
     print(f"  Batch size: {batch_size}")
 
+    # Pass configured batch size to the backend so warmup matches production.
+    # Without this, torch.compile needs to recompile from warmup shape (bs=1)
+    # to production shape (bs=1740) — a multi-minute stall on large models.
+    engine._configured_batch_size = batch_size
+
     # Warmup
     warmup_batches = 20 if is_cuda else 3
     try:

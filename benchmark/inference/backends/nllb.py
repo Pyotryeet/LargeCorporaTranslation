@@ -330,10 +330,19 @@ class NLLBBackend(InferenceBackend):
 
         logger.info("NLLB warmup (%d batches)...", batches)
         device = self.devices[0]
-        warmup_texts = [
+
+        # ── Match production batch size for torch.compile ──
+        # torch.compile captures a CUDA graph at the warmup tensor shape.
+        # If warmup uses 6 sequences and production uses 1740, the first
+        # real batch triggers a full recompile (minutes).  Using the same
+        # batch size in warmup eliminates the recompilation stall.
+        warmup_bs = getattr(self, '_configured_batch_size', 1) or 1
+        warmup_bs = max(warmup_bs, 1)  # no upper cap — must match production shape
+        base_texts = [
             "This is a warm-up sentence for translation benchmarking.",
             "Machine translation quality assessment requires careful evaluation.",
-        ] * 3
+        ]
+        warmup_texts = (base_texts * ((warmup_bs + 1) // 2))[:warmup_bs]
 
         enc = self.tokenizer(warmup_texts, return_tensors="pt", padding=True,
                              truncation=True, max_length=self.max_input_tokens).to(device)
