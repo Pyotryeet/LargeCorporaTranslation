@@ -1894,50 +1894,96 @@ class AutoregressiveBackend(InferenceBackend):
             "max_seq_len": self.max_input_tokens + self.max_new_tokens,
         }
 
-    # ── FP8 activation (TE first, native fallback) ──────────────────────────
+    # ── FP8 activation ─────────────────────────────────────────────────────
+
+    # Models below this hidden dimension don't benefit from native FP8
+    # (dynamic input quantization overhead dominates the matmul speedup).
+    _NATIVE_FP8_MIN_HIDDEN = 8192
 
     def _apply_fp8(self) -> None:
-        """Enable FP8 compute for Linear layers.
+        """Enable FP8 compute, gated by model size and TE availability.
 
-        Tries Transformer Engine first (best perf), falls back to native
-        ``torch._scaled_mm`` on Hopper GPUs (no TE dependency).  Sets
-        ``self._fp8_active`` and ``self._fp8_method`` for the context manager
-        and activation log.
+        Strategy
+        --------
+        1. **TE FP8** — fused quantize+matmul via Transformer Engine.  Works
+           for all model sizes.  Tried first.
+        2. **Native FP8** — torch._scaled_mm without TE.  Only enabled for
+           models with hidden_dim >= 8K or >8B params; for small models the
+           per-token quantization overhead makes it *slower* than BF16.
+           Opt-in with ``TR_FORCE_NATIVE_FP8=1`` to bypass the size check.
+        3. Skip FP8 entirely with ``TR_SKIP_FP8=1``.
+
+        Sets ``self._fp8_active`` and ``self._fp8_method``.
         """
+        if os.environ.get("TR_SKIP_FP8") == "1":
+            self._fp8_active = False
+            self._fp8_method = "none"
+            logger.info("FP8 skipped — TR_SKIP_FP8=1")
+            return
+
         self._fp8_active = False
         self._fp8_method = "none"
 
-        # -- Path A: Transformer Engine (te.Linear + fp8_autocast) --
+        # -- Resolve model size for gating ---------------------------------
+        hidden_dim = None
+        try:
+            cfg = self.model.config if hasattr(self.model, 'config') else None
+            if cfg is not None:
+                hidden_dim = getattr(cfg, 'hidden_size', None)
+        except Exception:
+            pass
+
+        # -- Path A: Transformer Engine (fused kernel, best for all sizes) --
         try:
             from benchmark.hardware.precision import apply_te_fp8_to_model
             te_ok = apply_te_fp8_to_model(self.model, skip_lm_head=True)
             if te_ok:
                 self._fp8_active = True
                 self._fp8_method = "te"
-                logger.info("FP8 ACTIVE — te.Linear + fp8_autocast")
-                return
-        except Exception as e:
-            logger.warning(
-                "Transformer Engine FP8 failed (%s) — trying native torch._scaled_mm",
-                e,
-            )
-
-        # -- Path B: Native torch._scaled_mm (Hopper, no TE needed) --
-        try:
-            from benchmark.hardware.precision import apply_native_fp8_to_model
-            replaced = apply_native_fp8_to_model(self.model, skip_lm_head=True)
-            if replaced > 0:
-                self._fp8_active = True
-                self._fp8_method = "native"
                 logger.info(
-                    "FP8 ACTIVE — %d layers via torch._scaled_mm (native, no TE)",
-                    replaced,
+                    "FP8 ACTIVE — %s — te.Linear + fp8_autocast",
+                    self.model_path,
                 )
                 return
         except Exception as e:
-            logger.warning("Native FP8 also failed (%s) — running pure BF16", e)
+            logger.debug("TE FP8 not available: %s", e)
 
-        logger.info("FP8 NOT active — running pure BF16")
+        # -- Path B: Native torch._scaled_mm (size-gated) -------------------
+        _force = os.environ.get("TR_FORCE_NATIVE_FP8") == "1"
+        if hidden_dim is None or _force:
+            _qualifies = _force
+        else:
+            _qualifies = hidden_dim >= self._NATIVE_FP8_MIN_HIDDEN
+
+        if _qualifies:
+            try:
+                from benchmark.hardware.precision import apply_native_fp8_to_model
+                replaced = apply_native_fp8_to_model(
+                    self.model, skip_lm_head=True, mlp_only=True,
+                )
+                if replaced > 0:
+                    self._fp8_active = True
+                    self._fp8_method = "native"
+                    logger.info(
+                        "FP8 ACTIVE — %s — %d layers via torch._scaled_mm "
+                        "(hidden=%d, no TE)",
+                        self.model_path, replaced, hidden_dim or 0,
+                    )
+                    return
+            except Exception as e:
+                logger.debug("Native FP8 not available: %s", e)
+        else:
+            logger.info(
+                "Native FP8 skipped — hidden_dim=%d < %d (overhead dominates "
+                "for models this small).  Use TE for FP8, or set "
+                "TR_FORCE_NATIVE_FP8=1 to force.",
+                hidden_dim or 0, self._NATIVE_FP8_MIN_HIDDEN,
+            )
+
+        logger.info(
+            "FP8 NOT active — running pure BF16 (model: %s, hidden: %s)",
+            self.model_path, str(hidden_dim),
+        )
 
     def _fp8_context(self):
         """Wrap forward passes in the appropriate FP8 context.
