@@ -166,7 +166,11 @@ MODEL_PRESETS: dict[str, ModelPreset] = {
     "ministral-3b-bf16": ModelPreset(
         name="ministral-3b-bf16",
         display_name="Ministral 3B (BF16)",
-        hf_model_id="mistralai/Ministral-3-3B-Instruct-2512",
+        # Keep the preset aligned with the working run.sh path. The
+        # -2512 repo exposes a tokenizer config that resolves to the
+        # non-importable "TokenizersBackend" class in our current
+        # transformers stack.
+        hf_model_id="mistralai/Ministral-3B-Instruct",
         num_layers=24,
         num_kv_heads=8,      # GQA: 8 KV heads, 16 query heads
         head_dim=128,        # 2048 / 16 query heads = 128
