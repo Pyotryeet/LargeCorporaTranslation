@@ -185,10 +185,11 @@ def _find_model_layers(model: nn.Module) -> nn.ModuleList:
     """Heuristically locate the transformer layer list in a HF model.
 
     Tries common patterns:
-      - Gemma / LLaMA:  model.model.layers
-      - GPT-2 / OPT:    model.transformer.h
-      - SmolLM:          model.model.layers or model.transformer.h
-      - Generic:         model.model.decoder.layers
+      - Gemma3 multimodal: model.model.language_model.layers
+      - Gemma / LLaMA:     model.model.layers
+      - GPT-2 / OPT:       model.transformer.h
+      - T5 encoder-decoder: model.model.decoder.layers
+      - Generic:           recursive ModuleList search
 
     Returns the ``ModuleList`` of decoder layers.
 
@@ -197,6 +198,12 @@ def _find_model_layers(model: nn.Module) -> nn.ModuleList:
     AttributeError
         If no layer list can be found.
     """
+    # Gemma3 multimodal (Gemma3ForConditionalGeneration → Gemma3Model → Gemma3TextModel)
+    if (hasattr(model, "model")
+        and hasattr(model.model, "language_model")
+        and hasattr(model.model.language_model, "layers")):
+        return model.model.language_model.layers
+
     # GemmaForCausalLM / LLaMAForCausalLM / SmolLMForCausalLM
     if hasattr(model, "model") and hasattr(model.model, "layers"):
         return model.model.layers
@@ -231,6 +238,11 @@ def _find_model_layers(model: nn.Module) -> nn.ModuleList:
 
 def _find_embedding(model: nn.Module) -> nn.Module:
     """Find the token embedding module."""
+    # Gemma3 multimodal
+    if (hasattr(model, "model")
+        and hasattr(model.model, "language_model")
+        and hasattr(model.model.language_model, "embed_tokens")):
+        return model.model.language_model.embed_tokens
     if hasattr(model, "model") and hasattr(model.model, "embed_tokens"):
         return model.model.embed_tokens
     if hasattr(model, "transformer") and hasattr(model.transformer, "wte"):
@@ -240,6 +252,11 @@ def _find_embedding(model: nn.Module) -> nn.Module:
 
 def _find_final_norm(model: nn.Module) -> nn.Module:
     """Find the final layer norm before the lm_head."""
+    # Gemma3 multimodal
+    if (hasattr(model, "model")
+        and hasattr(model.model, "language_model")
+        and hasattr(model.model.language_model, "norm")):
+        return model.model.language_model.norm
     if hasattr(model, "model") and hasattr(model.model, "norm"):
         return model.model.norm
     if hasattr(model, "transformer") and hasattr(model.transformer, "ln_f"):
@@ -253,6 +270,7 @@ def _find_lm_head(model: nn.Module) -> nn.Module:
         return model.lm_head
     if hasattr(model, "model") and hasattr(model.model, "lm_head"):
         return model.model.lm_head
+    # Gemma3 multimodal: lm_head is on the top-level model
     raise AttributeError("Cannot locate lm_head")
 
 
@@ -408,6 +426,16 @@ class SelfSpeculativeDecoder(SpeculativeDecoder):
         self._rotary_emb = None
         if hasattr(self._inner_model, "rotary_emb"):
             self._rotary_emb = self._inner_model.rotary_emb
+        elif (hasattr(self._inner_model, "language_model")
+              and hasattr(self._inner_model.language_model, "rotary_emb")):
+            # Gemma3 multimodal: rotary_emb lives inside language_model
+            self._rotary_emb = self._inner_model.language_model.rotary_emb
+
+        # ── Detect dual-RoPE (Gemma3) vs single-RoPE (LLaMA/Gemma2) ──
+        import inspect
+        _first_layer = self._layers[0]
+        _sig = inspect.signature(_first_layer.forward)
+        self._needs_dual_rope = 'position_embeddings_global' in _sig.parameters
 
         # ── Compute draft layer count ──
         if cfg.num_draft_layers > 0:
@@ -454,6 +482,13 @@ class SelfSpeculativeDecoder(SpeculativeDecoder):
           - ``None`` — first forward, no pre-existing cache.
           - A ``DynamicCache`` — shared across draft steps; each layer
             reads/updates its own slot via ``self.layer_idx``.
+
+        Handles both single-RoPE (LLaMA/Gemma2) and dual-RoPE (Gemma3)
+        architectures.  Classic models receive ``position_embeddings``;
+        Gemma3 receives ``position_embeddings_global`` AND
+        ``position_embeddings_local`` — both set to the same (cos, sin)
+        from the rotary embedding, since the decoder layer dispatches
+        internally based on its attention pattern.
         """
         kwargs: dict = {}
         kwargs["use_cache"] = True
@@ -463,10 +498,14 @@ class SelfSpeculativeDecoder(SpeculativeDecoder):
         if layer_kv is not None:
             kwargs["past_key_value"] = layer_kv
 
-        # RoPE position embeddings (required by LLaMA/Gemma layers)
+        # RoPE position embeddings — compatible with both single and dual RoPE
         pe = self._rope_embeddings(hidden_states, position_ids)
         if pe is not None:
-            kwargs["position_embeddings"] = pe
+            if self._needs_dual_rope:
+                kwargs["position_embeddings_global"] = pe
+                kwargs["position_embeddings_local"] = pe
+            else:
+                kwargs["position_embeddings"] = pe
 
         # Attention mask — causal by default; only needed for multi-token verify
         if attention_mask is not None:

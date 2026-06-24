@@ -202,20 +202,25 @@ $PYTHON_BIN -m pip install -r requirements.txt --quiet --no-cache-dir
 ok "Core dependencies installed"
 
 # Platform-specific PyTorch.
+# ⚠️ VERSION PIN: torch 2.6.0+cu124 is the KNOWN-GOOD combination for H200 (SM90).
+#   - 2.11.0+cu130 → SDPA crashes on SM90 (cuDNN frontend has no execution plans)
+#   - 2.12.1+cu126 → flash_attn ABI incompatible (prebuilt .so for torch 2.11)
+#   - 2.6.0+cu124  → SDPA works, torch.compile works, TE builds from source
+# See docs/MEASUREMENT_PLAN.md §B.1 and docs/H200_SETUP.md §Known Issues.
 if [ "$MODE" = "cuda" ]; then
     if [ -n "$FORCE_CUDA_VERSION" ]; then
         CUDA_INDEX="cu${FORCE_CUDA_VERSION//./}"
     else
         CUDA_INDEX="cu124"
     fi
-    info "Installing PyTorch with CUDA ($CUDA_INDEX)..."
+    info "Installing PyTorch 2.6.0 with CUDA ($CUDA_INDEX)..."
     # NOTE: pip install without --require-hashes — hash checking is deferred because:
     # (1) upstream wheels are signed by PyPI and verified via TLS; (2) this project
     # pins top-level constraints but not transitive hashes; (3) nightly PyTorch/CUDA
     # wheels change daily, making hash files stale immediately.
     # When moving to a production Docker build, freeze all deps with:
     #   pip-compile --generate-hashes -o requirements-torch-cuda.txt requirements-torch-cuda.in
-    $PYTHON_BIN -m pip install torch torchvision --index-url "https://download.pytorch.org/whl/$CUDA_INDEX" --quiet --no-cache-dir
+    $PYTHON_BIN -m pip install 'torch==2.6.0' 'torchvision==0.21.0' --index-url "https://download.pytorch.org/whl/$CUDA_INDEX" --quiet --no-cache-dir
     ok "PyTorch (CUDA) installed"
 elif [ "$MODE" = "mps" ]; then
     info "Installing PyTorch (MPS)..."
@@ -353,6 +358,53 @@ if [ "$PROFILE" = "full" ] && [ "$MODE" = "cuda" ]; then
     else
         warn "TensorRT Python bindings not available — TRT engine path disabled"
     fi
+fi
+
+# ── Post-install compatibility check (CUDA only) ─────────────────────────
+# torch 2.11+cu130 ships a cuDNN frontend with no SM90 execution plans for
+# H200 GPUs — all SDPA backends (flash, mem_efficient, math) crash with
+# "No valid execution plans built".  PyTorch 2.6.0+cu124 is the known-good
+# combination for H200/SM90.  See docs/H200_SETUP.md and
+# docs/MEASUREMENT_PLAN.md §B.1 for the full investigation.
+#
+# Also removes packages that conflict with torch 2.6: torchao 0.17+ requires
+# torch >= 2.10 (register_constant); compressed-tensors 0.17+ requires
+# torch >= 2.10.  These are QAT/quantization tooling not needed for
+# throughput benchmarks and can be reinstalled from source if required.
+if [ "$MODE" = "cuda" ]; then
+    info "Running post-install compatibility checks..."
+    PY_VER=$($PYTHON_BIN -c "import torch; print(torch.__version__)" 2>/dev/null || echo "unknown")
+    CUDA_VER=$($PYTHON_BIN -c "import torch; print(torch.version.cuda or 'unknown')" 2>/dev/null || echo "unknown")
+    info "  PyTorch: $PY_VER, CUDA: $CUDA_VER"
+
+    # Check for the known-broken cu130 combination.
+    if echo "$PY_VER" | grep -q "2.11"; then
+        warn "PyTorch 2.11 detected — SDPA may not work on H200 (SM90)."
+        warn "  Downgrade to 2.6.0+cu124 if you see 'No valid execution plans built':"
+        warn "    pip install torch==2.6.0 torchvision==0.21.0 --index-url https://download.pytorch.org/whl/cu124"
+    fi
+
+    # Remove packages known to conflict with torch < 2.10.
+    for _pkg in torchao compressed-tensors; do
+        if $PYTHON_BIN -m pip show "$_pkg" >/dev/null 2>&1; then
+            _pkg_ver=$($PYTHON_BIN -m pip show "$_pkg" 2>/dev/null | grep Version | awk '{print $2}')
+            warn "Removing $_pkg $_pkg_ver — incompatible with torch < 2.10."
+            warn "  Reinstall from source if QAT/quantization tooling is needed."
+            $PYTHON_BIN -m pip uninstall -y "$_pkg" --quiet 2>/dev/null || true
+        fi
+    done
+
+    # Quick SDPA smoke test.
+    $PYTHON_BIN -c "
+import torch
+a = torch.randn(2, 4, 128, 64, device='cuda', dtype=torch.float16)
+try:
+    b = torch.nn.functional.scaled_dot_product_attention(a, a, a)
+except RuntimeError as e:
+    import sys
+    sys.exit(1)
+" 2>/dev/null && ok "SDPA smoke test passed" || \
+        warn "SDPA smoke test FAILED — Flash SDPA may not work on this GPU. See docs/H200_SETUP.md §B.1."
 fi
 
 # MPS extras.
