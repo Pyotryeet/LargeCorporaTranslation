@@ -346,6 +346,141 @@ def get_dtype(
 
 
 # ---------------------------------------------------------------------------
+# Native FP8 — uses torch._scaled_mm (no Transformer Engine dependency)
+# ---------------------------------------------------------------------------
+
+def _is_hopper() -> bool:
+    """Return True if the current CUDA device is Hopper (SM 9.0+)."""
+    try:
+        import torch
+        if not torch.cuda.is_available():
+            return False
+        major, _minor = torch.cuda.get_device_capability()
+        return major >= 9
+    except Exception:
+        return False
+
+
+class NativeFP8Linear(torch.nn.Module):
+    """An nn.Linear replacement that uses ``torch._scaled_mm`` for FP8 inference.
+
+    Weights are quantized to ``torch.float8_e4m3fn`` at construction time
+    with a per-tensor scale.  Inputs are dynamically quantized per forward
+    pass.  This requires a Hopper GPU (SM 9.0+) and PyTorch >= 2.5.
+
+    This module is a **drop-in replacement** for ``nn.Linear`` when the
+    caller wraps the forward pass with ``native_fp8_autocast()`` or sets
+    ``module.use_fp8 = True``.
+    """
+
+    def __init__(self, linear: torch.nn.Module, *, use_fp8: bool = True):
+        super().__init__()
+        self.in_features = linear.in_features
+        self.out_features = linear.out_features
+        self.use_fp8 = use_fp8
+
+        # Quantize weight to FP8 at init time.
+        w = linear.weight.data.to(torch.float32)
+        w_max = w.abs().max()
+        # FP8 E4M3 representable range: ±448 in float32 scale.
+        self.weight_scale = (w_max / 448.0).to(torch.float32)
+        w_fp8 = (w / self.weight_scale).clamp(-448.0, 447.0).to(torch.float8_e4m3fn)
+        self.register_buffer("weight_fp8", w_fp8)
+
+        if linear.bias is not None:
+            self.bias = torch.nn.Parameter(linear.bias.data.clone())
+        else:
+            self.bias = None
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if not self.use_fp8 or not x.is_cuda:
+            # Fallback: dequantize weight and do standard matmul.
+            w_bf16 = self.weight_fp8.to(torch.bfloat16) * self.weight_scale.to(torch.bfloat16)
+            return torch.nn.functional.linear(x, w_bf16, self.bias)
+
+        # Dynamic input quantization.
+        x_f32 = x.to(torch.float32)
+        x_amax = x_f32.abs().max()
+        if x_amax == 0:
+            x_amax = torch.tensor(1.0, device=x.device)
+        x_scale = (x_amax / 448.0).to(torch.float32)
+        x_fp8 = (x_f32 / x_scale).clamp(-448.0, 447.0).to(torch.float8_e4m3fn)
+
+        # FP8 matmul → BF16 output.
+        out = torch._scaled_mm(
+            x_fp8,
+            self.weight_fp8.t(),
+            scale_a=x_scale,
+            scale_b=self.weight_scale,
+            out_dtype=torch.bfloat16,
+        )
+
+        if self.bias is not None:
+            out = out + self.bias
+        return out
+
+
+def apply_native_fp8_to_model(
+    model: torch.nn.Module,
+    *,
+    skip_lm_head: bool = True,
+) -> int:
+    """Replace ``nn.Linear`` layers with :class:`NativeFP8Linear` for FP8 inference.
+
+    This is the **Transformer-Engine-free** FP8 path.  It works on Hopper
+    GPUs with PyTorch >= 2.5 using the built-in ``torch._scaled_mm`` kernel.
+    No ``transformer_engine`` dependency is required.
+
+    Parameters
+    ----------
+    model : nn.Module
+        The loaded PyTorch model in BF16/FP16.
+    skip_lm_head : bool
+        If True, keep the lm_head in the original dtype (FP8 precision loss
+        on the vocabulary projection hurts token selection).
+
+    Returns
+    -------
+    int
+        Number of layers replaced.
+    """
+    import torch
+
+    if not _is_hopper():
+        logger.info("Native FP8 skipped — requires Hopper GPU (SM 9.0+).")
+        return 0
+
+    replaced = 0
+
+    def _replace(module: torch.nn.Module, parent_name: str = ""):
+        nonlocal replaced
+        for name, child in module.named_children():
+            full_name = f"{parent_name}.{name}" if parent_name else name
+            if skip_lm_head and (name == "lm_head" or full_name.endswith(".lm_head")):
+                continue
+            if isinstance(child, torch.nn.Linear) and not isinstance(child, NativeFP8Linear):
+                setattr(module, name, NativeFP8Linear(child))
+                replaced += 1
+            else:
+                _replace(child, full_name)
+
+    _replace(model)
+
+    if replaced > 0:
+        logger.info(
+            "Native FP8: %d nn.Linear layers replaced with NativeFP8Linear "
+            "(torch._scaled_mm, no Transformer Engine required).",
+            replaced,
+        )
+    return replaced
+
+
+def native_fp8_autocast() -> bool:
+    """Return True if native FP8 is available (Hopper + PyTorch >= 2.5)."""
+    return _is_hopper()
+
+
+# ---------------------------------------------------------------------------
 # FP8 activation helper — replaces nn.Linear with te.Linear
 # ---------------------------------------------------------------------------
 

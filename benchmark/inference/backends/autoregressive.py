@@ -760,8 +760,11 @@ class AutoregressiveBackend(InferenceBackend):
             self.model = self.model.to(self.devices[0])
 
         # ── 6. FP8 ──
+        # Priority: Transformer Engine (TE) first, native torch._scaled_mm fallback.
+        # TE provides the best performance but is fragile on non-NGC PyTorch builds.
+        # Native FP8 works on any Hopper GPU with PyTorch >= 2.5, no TE dependency.
         if self.precision_config.uses_transformer_engine and not self._safe_mode:
-            self._apply_te_fp8()
+            self._apply_fp8()
 
         # ── 7. Fused kernel injection (DISABLED — compile-incompatible) ──
         # Custom Triton fused kernels (fused_ops.py) are ONLY safe inside
@@ -875,11 +878,11 @@ class AutoregressiveBackend(InferenceBackend):
             phase="hot_path",
         ))
         reg.register(CapabilityEntry(
-            feature_id="te_fp8", display_name="TE FP8",
-            state=ActivationState.ACTIVE if getattr(self, '_te_available', False)
+            feature_id="te_fp8", display_name="FP8 Matmul",
+            state=ActivationState.ACTIVE if getattr(self, '_fp8_active', False)
                   else ActivationState.INERT,
-            reason="FP8 tensor core matmul" if getattr(self, '_te_available', False)
-                  else "TE not available or --safe-mode",
+            reason=f"FP8 via {getattr(self, '_fp8_method', 'none')}" if getattr(self, '_fp8_active', False)
+                  else "No FP8 available (TE not installed, non-Hopper GPU, or --safe-mode)",
             phase="hot_path",
         ))
 
@@ -1891,34 +1894,68 @@ class AutoregressiveBackend(InferenceBackend):
             "max_seq_len": self.max_input_tokens + self.max_new_tokens,
         }
 
-    def _apply_te_fp8(self) -> None:
-        """Replace nn.Linear layers with Transformer Engine FP8 layers (v3.4).
+    # ── FP8 activation (TE first, native fallback) ──────────────────────────
 
-        Uses the centralized ``apply_te_fp8_to_model()`` from
-        ``benchmark.hardware.precision`` — the single canonical FP8 activation
-        entry point for every backend in the project.
+    def _apply_fp8(self) -> None:
+        """Enable FP8 compute for Linear layers.
 
-        The lm_head (final vocab projection) is intentionally EXCLUDED from
-        FP8 replacement — FP8 precision loss on the vocabulary projection
-        directly corrupts token probability rankings.
-
-        Sets ``self._te_available = True`` on success.
+        Tries Transformer Engine first (best perf), falls back to native
+        ``torch._scaled_mm`` on Hopper GPUs (no TE dependency).  Sets
+        ``self._fp8_active`` and ``self._fp8_method`` for the context manager
+        and activation log.
         """
-        from benchmark.hardware.precision import apply_te_fp8_to_model
-        self._te_available = apply_te_fp8_to_model(self.model, skip_lm_head=True)
-        if self._te_available:
-            logger.info("FP8 ACTIVE — te.Linear + fp8_autocast on every forward pass")
-        else:
-            logger.info("FP8 NOT active — Transformer Engine unavailable, pure BF16")
+        self._fp8_active = False
+        self._fp8_method = "none"
+
+        # -- Path A: Transformer Engine (te.Linear + fp8_autocast) --
+        try:
+            from benchmark.hardware.precision import apply_te_fp8_to_model
+            te_ok = apply_te_fp8_to_model(self.model, skip_lm_head=True)
+            if te_ok:
+                self._fp8_active = True
+                self._fp8_method = "te"
+                logger.info("FP8 ACTIVE — te.Linear + fp8_autocast")
+                return
+        except Exception as e:
+            logger.warning(
+                "Transformer Engine FP8 failed (%s) — trying native torch._scaled_mm",
+                e,
+            )
+
+        # -- Path B: Native torch._scaled_mm (Hopper, no TE needed) --
+        try:
+            from benchmark.hardware.precision import apply_native_fp8_to_model
+            replaced = apply_native_fp8_to_model(self.model, skip_lm_head=True)
+            if replaced > 0:
+                self._fp8_active = True
+                self._fp8_method = "native"
+                logger.info(
+                    "FP8 ACTIVE — %d layers via torch._scaled_mm (native, no TE)",
+                    replaced,
+                )
+                return
+        except Exception as e:
+            logger.warning("Native FP8 also failed (%s) — running pure BF16", e)
+
+        logger.info("FP8 NOT active — running pure BF16")
 
     def _fp8_context(self):
-        """Wrap forward passes in fp8_autocast when TE is active (v3.4).
+        """Wrap forward passes in the appropriate FP8 context.
 
-        Uses the centralized ``fp8_autocast_context()`` from
-        ``benchmark.hardware.precision``.
+        For TE: returns ``te.fp8_autocast(enabled=True)``.
+        For native FP8: returns ``nullcontext()`` (quantization happens in
+        the module forward, not via an autocast region).
+        For no FP8: returns ``nullcontext()``.
         """
-        from benchmark.hardware.precision import fp8_autocast_context
-        return fp8_autocast_context()
+        if not getattr(self, '_fp8_active', False):
+            return contextlib.nullcontext()
+
+        if getattr(self, '_fp8_method', '') == 'te':
+            from benchmark.hardware.precision import fp8_autocast_context
+            return fp8_autocast_context()
+
+        # Native FP8: quantization is in-module, no external context needed.
+        return contextlib.nullcontext()
 
     def close(self) -> None:
         """Free all GPU resources explicitly.
