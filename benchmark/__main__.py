@@ -35,9 +35,24 @@ _os.environ.setdefault("TRANSFORMERS_VERBOSITY", "error")
 from benchmark.orchestration.harness import BenchmarkHarness
 
 
+def _load_raw_config(config_path: str) -> dict:
+    import yaml as _yaml
+
+    with open(config_path, "r") as _f:
+        return _yaml.safe_load(_f) or {}
+
+
 def _run_pretokenize(args) -> int:
     """Run pre-tokenization for one or all models, then exit."""
-    import sys as _sys
+    raw_cfg = _load_raw_config(args.config)
+    raw_model_cfg = raw_cfg.get("model", {})
+    raw_data_cfg = raw_cfg.get("data", {})
+
+    input_paths = raw_data_cfg.get("input_paths") or ["./data/input/*.jsonl.gz"]
+    max_input_tokens = raw_model_cfg.get("max_input_tokens", 512)
+    overlap_tokens = raw_data_cfg.get("chunk_overlap_tokens", 50)
+    min_chunk_tokens = raw_data_cfg.get("min_chunk_tokens", 10)
+    max_garbage_ratio = raw_data_cfg.get("max_garbage_ratio", 0.95)
 
     # Determine which models to pre-tokenize.
     if args.pretokenize_all:
@@ -47,10 +62,7 @@ def _run_pretokenize(args) -> int:
         models = [args.model]
     else:
         # Default: the model from config
-        import yaml as _yaml
-        with open(args.config, "r") as _f:
-            _raw = _yaml.safe_load(_f) or {}
-        models = [_raw.get("model", {}).get("model_path", "google/translategemma-4b-it")]
+        models = [raw_model_cfg.get("model_path", "google/translategemma-4b-it")]
 
     total_chunks = 0
     for model_key in models:
@@ -66,19 +78,25 @@ def _run_pretokenize(args) -> int:
         except Exception:
             model_path = model_key  # raw HF model ID or path
 
+        tokenizer_path = model_path
+        if not args.model and not args.pretokenize_all and model_path == raw_model_cfg.get("model_path"):
+            tokenizer_path = raw_model_cfg.get("tokenizer_path") or model_path
+
         # Load tokenizer only (no model weights needed for pre-tokenization).
         from transformers import AutoTokenizer
         tokenizer = AutoTokenizer.from_pretrained(
-            model_path, trust_remote_code=False,
+            tokenizer_path, trust_remote_code=False,
         )
 
         from benchmark.data.pretokenizer import PreTokenizer
         pretok = PreTokenizer(
             model_path=model_path,
             tokenizer=tokenizer,
-            max_input_tokens=512,
-            overlap_tokens=50,
-            input_paths=["./data/input/*.jsonl.gz"],
+            max_input_tokens=max_input_tokens,
+            overlap_tokens=overlap_tokens,
+            min_chunk_tokens=min_chunk_tokens,
+            max_garbage_ratio=max_garbage_ratio,
+            input_paths=input_paths,
             cache_dir=(
                 Path(args.pretokenized_cache_dir)
                 if args.pretokenized_cache_dir
@@ -273,7 +291,10 @@ Examples:
 
     # ── Disable pre-tokenized cache if requested ──────────────────────
     if args.no_pretokenized_cache:
-        os.environ["TR_NO_PRETOKENIZED_CACHE"] = "1"
+        _os.environ["TR_NO_PRETOKENIZED_CACHE"] = "1"
+
+    if args.pretokenized_cache_dir:
+        _os.environ["TR_PRETOKENIZED_CACHE_DIR"] = args.pretokenized_cache_dir
 
     harness = BenchmarkHarness(
         config_path=args.config,

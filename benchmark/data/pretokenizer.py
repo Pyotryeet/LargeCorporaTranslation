@@ -16,14 +16,14 @@ completely unchanged.
 
 Cache invalidation
 ------------------
-The cache key is ``SHA256(model_path + tokenizer_hash + max_input_tokens +
-overlap_tokens + prompt_style + input_files_hash)[:16]``.  Any change to
-the model, tokenizer, chunker config, or input data triggers a cache miss
-and full re-tokenization.
+The cache key is ``SHA256(model_path + tokenizer_hash + chunk/filter settings +
+input_files_hash)[:16]``.  Any change to the model, tokenizer, chunker,
+filters, or input data triggers a cache miss and full re-tokenization.
 """
 
 from __future__ import annotations
 
+from glob import glob
 import hashlib
 import json
 import logging
@@ -56,19 +56,34 @@ MAX_CACHE_ENTRIES = 50  # LRU eviction threshold
 
 
 def _hash_files(input_paths: list[str]) -> str:
-    """Stable hash of sorted input file paths + sizes.
+    """Stable hash of resolved input files.
 
-    Detects added/removed/changed files without reading file contents.
-    For the full-corpus use case where data is static, this is sufficient;
-    for incremental data, extend to a Merkle-tree of content hashes.
+    Hashes the fully-expanded file list rather than the raw glob patterns so
+    cache invalidation fires when files are added, removed, renamed, or
+    replaced behind a stable pattern like ``./data/input/*.jsonl.gz``.
     """
     h = hashlib.sha256()
-    for p in sorted(input_paths):
-        h.update(p.encode())
+    resolved: list[Path] = []
+    for pattern in input_paths:
+        matches = [Path(m) for m in sorted(glob(pattern, recursive=True))]
+        if matches:
+            resolved.extend(p for p in matches if p.is_file())
+            continue
+
+        # Preserve unmatched patterns in the key so missing-data states remain
+        # distinct instead of collapsing to the same hash as an empty list.
+        h.update(b"pattern:")
+        h.update(pattern.encode())
+
+    for path in sorted({p.resolve() for p in resolved}):
+        h.update(b"file:")
+        h.update(str(path).encode())
         try:
-            h.update(str(Path(p).stat().st_size).encode())
+            stat = path.stat()
+            h.update(str(stat.st_size).encode())
+            h.update(str(stat.st_mtime_ns).encode())
         except OSError:
-            h.update(b"0")
+            h.update(b"missing")
     return h.hexdigest()
 
 
@@ -102,6 +117,8 @@ def get_cache_key(
     tokenizer,
     max_input_tokens: int,
     overlap_tokens: int,
+    min_chunk_tokens: int,
+    max_garbage_ratio: float,
     input_paths: list[str],
 ) -> str:
     """Compute a deterministic cache key for a (model, dataset, config) tuple.
@@ -113,6 +130,8 @@ def get_cache_key(
         _hash_tokenizer(tokenizer),
         str(max_input_tokens),
         str(overlap_tokens),
+        str(min_chunk_tokens),
+        f"{max_garbage_ratio:.8f}",
         _hash_files(input_paths),
     ]
     full = hashlib.sha256("|".join(components).encode()).hexdigest()
@@ -128,6 +147,8 @@ class CacheEntry:
     model_path: str
     max_input_tokens: int
     overlap_tokens: int
+    min_chunk_tokens: int
+    max_garbage_ratio: float
     num_chunks: int
     file_size_bytes: int
     created_at: float = field(default_factory=time.time)
@@ -231,6 +252,7 @@ class PreTokenizer:
             self._cache_key = get_cache_key(
                 self.model_path, self.tokenizer,
                 self.max_input_tokens, self.overlap_tokens,
+                self.min_chunk_tokens, self.max_garbage_ratio,
                 self.input_paths,
             )
         return self._cache_key
@@ -324,6 +346,8 @@ class PreTokenizer:
             model_path=self.model_path,
             max_input_tokens=self.max_input_tokens,
             overlap_tokens=self.overlap_tokens,
+            min_chunk_tokens=self.min_chunk_tokens,
+            max_garbage_ratio=self.max_garbage_ratio,
             num_chunks=total_chunks,
             file_size_bytes=file_size,
         )
@@ -400,6 +424,8 @@ def ensure_pretokenized(
     tokenizer,
     max_input_tokens: int = 512,
     overlap_tokens: int = 50,
+    min_chunk_tokens: int = 10,
+    max_garbage_ratio: float = 0.95,
     input_paths: list[str] | None = None,
     cache_dir: Path | None = None,
     force: bool = False,
@@ -436,6 +462,8 @@ def ensure_pretokenized(
         tokenizer=tokenizer,
         max_input_tokens=max_input_tokens,
         overlap_tokens=overlap_tokens,
+        min_chunk_tokens=min_chunk_tokens,
+        max_garbage_ratio=max_garbage_ratio,
         input_paths=input_paths,
         cache_dir=cache_dir,
     )
@@ -450,6 +478,8 @@ def has_cache(
     tokenizer,
     max_input_tokens: int = 512,
     overlap_tokens: int = 50,
+    min_chunk_tokens: int = 10,
+    max_garbage_ratio: float = 0.95,
     input_paths: list[str] | None = None,
     cache_dir: Path | None = None,
 ) -> bool:
@@ -458,7 +488,10 @@ def has_cache(
         return False
     pretok = PreTokenizer(
         model_path=model_path, tokenizer=tokenizer,
-        max_input_tokens=max_input_tokens, overlap_tokens=overlap_tokens,
+        max_input_tokens=max_input_tokens,
+        overlap_tokens=overlap_tokens,
+        min_chunk_tokens=min_chunk_tokens,
+        max_garbage_ratio=max_garbage_ratio,
         input_paths=input_paths, cache_dir=cache_dir,
     )
     return pretok.parquet_path.exists()

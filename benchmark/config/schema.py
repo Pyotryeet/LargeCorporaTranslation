@@ -34,7 +34,7 @@ class ModelConfig(BaseModel):
     tensor_parallel_size: int = Field(default=0, ge=0, le=8)
     use_flash_attention: bool = True
     # v3.0: Model-agnostic dispatch.
-    backend_type: Literal["auto", "autoregressive", "diffusion", "custom"] = "auto"
+    backend_type: Literal["auto", "autoregressive", "encoder_decoder", "diffusion", "custom"] = "auto"
     # v3.0: Diffusion-specific parameters.
     diffusion_steps: int = Field(default=DEFAULT_DIFFUSION_STEPS, ge=8, le=4096)
     guidance_scale: float = Field(default=DEFAULT_GUIDANCE_SCALE, ge=1.0, le=10.0)

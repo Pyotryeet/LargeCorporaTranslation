@@ -11,3 +11,4 @@ bert-score>=0.3.13
 numpy>=1.26.0
 safetensors>=0.4.0
 sentencepiece>=0.2.0
+pyarrow>=17.0.0
