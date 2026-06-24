@@ -1,27 +1,27 @@
-"""Tensor parallelism for Gemma 3 12B (48-layer, GQA 8 KV-heads, 5:1 local/global).
+"""Replicate-and-split layer parallelism for transformer models.
 
-Shards the transformer layers across 2 GPUs:
-- Layers 0-23 on GPU 0
-- Layers 24-47 on GPU 1
-- Embedding layer replicated on both GPUs
-- LM head replicated on both GPUs with all-reduce after the forward pass
+Shards transformer layers across 2 GPUs (pipeline-style per-layer assignment):
+- Layers 0-23 on GPU 0, layers 24-47 on GPU 1
+- Embedding and LM head REPLICATED (identical copy on each GPU)
+- Logits all-reduced and averaged for identical results to single-GPU
 
-Architecture reference
-----------------------
-- 48 decoder layers
-- Grouped-Query Attention (GQA) with 8 KV heads
-- 5:1 local/global attention ratio (every 6th layer uses global attention)
-- Standard Gemma 3 Pre/Post-norm transformer block
+Architecture reference (defaults)
+----------------------------------
+- Gemma 3 12B: 48 decoder layers, GQA 8 KV-heads, 5:1 local/global attention
 
 .. note::
-   ``apply_tensor_parallelism()`` is defined but NOT wired into the hot path.
-   Neither the harness nor the engine calls it automatically — it requires
-   manual integration (call it after model loading, before the first forward).
+   ``apply_tensor_parallelism()`` is defined but NOT wired into the hot path
+   by default.  Call ``ensure_dist_initialized()`` before ``apply_tensor_parallelism()``
+   to bootstrap the distributed process group.  Launch with ``torchrun --nproc_per_node=2``.
+
+   See [[h200-roadmap-gap-analysis]] for known caveats with this module.
 """
 
 from __future__ import annotations
 
 import logging
+import os
+import datetime
 from dataclasses import dataclass, field
 from typing import Any, List, Optional
 
@@ -57,7 +57,14 @@ GEMMA3_GLOBAL_LAYER_INTERVAL = GEMMA3_LOCAL_GLOBAL_RATIO + 1
 
 @dataclass
 class TensorParallelConfig:
-    """Configuration for 2-way tensor parallelism on Gemma 3 12B.
+    """Configuration for 2-way layer-split parallelism on transformer models.
+
+    This implements **replicate-and-split parallelism** (not true weight-sharded
+    tensor parallelism): transformer layers are split across GPUs (pipeline-style
+    per-layer assignment), while embeddings and LM head are REPLICATED (each GPU
+    holds a full copy).  An all-reduce wrapper on the LM head averages logits
+    across ranks to produce identical results to single-GPU inference (valid
+    because the replicated LM head weights are identical).
 
     Attributes
     ----------
@@ -65,10 +72,10 @@ class TensorParallelConfig:
         Number of GPUs.  Must be exactly 2 for this implementation.
     num_layers : int
         Total transformer decoder layers (default 48 for Gemma 3 12B).
-    layers_per_gpu : list[int] or list[tuple[int, int]]
-        Number of layers assigned to each GPU, or (start, end) ranges.
-    layer_ranges : list[slice]
-        Computed: [slice(0, 24), slice(24, 48)] — layer index ranges per GPU.
+    _layers_per_gpu : list[int]
+        Layer count per GPU (backing field — use layers_per_gpu property).
+    _layer_ranges : list[tuple]
+        (start, end) per GPU (backing field — use layer_ranges property).
     replicate_embedding : bool
         Whether to replicate the input embedding on every GPU (default True).
     replicate_lm_head : bool
@@ -85,8 +92,8 @@ class TensorParallelConfig:
     intermediate_size: int = GEMMA_3_12B_INTERMEDIATE_SIZE
     local_attn_window: int = GEMMA_3_12B_LOCAL_ATTN_WINDOW
     local_global_ratio: int = GEMMA_3_12B_LOCAL_GLOBAL_RATIO
-    _layers_per_gpu: List[int] = field(default_factory=list, init=False)
-    _layer_ranges: List[tuple] = field(default_factory=list, init=False)
+    _layers_per_gpu: List[int] = field(default_factory=list)
+    _layer_ranges: List[tuple] = field(default_factory=list)
     replicate_embedding: bool = True
     replicate_lm_head: bool = True
     all_reduce_lm_head: bool = True
@@ -203,16 +210,101 @@ def _maybe_get_attr(model: nn.Module, candidates: List[str]) -> Optional[nn.Modu
 
 
 # ---------------------------------------------------------------------------
-# Shared embedding / LM head helpers
+# Distributed initialization bootstrap
 # ---------------------------------------------------------------------------
+
+
+def ensure_dist_initialized(
+    backend: str = "nccl",
+    init_method: str = "env://",
+    timeout_seconds: int = 300,
+) -> bool:
+    """Initialize torch.distributed if it hasn't been already.
+
+    Safe to call on any rank — detects ``torchrun`` environment variables
+    automatically.  On a single-GPU setup (no ``WORLD_SIZE`` / ``RANK`` in
+    the environment) this is a no-op and returns False.
+
+    Parameters
+    ----------
+    backend : str
+        Distributed backend ("nccl", "gloo").  Defaults to "nccl" for CUDA.
+    init_method : str
+        ``torch.distributed.init_process_group`` init method.  "env://"
+        reads MASTER_ADDR / MASTER_PORT / WORLD_SIZE / RANK from the
+        environment, which torchrun sets automatically.
+    timeout_seconds : int
+        Timeout for the distributed rendezvous.
+
+    Returns
+    -------
+    bool
+        True if distributed was initialized (or was already initialized).
+        False if this is a single-process / single-GPU launch.
+    """
+    import torch.distributed as dist
+
+    if dist.is_initialized():
+        return True
+
+    # Only bootstrap when the launcher environment is present.
+    world_size = int(os.environ.get("WORLD_SIZE", "0"))
+    if world_size < 2:
+        logger.debug("WORLD_SIZE < 2 — distributed init skipped.")
+        return False
+
+    # Fall back to gloo on non-CUDA systems.
+    if not torch.cuda.is_available() and backend == "nccl":
+        backend = "gloo"
+        logger.info("CUDA not available — using gloo backend for testing.")
+
+    try:
+        dist.init_process_group(
+            backend=backend,
+            init_method=init_method,
+            timeout=datetime.timedelta(seconds=timeout_seconds),
+        )
+        logger.info(
+            "Distributed initialized: backend=%s world_size=%d rank=%d",
+            backend, dist.get_world_size(), dist.get_rank(),
+        )
+        return True
+    except Exception as e:
+        logger.warning("Distributed init failed: %s — running single-GPU.", e)
+        return False
+
+
+def _get_distributed_world() -> int:
+    """Return the world size if distributed is initialized, otherwise 1."""
+    try:
+        import torch.distributed as dist
+        return dist.get_world_size() if dist.is_initialized() else 1
+    except ImportError:
+        return 1
+
+
+def _get_distributed_rank() -> int:
+    """Return the local rank if distributed is initialized, otherwise 0."""
+    try:
+        import torch.distributed as dist
+        return dist.get_rank() if dist.is_initialized() else 0
+    except ImportError:
+        return 0
 
 
 class AllReduceLMHead(nn.Module):
     """Wrapper that all-reduces logits after the LM head forward pass.
 
-    In 2-GPU tensor parallelism the LM head is replicated — each GPU produces
-    its own logit tensor.  Averaging them via all-reduce ensures identical
-    numerical results to single-GPU inference.
+    In replicate-and-split parallelism the LM head is **replicated** (each GPU
+    holds IDENTICAL weights).  All-reducing logits via SUM followed by division
+    by group size produces results identical to single-GPU inference because
+    both replicas compute the same logit values.
+
+    Note: this is logit-averaging, NOT true weight-sharded tensor parallelism.
+    If the LM head weights ever differ across GPUs (e.g., weight-sharded TP),
+    this approach produces incorrect results since softmax(mean(L1,L2)) ≠
+    mean(softmax(L1), softmax(L2)).  With replicated weights, L1 == L2 so the
+    nonlinearity is a no-op and both approaches are equivalent.
     """
 
     def __init__(self, lm_head: nn.Module, group=None):
@@ -353,7 +445,8 @@ def apply_tensor_parallelism(
             actual_layers,
             config.num_layers,
         )
-        # Adjust config to match reality.
+        # Adjust config to match reality — write to the backing fields
+        # since layers_per_gpu/layer_ranges are read-only @property.
         config.num_layers = actual_layers
         per_gpu = actual_layers // config.tp_size
         if actual_layers % config.tp_size != 0:
@@ -361,9 +454,9 @@ def apply_tensor_parallelism(
                 f"Model has {actual_layers} layers, which is not divisible by "
                 f"tp_size={config.tp_size}."
             )
-        config.layers_per_gpu = [per_gpu] * config.tp_size
-        config.layer_ranges = [
-            slice(i * per_gpu, (i + 1) * per_gpu) for i in range(config.tp_size)
+        config._layers_per_gpu = [per_gpu] * config.tp_size
+        config._layer_ranges = [
+            (i * per_gpu, (i + 1) * per_gpu) for i in range(config.tp_size)
         ]
 
     # -- get our layer slice ------------------------------------------------
@@ -460,7 +553,7 @@ def apply_tensor_parallelism(
 def get_tensor_parallel_config(
     num_gpus: int = 2,
     tp_size: int | None = None,
-    num_layers: int = GEMMA_3_12B_NUM_LAYERS,
+    num_layers: int | None = None,
     replicate_embedding: bool = True,
     replicate_lm_head: bool = True,
     all_reduce_lm_head: bool = True,
@@ -473,8 +566,9 @@ def get_tensor_parallel_config(
         Number of available GPUs. tp_size = min(num_gpus, 2).
     tp_size : int, optional
         Explicit TP size override (takes precedence over num_gpus).
-    num_layers : int
-        Total transformer layers (default 48 for Gemma 3 12B).
+    num_layers : int, optional
+        Total transformer layers.  Defaults to GEMMA_3_12B_NUM_LAYERS (48).
+        For other models, pass the actual layer count from model.config.
     replicate_embedding : bool
         Replicate embeddings on every GPU.
     replicate_lm_head : bool
@@ -486,6 +580,8 @@ def get_tensor_parallel_config(
     -------
     TensorParallelConfig
     """
+    if num_layers is None:
+        num_layers = GEMMA_3_12B_NUM_LAYERS
     if tp_size is None:
         tp_size = min(num_gpus, 2)
     if tp_size < 2:

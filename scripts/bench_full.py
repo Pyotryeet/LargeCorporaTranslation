@@ -98,7 +98,7 @@ def run_python_model(model_def: dict) -> dict:
             device_info=plat,
             decoding_params=DecodingParams(max_new_tokens=128, temperature=0.0),
             use_flash_attention=is_cuda,
-            use_torch_compile=False,
+            use_torch_compile=is_cuda,
             max_input_tokens=128,
             backend_type=be_type,
             extra=extra,
@@ -185,7 +185,7 @@ def run_python_model(model_def: dict) -> dict:
             mb.raw_texts = srcs; mb.batch_id = 0
             tres = engine.translate(mb)
             hyps = [g.translated_text for g in tres.generations]
-            bs_r = compute_bertscore(srcs, hyps)
+            bs_r = compute_bertscore(refs, hyps)
             quality = {"bertscore": bs_r.get("system_score"),
                        "num_references": len(refs), "num_translated": len(hyps)}
             print(f"  BERTScore: {quality['bertscore']:.4f}")
@@ -258,7 +258,7 @@ def run_llama_model(model_def: dict) -> dict:
     prefix = "Translate English to Turkish. Output only the Turkish translation.\n\nEnglish: "
     prompts = [f"{prefix}{s}\nTurkish:" for s in srcs]
     MAX_PROMPTS = 12
-    prompts = prompts[:MAX_PROMPTS]; srcs = srcs[:MAX_PROMPTS]
+    prompts = prompts[:MAX_PROMPTS]; srcs = srcs[:MAX_PROMPTS]; refs = refs[:MAX_PROMPTS]
 
     la = model_def.get("llama_args", {})
     ngl = model_def.get("ngl", "all")
@@ -305,7 +305,7 @@ def run_llama_model(model_def: dict) -> dict:
     quality = {}
     if hyps and any(h for h in hyps):
         try:
-            bs = compute_bertscore(srcs[:len(hyps)], hyps)
+            bs = compute_bertscore(refs[:len(hyps)], hyps)
             quality = {"bertscore": bs.get("system_score"),
                        "num_references": len(refs[:len(hyps)])}
             print(f"  BERTScore: {quality['bertscore']:.4f}")

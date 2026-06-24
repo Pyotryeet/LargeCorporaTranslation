@@ -146,11 +146,12 @@ MODELS = [
 def run_via_nllb_backend(model_def, device_info, env_snapshot, run_idx, run_dir):
     """Run NLLB encoder-decoder model via existing Python backend."""
     extra = dict(model_def.get("extra", {}))
+    is_cuda = device_info.backend == "cuda"
     engine = InferenceEngine(
         model_path=model_def["path"], tokenizer_path="",
         device_info=device_info,
         decoding_params=DecodingParams(max_new_tokens=128, temperature=0.0),
-        use_flash_attention=False, use_torch_compile=False,
+        use_flash_attention=is_cuda, use_torch_compile=is_cuda,
         max_input_tokens=128, backend_type="encoder_decoder", extra=extra,
     )
     engine.load()
@@ -159,11 +160,12 @@ def run_via_nllb_backend(model_def, device_info, env_snapshot, run_idx, run_dir)
 
 def run_via_ar_backend(model_def, device_info, env_snapshot, run_idx, run_dir):
     """Run autoregressive model via existing Python backend."""
+    is_cuda = device_info.backend == "cuda"
     engine = InferenceEngine(
         model_path=model_def["path"], tokenizer_path="",
         device_info=device_info,
         decoding_params=DecodingParams(max_new_tokens=128, temperature=0.0),
-        use_flash_attention=False, use_torch_compile=False,
+        use_flash_attention=is_cuda, use_torch_compile=is_cuda,
         max_input_tokens=128, backend_type="auto",
     )
     engine.load()
@@ -316,7 +318,7 @@ def run_via_llama(model_def, device_info, env_snapshot, run_idx, run_dir):
     quality = {}
     try:
         if hypotheses and any(h for h in hypotheses):
-            bs = compute_bertscore(sources[:len(hypotheses)], hypotheses)
+            bs = compute_bertscore(references[:len(hypotheses)], hypotheses)
             quality = {
                 "bertscore": bs.get("system_score"),
                 "comet": None, "comet_kiwi": None,
@@ -404,7 +406,7 @@ def run_python_translate_loop(engine, model_def, device_info, run_idx, run_dir):
             mb.raw_texts = sources; mb.batch_id = 0
             t_result = engine.translate(mb)
             hyps = [g.translated_text for g in t_result.generations]
-            bs_r = compute_bertscore(sources, hyps)
+            bs_r = compute_bertscore(references, hyps)
             quality = {"bertscore": bs_r.get("system_score"), "comet": None,
                        "comet_kiwi": None, "num_references": len(references),
                        "num_translated": len(hyps)}

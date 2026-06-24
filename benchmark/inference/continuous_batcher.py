@@ -63,7 +63,7 @@ Activation gate
 ---------------
 Only activates when ALL of:
   - Backend is CUDA (not MPS, not CPU).
-  - Batch size >= 8 (small batches don't benefit from dynamic scheduling).
+  - Batch size >= 2 (MIN_BATCH_SIZE_FOR_CONTINUOUS; env TR_CONTINUOUS_BATCHING_MIN_BATCH overrides).
   - PagedAttention is enabled (--paged-attention flag).
   - TR_CONTINUOUS_BATCHING_MIN_BATCH env var can lower the threshold.
 
@@ -193,6 +193,14 @@ class ContinuousBatcher:
 
         # ── PagedCache for the current decode step ──
         self._paged_cache: Any = None  # PagedCache
+
+        # ── PagedCache rebuild optimisation (O11) ──
+        # Track the active seq_ids the last PagedCache was built with.
+        # If the composition hasn't changed (same IDs, same order), skip
+        # the unconditional rebuild in _schedule_chunked_step — the
+        # existing cache is still valid because PagedLayer.update()
+        # mutates paged blocks in-place per step.
+        self._prev_paged_cache_active_ids: list[int] = []
 
         # ── Stats ──
         self.total_sequences_completed: int = 0
@@ -538,6 +546,9 @@ class ContinuousBatcher:
                 raise
 
         # ── Build PagedCache for the combined decode + prefill batch ──
+        # Only rebuild when the active sequence composition changes (O11).
+        # PagedLayer.update() writes KV into paged blocks in-place each
+        # step, so the cache is valid across steps with the same active set.
         all_active_ids = list(self._active_order)
         for seq in self._prefill_queue:
             if seq.seq_id not in self._active_set:
@@ -545,9 +556,12 @@ class ContinuousBatcher:
         # Also include newly-transitioned (after this step) but they don't
         # exist yet — the PagedCache is built for what's currently active.
         if all_active_ids:
-            self._paged_cache = PagedCache(self._paged_kv, seq_ids=all_active_ids)
+            if all_active_ids != self._prev_paged_cache_active_ids:
+                self._paged_cache = PagedCache(self._paged_kv, seq_ids=all_active_ids)
+                self._prev_paged_cache_active_ids = list(all_active_ids)
         else:
             self._paged_cache = None
+            self._prev_paged_cache_active_ids = []
 
         # ── Execute decode step for all fully-prefilled sequences ──
         if self._decode_queue:
@@ -912,6 +926,7 @@ class ContinuousBatcher:
         self._active_order.clear()
         self._active_set.clear()
         self._paged_cache = None
+        self._prev_paged_cache_active_ids = []
         return drained
 
     def flush_completed(self) -> list[SequenceState]:
@@ -935,9 +950,9 @@ def should_use_continuous_batching(
 
     Conditions:
       - CUDA backend (the only backend where batch sizes are large enough).
-      - Batch size >= MIN_BATCH_SIZE_FOR_CONTINUOUS (default 8).
+      - Batch size >= MIN_BATCH_SIZE_FOR_CONTINUOUS (default 2).
       - PagedAttention is enabled (required for zero-fragmentation KV cache).
-      - TR_CONTINUOUS_BATCHING_MIN_BATCH env var can lower the threshold.
+      - TR_CONTINUOUS_BATCHING_MIN_BATCH env var can lower/raise the threshold.
     """
     import os
     min_bs = int(os.environ.get(

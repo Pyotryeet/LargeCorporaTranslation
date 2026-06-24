@@ -9,6 +9,7 @@ from benchmark.hardware.precision import get_dtype, PrecisionMode
 from benchmark.hardware.parallelism import (
     TensorParallelConfig,
     apply_tensor_parallelism,
+    ensure_dist_initialized,
     get_tensor_parallel_config,
 )
 from benchmark.hardware.jit_compiler import (
@@ -26,6 +27,7 @@ __all__ = [
     "PrecisionMode",
     "TensorParallelConfig",
     "apply_tensor_parallelism",
+    "ensure_dist_initialized",
     "get_tensor_parallel_config",
     # v3.3: JIT kernel compilation.
     "JITCompiler",

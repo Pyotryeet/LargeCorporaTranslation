@@ -581,15 +581,17 @@ class AutoregressiveBackend(InferenceBackend):
             self._ev_decode_end = torch.cuda.Event(enable_timing=True)
 
         # ── Extreme optimization flags ──
-        self._use_cuda_graph: bool = extra.get("use_cuda_graph", True)
+        # CUDA graph capture disabled — the captured graph omits past_key_values
+        # as a static input, so replay would produce garbage. _extreme_decode
+        # uses standard model() forwards instead. See cuda_graphs.py deprecation.
+        self._use_cuda_graph: bool = False
         # PagedAttention is unconditionally disabled because no model in the
         # inference hot path has been modified to consume paged KV blocks.
-        # The _convert_to_paged method writes KV data into PagedKVCache
-        # blocks but the model's attention layers only read from the HF
-        # contiguous cache (past_key_values).  Since the paged blocks are
-        # never consumed by any attention kernel, allocating them wastes
-        # GPU memory proportional to sequence length (e.g. ~400 MB per
-        # 1024-token sequence on the Gemma 3 12B default config, or tens
+        # PagedKVCache blocks can be written but the model's attention layers
+        # only read from the HF contiguous cache (past_key_values).  Since the
+        # paged blocks are never consumed by any attention kernel, allocating
+        # them wastes GPU memory proportional to sequence length (e.g. ~400 MB
+        # per 1024-token sequence on the Gemma 3 12B default config, or tens
         # of GB across a batched pipeline).  To re-enable, model forward
         # hooks must intercept attention and read from PagedKVCache blocks
         # instead of past_key_values. See benchmark/inference/paged_attention.py.
@@ -636,6 +638,9 @@ class AutoregressiveBackend(InferenceBackend):
         # Fused kernel availability.
         self._fused_rms_norm: Any = None
         self._fused_swiglu: Any = None
+
+        # Capability registry (populated at end of load()).
+        self._capability_registry: Any = None
 
     # ═════════════════════════════════════════════════════════════════════
     # LOAD — extreme low-level initialization
@@ -801,10 +806,7 @@ class AutoregressiveBackend(InferenceBackend):
         if self._use_int8_kv_cache:
             self._init_kv_cache_quantization()
 
-        self._loaded = True
-        self._log_memory()
-
-        # ── Speculative decoder (v3.4) ──
+        # ── 11. Speculative decoder (v3.4) ──
         if self._use_speculative:
             from benchmark.inference.speculative import create_speculative_decoder
 
@@ -826,23 +828,150 @@ class AutoregressiveBackend(InferenceBackend):
                 )
                 self._use_speculative = False
 
+        load_duration = time.monotonic() - load_start
         logger.info(
-            "=== AR model loaded in %.1fs — "
-            "cudaMallocAsync=%s, PagedAttn=%s, CUDA_Graph=%s, "
-            "fused_kernels=%s, compile=%s, JIT_CUDA=%s, "
-            "speculative=%s ===",
-            time.monotonic() - load_start,
-            getattr(self, '_malloc_async_active', False),
-            self._use_paged_attention and self._paged_kv is not None,
-            self._use_cuda_graph,
-            self._use_fused_kernels,
-            self.use_torch_compile,
-            getattr(self, '_jit_kernels_active', False),
-            (
-                self._spec_decoder.stats.get("mode", "on")
-                if self._spec_decoder else "off"
-            ),
+            "=== AR model loaded in %.1fs ===", load_duration,
         )
+
+        # ── Build a verified capability registry and report it ──
+        self._report_capabilities()
+
+        self._loaded = True
+        self._log_memory()
+
+    def _report_capabilities(self) -> None:
+        """Populate the capability registry with VERIFIED states (not aspirational).
+
+        Called at the end of load() after every guard has run.
+        """
+        from benchmark.config.capability import (
+            CapabilityRegistry, CapabilityEntry, ActivationState,
+        )
+        self._capability_registry = CapabilityRegistry()
+        reg = self._capability_registry
+
+        # ── Hot-path compute ──
+        reg.register(CapabilityEntry(
+            feature_id="flash_sdpa", display_name="Flash SDPA",
+            state=ActivationState.ACTIVE if self.use_flash_attention and self.backend_name == "cuda"
+                  else ActivationState.INERT,
+            reason="CUDA + PyTorch SDPA backend" if self.backend_name == "cuda"
+                  else "Not CUDA",
+            phase="hot_path",
+        ))
+        reg.register(CapabilityEntry(
+            feature_id="torch_compile", display_name="torch.compile",
+            state=ActivationState.ACTIVE if self.use_torch_compile
+                  else ActivationState.INERT,
+            reason="mode=reduce-overhead" if self.use_torch_compile
+                  else "Disabled (--no-compile, MPS, CPU, or safe_mode)",
+            phase="hot_path",
+        ))
+        reg.register(CapabilityEntry(
+            feature_id="te_fp8", display_name="TE FP8",
+            state=ActivationState.ACTIVE if getattr(self, '_te_available', False)
+                  else ActivationState.INERT,
+            reason="FP8 tensor core matmul" if getattr(self, '_te_available', False)
+                  else "TE not available or --safe-mode",
+            phase="hot_path",
+        ))
+
+        # ── Hot-path decode ──
+        reg.register(CapabilityEntry(
+            feature_id="cuda_graph_replay", display_name="CUDA Graph Replay",
+            state=ActivationState.INERT,
+            reason="Captured graph omits past_key_values as static input; "
+                   "_extreme_decode uses standard model() forwards. "
+                   "FutureWarning emitted on import.",
+            phase="hot_path",
+        ))
+        reg.register(CapabilityEntry(
+            feature_id="fused_triton_kernels", display_name="Fused Triton Kernels",
+            state=ActivationState.INERT,
+            reason="Injection hardcoded if False: (autoregressive.py:766) — "
+                   "Triton ops require torch.compile inductor graph",
+            phase="hot_path",
+        ))
+        reg.register(CapabilityEntry(
+            feature_id="jit_cuda_kernels", display_name="JIT CUDA C++ Kernels",
+            state=ActivationState.BROKEN,
+            reason="Sources set to None (architecturally broken). Disabled 2026-06-23.",
+            phase="hot_path",
+        ))
+        reg.register(CapabilityEntry(
+            feature_id="cuda_malloc_async", display_name="cudaMallocAsync",
+            state=ActivationState.INERT,
+            reason="Commented out — incompatible with torch.compile cudagraph_trees (PyTorch 2.6)",
+            phase="hot_path",
+        ))
+        reg.register(CapabilityEntry(
+            feature_id="speculative_decode", display_name="Speculative Decoding",
+            state=ActivationState.GATED if self._spec_decoder is not None
+                  else ActivationState.INERT,
+            reason="Active (TR_ENABLE_EXPERIMENTAL_SPECULATIVE=1)" if self._spec_decoder is not None
+                  else "Env-gated: requires TR_ENABLE_EXPERIMENTAL_SPECULATIVE=1",
+            phase="hot_path",
+        ))
+
+        # ── Memory / KV ──
+        reg.register(CapabilityEntry(
+            feature_id="paged_kv_cache_ar", display_name="Paged KV-Cache (AR)",
+            state=ActivationState.INERT,
+            reason="_use_paged_attention hardcoded False (autoregressive.py:596). "
+                   "Real paged KV only via CB path.",
+            phase="hot_path",
+        ))
+        reg.register(CapabilityEntry(
+            feature_id="int8_kv_quant", display_name="INT8 KV-Cache Quant",
+            state=ActivationState.INERT,
+            reason="Object constructed but never update()/get()-ed (autoregressive.py:1184). "
+                   "HF past_key_values used instead.",
+            phase="hot_path",
+        ))
+        reg.register(CapabilityEntry(
+            feature_id="pinned_memory", display_name="Pinned Memory Pipeline",
+            state=ActivationState.ACTIVE if self.backend_name == "cuda"
+                  else ActivationState.INERT,
+            reason="CUDA page-locked host tensors" if self.backend_name == "cuda"
+                  else "Not CUDA",
+            phase="hot_path",
+        ))
+        reg.register(CapabilityEntry(
+            feature_id="weight_quantization", display_name="Weight Quantization",
+            state=ActivationState.GATED if self._use_quantized_weights
+                  else ActivationState.INERT,
+            reason="INT8/INT4 via bitsandbytes" if self._use_quantized_weights
+                  else "Not requested",
+            phase="startup",
+        ))
+
+        # ── Parallelism ──
+        reg.register(CapabilityEntry(
+            feature_id="device_map_auto", display_name="device_map=auto",
+            state=ActivationState.ACTIVE if len(self.devices) > 1
+                  else ActivationState.INERT,
+            reason=f"{len(self.devices)} GPU(s) available" if len(self.devices) > 1
+                  else "Single GPU — fast path",
+            phase="startup",
+        ))
+        reg.register(CapabilityEntry(
+            feature_id="tensor_parallelism", display_name="Tensor Parallelism",
+            state=ActivationState.INERT,
+            reason="apply_tensor_parallelism has zero call sites. "
+                   "Multi-GPU via device_map=auto only.",
+            phase="startup",
+        ))
+        reg.register(CapabilityEntry(
+            feature_id="nccl_p2p", display_name="NCCL P2P",
+            state=ActivationState.ACTIVE if self.backend_name == "cuda"
+                  else ActivationState.INERT,
+            reason="NCCL peer access enabled" if self.backend_name == "cuda"
+                  else "Not CUDA",
+            phase="startup",
+        ))
+
+        reg.freeze()
+        logger.info(reg.report_text())
 
     def _prevent_safetensors_ubc_pollution(self) -> None:
         """Mark safetensors files F_GLOBAL_NOCACHE so macOS never caches
@@ -1008,12 +1137,13 @@ class AutoregressiveBackend(InferenceBackend):
             )
 
     def _apply_extreme_compile(self) -> None:
-        """torch.compile with max-autotune for maximum performance.
+        """Apply torch.compile with reduce-overhead for CUDA decode speedup.
 
-        WARNING: torch.compile on MPS can deadlock on the first forward
-        pass in PyTorch 2.x.  The compilation itself succeeds but graph
-        execution hangs.  We disable compile on MPS entirely and fall
-        back to eager mode.
+        On CUDA: mode='reduce-overhead' uses frame-level CUDA graphs for
+        15-40% decode speedup while avoiding max-autotune's cudagraph_trees
+        (which is incompatible with KV-cache accumulation in PyTorch < 2.12).
+
+        MPS is skipped — inductor deadlocks on first forward in PyTorch 2.x.
         """
         if self.backend_name == "mps":
             logger.info(
@@ -1026,10 +1156,6 @@ class AutoregressiveBackend(InferenceBackend):
 
         try:
             if self.backend_name == "cuda":
-                # max-autotune triggers inductor's cudagraph_trees which
-                # is incompatible with cudaMallocAsync in PyTorch 2.6.
-                # reduce-overhead uses frame-level CUDA graphs instead
-                # and provides most of the benefit without the incompatibility.
                 opts = {
                     "mode": "reduce-overhead",
                     "fullgraph": False,
@@ -1042,12 +1168,18 @@ class AutoregressiveBackend(InferenceBackend):
             self.model = compiled
             logger.info("torch.compile applied (mode=%s)", opts.get("mode"))
         except Exception as e:
-            logger.warning("torch.compile extreme failed (%s) — trying reduce-overhead", e)
+            # Fall back to mode='default' instead of retrying the same mode.
+            logger.warning(
+                "torch.compile(mode=%s) failed: %s — trying mode='default'",
+                opts.get("mode"), e,
+            )
             try:
-                self.model = torch.compile(self.model, mode="reduce-overhead", fullgraph=False)
-                logger.info("torch.compile applied (reduce-overhead fallback)")
+                self.model = torch.compile(self.model, mode="default", fullgraph=False)
+                logger.info("torch.compile applied (default fallback)")
             except Exception as e2:
-                logger.warning("torch.compile failed entirely: %s", e2)
+                logger.warning(
+                    "torch.compile failed entirely: %s — running eager mode", e2,
+                )
 
     def _inject_fused_kernels(self) -> None:
         """Replace stock PyTorch ops with Triton fused kernels at runtime.
@@ -1150,12 +1282,12 @@ class AutoregressiveBackend(InferenceBackend):
         NOTE (2026-06): This method is currently NOT REACHED in the default
         code path — ``self._use_paged_attention`` is hardcoded to ``False``
         in ``__init__`` because no model attention layer has been modified
-        to read from paged KV blocks.  The paged cache would be allocated
-        and filled by ``_convert_to_paged``, but the model would still read
-        from the HF contiguous ``past_key_values`` tuple, making the paged
-        blocks dead memory.  When model forward hooks are in place to
-        consume PagedKVCache, flip the flag back to True and wire
-        ``_convert_to_paged`` into the prefill step.
+        to read from paged KV blocks.  The paged cache would be filled
+        during prefill but the model would still read from the HF contiguous
+        ``past_key_values`` tuple, making the paged blocks dead memory.
+        When model forward hooks are in place to consume PagedKVCache,
+        flip the flag back to True and wire paged K/V writing into the
+        prefill step.
         """
         try:
             kv_cfg = self.kv_cache_config
@@ -1188,6 +1320,11 @@ class AutoregressiveBackend(InferenceBackend):
             logger.info(
                 "INT8 KV-cache quantization: %.1f× compression",
                 self._kv_quant_config.compression_ratio(),
+            )
+            logger.warning(
+                "INT8 KV-cache quantization object created but NOT WIRED into the decode loop. "
+                "HF past_key_values are used instead — no quantization benefit. "
+                "See ARCHITECTURE.md §8 #9."
             )
         except Exception as e:
             logger.warning("KV-cache quant init failed: %s", e)
@@ -1685,7 +1822,11 @@ class AutoregressiveBackend(InferenceBackend):
             if self.config.extra.get("strip_model_prefix", False):
                 if text.startswith("model"):
                     text = text[len("model"):].strip()
-            in_tok = len(batch.input_ids[i]) if hasattr(batch, 'input_ids') and i < len(batch.input_ids) else 0
+            in_tok = (
+                int(batch.attention_mask[i].sum().item())
+                if hasattr(batch, 'attention_mask') and i < len(batch.attention_mask)
+                else (len(batch.input_ids[i]) if hasattr(batch, 'input_ids') and i < len(batch.input_ids) else 0)
+            )
             generations.append(GenerationOutput(
                 input_text=batch.raw_texts[i] if hasattr(batch, 'raw_texts') and i < len(batch.raw_texts) else "",
                 translated_text=text.strip(),

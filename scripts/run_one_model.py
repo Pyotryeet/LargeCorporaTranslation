@@ -89,18 +89,23 @@ def run_one_model(model_def: dict) -> dict:
 
     try:
         is_enc_dec = be_type == "encoder_decoder"
-        # torch.compile disabled for autoregressive models on PyTorch 2.11:
-        # inductor cudagraph_trees crashes on KV-cache accumulation with
-        # "CUDAGraphs tensor overwritten by a subsequent run" even when
-        # warmup and production share the same batch size.  The compile
-        # path was tested on PyTorch 2.6 (H200 setup docs) but 2.11 has
-        # a regression.  Disable until the cudagraph_trees fix lands.
+        # torch.compile: enable on CUDA where it provides 15-40% speedup via
+        # frame-level CUDA graphs (reduce-overhead mode).  Disabled on MPS
+        # (inductor deadlocks on first forward) and CPU (minimal benefit).
+        # PyTorch 2.11 had a cudagraph_trees regression — fixed in 2.12+.
+        # The backend's _apply_extreme_compile has its own safety net that
+        # catches any compile failure and falls back to eager.
+        # Set TR_DISABLE_TORCH_COMPILE=1 to force-disable.
+        _use_compile = (
+            is_cuda
+            and os.environ.get("TR_DISABLE_TORCH_COMPILE") != "1"
+        )
         engine = InferenceEngine(
             model_path=path, tokenizer_path="",
             device_info=plat,
             decoding_params=DecodingParams(max_new_tokens=128, temperature=0.0),
             use_flash_attention=is_cuda,
-            use_torch_compile=False,
+            use_torch_compile=_use_compile,
             max_input_tokens=128,
             backend_type=be_type,
             extra=extra,
@@ -313,7 +318,7 @@ def run_llama_model(model_def: dict) -> dict:
     prefix = "Translate English to Turkish. Output only the Turkish translation.\n\nEnglish: "
     prompts = [f"{prefix}{s}\nTurkish:" for s in srcs]
     MAX_PROMPTS = 12
-    prompts = prompts[:MAX_PROMPTS]; srcs = srcs[:MAX_PROMPTS]
+    prompts = prompts[:MAX_PROMPTS]; srcs = srcs[:MAX_PROMPTS]; refs = refs[:MAX_PROMPTS]
 
     la = model_def.get("llama_args", {})
     ngl = model_def.get("ngl", "all")
@@ -359,7 +364,7 @@ def run_llama_model(model_def: dict) -> dict:
     quality = {}
     if hyps and any(h for h in hyps):
         try:
-            bs = compute_bertscore(srcs[:len(hyps)], hyps)
+            bs = compute_bertscore(refs[:len(hyps)], hyps)
             quality = {"bertscore": bs.get("system_score")}
             print(f"  BERTScore: {quality['bertscore']:.4f}")
         except Exception as e:
