@@ -256,7 +256,16 @@ Examples:
             _model["quantization"] = args.quantization
 
         if args.model is not None:
-            _model["model_path"] = args.model
+            # Resolve preset names to HF model IDs.
+            _resolved = args.model
+            try:
+                from benchmark.config.model_presets import get_preset_by_name
+                preset = get_preset_by_name(args.model)
+                if preset is not None:
+                    _resolved = preset.hf_model_id
+            except ImportError:
+                pass
+            _model["model_path"] = _resolved
 
         # Write a temporary config so the harness picks up the injected values.
         import tempfile

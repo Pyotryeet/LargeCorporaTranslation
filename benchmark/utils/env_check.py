@@ -9,7 +9,16 @@ logger = logging.getLogger(__name__)
 
 def _is_huggingface_hub_id(model_path: str) -> bool:
     """Check if model_path looks like a HuggingFace Hub ID (e.g. 'org/model')."""
-    return "/" in model_path and not Path(model_path).exists()
+    if "/" in model_path and not Path(model_path).exists():
+        return True
+    # Also accept registered model preset names (e.g. 'translategemma-4b-bf16').
+    try:
+        from benchmark.config.model_presets import get_preset_by_name
+        if get_preset_by_name(model_path) is not None:
+            return True
+    except ImportError:
+        pass
+    return False
 
 
 def run_preflight_checks(config, device_info, dry_run: bool = False) -> None:
