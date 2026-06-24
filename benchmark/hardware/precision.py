@@ -20,6 +20,7 @@ v3.4: FP8 made the explicit default on CUDA/H200.
 from __future__ import annotations
 
 import logging
+import os
 from typing import Literal, Optional
 
 import torch
@@ -493,6 +494,125 @@ def apply_native_fp8_to_model(
             replaced, mlp_only,
         )
     return replaced
+
+
+# ---------------------------------------------------------------------------
+# FP8 weight cache — quantize Linear weights once, cache to disk
+# ---------------------------------------------------------------------------
+
+def _model_weight_hash(model: torch.nn.Module, model_path: str) -> str:
+    """Stable hash of model identity + Linear weight shapes and checksums."""
+    import hashlib
+    h = hashlib.sha256(model_path.encode())
+    for name, mod in model.named_modules():
+        if isinstance(mod, torch.nn.Linear):
+            w = mod.weight.data
+            h.update(f"{name}:{list(w.shape)}".encode())
+            h.update(str(w.sum().item()).encode())
+    return h.hexdigest()[:16]
+
+
+def save_fp8_weights(
+    model: torch.nn.Module,
+    model_path: str,
+    cache_dir: str | os.PathLike | None = None,
+) -> str | None:
+    """Quantize all nn.Linear weights to FP8 and save each as a safetensors file.
+
+    Weights are stored in ``{cache_dir}/{hash}/`` — one ``.safetensors`` file
+    per module.  The lm_head is excluded.
+
+    Returns the cache directory path, or None if the save failed.
+    """
+    try:
+        from safetensors.torch import save_file
+    except ImportError:
+        logger.warning("safetensors not installed — FP8 weight cache disabled.")
+        return None
+
+    if cache_dir is None:
+        cache_dir = os.path.join(
+            os.path.expanduser("~"), ".cache", "tr_benchmark", "fp8_weights",
+        )
+    cache_dir = os.path.join(str(cache_dir), _model_weight_hash(model, model_path))
+    os.makedirs(cache_dir, exist_ok=True)
+
+    saved = 0
+    for name, mod in model.named_modules():
+        if isinstance(mod, torch.nn.Linear) and not isinstance(mod, NativeFP8Linear):
+            if "lm_head" in name or name == "lm_head":
+                continue
+            w = mod.weight.data.to(torch.float32)
+            w_max = w.abs().max()
+            if w_max == 0:
+                continue
+            scale = (w_max / 448.0).to(torch.float32)
+            w_fp8 = (w / scale).clamp(-448.0, 447.0).to(torch.float8_e4m3fn)
+            out_path = os.path.join(cache_dir, f"{name.replace('.', '_')}.safetensors")
+            save_file(
+                {"weight": w_fp8, "scale": scale.to(torch.float32)},
+                out_path,
+            )
+            saved += 1
+
+    if saved > 0:
+        logger.info(
+            "FP8 weight cache: %d layers saved to %s", saved, cache_dir,
+        )
+        return cache_dir
+    return None
+
+
+def load_fp8_weights(
+    model: torch.nn.Module,
+    model_path: str,
+    cache_dir: str | os.PathLike | None = None,
+) -> int:
+    """Load pre-quantized FP8 weights from cache and set them on Linear layers.
+
+    Each layer's FP8 weight replaces the BF16/FP32 weight.  The scale is
+    stored on the module as ``_fp8_weight_scale`` for use by a subsequent
+    ``NativeFP8Linear`` wrapper or direct ``torch._scaled_mm`` calls.
+
+    Returns the number of layers loaded from cache (0 = cache miss).
+    """
+    try:
+        from safetensors.torch import load_file
+    except ImportError:
+        return 0
+
+    if cache_dir is None:
+        cache_dir = os.path.join(
+            os.path.expanduser("~"), ".cache", "tr_benchmark", "fp8_weights",
+        )
+    cache_dir = os.path.join(str(cache_dir), _model_weight_hash(model, model_path))
+    if not os.path.isdir(cache_dir):
+        return 0
+
+    loaded = 0
+    for name, mod in model.named_modules():
+        if isinstance(mod, torch.nn.Linear) and not isinstance(mod, NativeFP8Linear):
+            if "lm_head" in name or name == "lm_head":
+                continue
+            fname = name.replace(".", "_")
+            path = os.path.join(cache_dir, f"{fname}.safetensors")
+            if not os.path.isfile(path):
+                continue
+            try:
+                tensors = load_file(path)
+                # Store FP8 weight + scale on the module — NativeFP8Linear
+                # consumes these, or a subsequent wrap pass will.
+                mod.register_buffer("_fp8_weight", tensors["weight"])
+                mod.register_buffer("_fp8_weight_scale", tensors["scale"])
+                loaded += 1
+            except Exception as e:
+                logger.debug("Failed to load FP8 cache for %s: %s", name, e)
+
+    if loaded > 0:
+        logger.info(
+            "FP8 weight cache hit: %d layers from %s", loaded, cache_dir,
+        )
+    return loaded
 
 
 def native_fp8_autocast() -> bool:
