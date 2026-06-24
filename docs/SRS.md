@@ -16,6 +16,16 @@
 
 ---
 
+> ⚠️ **Historical spec.** This SRS describes the *requirements* at design time.
+> The authoritative description of what the code *actually does* today is
+> [`ARCHITECTURE.md`](ARCHITECTURE.md). Where they disagree,
+> **ARCHITECTURE is correct.** Several requirements (tensor parallelism across
+> 2 GPUs, CUDA graph decode, TensorRT) were implemented but subsequently gated
+> off or broken — see
+> [ARCHITECTURE §8 Feature Status](ARCHITECTURE.md#8-feature-status-the-truth-table).
+> This document is included for understanding the original requirements; the
+> actual feature wiring lives in ARCHITECTURE.
+
 ## Revision History
 
 | Version | Date | Changes |
@@ -42,7 +52,10 @@ The System is a **single-node inference benchmark** that supports **two hardware
 
 The System:
 - Auto-detects the available backend at startup.
-- Loads and serves TranslateGemma 12B for English → Turkish translation.
+- Loads and serves a translation model (default TranslateGemma 4B;
+  12B for production) for English → Turkish translation via the model-agnostic
+  backend protocol (autoregressive, encoder-decoder/NLLB, diffusion, TensorRT,
+  custom plugin).
 - Streams input text, translates for a fixed 2 h window, collects metrics, and runs a quality benchmark.
 - Produces a report suitable for extrapolating full-ClearNet translation cost and duration.
 
@@ -77,7 +90,8 @@ The System:
 ┌──────────────┐    Reference set     │  ┌──────────────────┐    │   Quality Scores      │  (JSON + MD)  │
 │  Golden      │ ◄──────────────────  │  │ Quality          │    │ ──────────────────────►│              │
 │  References  │                      │  │ Benchmark        │    │                      └──────────────┘
-└──────────────┘                      │  │ (BLEU/COMET/chrF)│    │
+└──────────────┘                      │  │ (BERTS/COMET/chrF│    │
+                                      │  │  BLEU/chrF++)    │    │
                                       └──────────────────────────┘
 ```
 
@@ -142,7 +156,7 @@ The System:
 |---|---|---|---|
 | FR-21 | The System shall load a golden reference set from a JSONL file containing at minimum `source_text` (English) and `reference_translation` (Turkish) fields. | P0 | File is loaded; `len(references) == 1000`. |
 | FR-22 | The System shall translate all 1 000 source sentences using the same model, config, and decoding parameters used in the main run. | P0 | Translation completes for all 1 000 sentences. |
-| FR-23 | The System shall compute **BERTScore** (DeBERTa-xlarge-mnli) against the references as a semantic-level metric. | P0 | BERTScore system score is in [0, 1]; formatted to 4 decimals. |
+| FR-23 | The System shall compute **BERTScore** (bert-base-multilingual-cased) against the references as a semantic-level metric. (The original spec listed DeBERTa-xlarge-mnli; the implementation uses bert-base-multilingual-cased — see `quality/metrics_bertscore.py:32`.) | P0 | BERTScore system score is in [0, 1]; formatted to 4 decimals. |
 | FR-24 | The System shall compute **COMET-Kiwi** (reference-free) using the `Unbabel/wmt22-cometkiwi-da` model for quality estimation without reference dependency. | P0 | COMET-Kiwi score is in [0, 1]; formatted to 4 decimals. |
 | FR-25 | The System shall compute **COMET-22** (reference-based) using the `Unbabel/wmt22-comet-da` model, reporting the system score (mean over all segments). | P0 | COMET score is in [0, 1]; formatted to 4 decimals. |
 | FR-26 | The System shall report per-segment COMET scores and flag segments scoring < 0.4 for manual review. | P1 | Low-score segments are listed in the benchmark output. |
@@ -250,7 +264,7 @@ The System:
 
 | ID | Requirement | Priority |
 |---|---|---|
-| IR-01 | The System shall provide a single entrypoint script: `python -m benchmark.run --config config.yaml`. | P0 |
+| IR-01 | The System shall provide a single entrypoint script: `python -m benchmark --config config.yaml`. | P0 |
 | IR-02 | The `--config` flag shall accept a path to a YAML configuration file. All parameters in §3.3.15 shall be overridable via this file. | P0 |
 | IR-03 | The System shall support `--resume <checkpoint_path>` to restart from a checkpoint. | P1 |
 | IR-04 | The System shall support `--benchmark-only` to skip the 2 h translation run and only run the quality benchmark on previously translated output. | P1 |
@@ -339,3 +353,9 @@ The System:
 | G4 — Measure translation quality | FR-21 through FR-26, NFR-05 |
 | G5 — Produce full-dataset estimate | FR-27 through FR-30 |
 | G6 — Reproducibility | FR-10, NFR-09, NFR-10, NFR-11, NFR-15, NFR-16 |
+
+---
+
+*This document is part of the historical spec set. See [`docs/README.md`](README.md)
+for navigation, [`ARCHITECTURE.md`](ARCHITECTURE.md) for current reality, and
+[`AI_CODING_ANTIPATTERNS.md`](AI_CODING_ANTIPATTERNS.md) for mistakes to avoid.*

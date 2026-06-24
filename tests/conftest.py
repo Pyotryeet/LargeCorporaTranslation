@@ -7,6 +7,14 @@ from pathlib import Path
 TESTS_DIR = Path(__file__).parent
 FIXTURE_DIR = TESTS_DIR / "fixtures"
 
+
+def pytest_configure(config):
+    """Register custom markers."""
+    config.addinivalue_line("markers", "fast: fast test (<1s, suitable for pre-commit)")
+    config.addinivalue_line("markers", "slow: slow test (>10s or requires GPU)")
+    config.addinivalue_line("markers", "gpu: requires CUDA GPU")
+    config.addinivalue_line("markers", "integration: requires real data or network")
+
 # ---------------------------------------------------------------------------
 # Strict fixtures mode — TR_STRICT_FIXTURES is ON by default to prevent
 # tests from silently passing on auto-generated synthetic data that produces

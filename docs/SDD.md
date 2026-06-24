@@ -1,5 +1,12 @@
 # Software Design Document — v3.6
 
+> ⚠️ **Historical design spec.** This SDD describes the *design intent* at v3.6.
+> The authoritative description of what the code *actually does* today is
+> [`ARCHITECTURE.md`](ARCHITECTURE.md). Where they disagree,
+> **ARCHITECTURE is correct.** See especially
+> [ARCHITECTURE §8 Feature Status](ARCHITECTURE.md#8-feature-status-the-truth-table)
+> for the wired-vs-gated reality of every optimization listed herein.
+
 **Turkish Corpus Translation Benchmark Harness**  
 **Version**: 3.6 · **Status**: Implemented · **Last Updated**: 2026-06-23  
 **References**: PRD v3.6, SRS v1.3
@@ -44,15 +51,15 @@ __main__.py → BenchmarkHarness.run()
   │       ├─ Auto-detect: name → config keys → architecture heuristics
   │       └─ BackendClass(config) → InferenceBackend
   ├─ backend.load()
-  │   ├─ cudaMallocAsync attempted (env var before torch import)
   │   ├─ Tokenizer (HF AutoTokenizer)
   │   ├─ Model weights (quantized or standard — bf16/fp16/int8/int4)
-  │   ├─ Model presets resolved (via benchmark/config/model_presets.py)
   │   ├─ torch.compile(mode="reduce-overhead")
-  │   ├─ Fused kernels injected (Triton + JIT CUDA C++)
-  │   ├─ PagedAttention pool initialized (if --paged-attention)
-  │   ├─ INT8 KV-cache quantization configured
-  │   └─ SpeculativeDecoder initialized (if --speculative)
+  │   ├─ Fused kernels injection (⚠️ hardcoded `if False:` — disabled)
+  │   ├─ cudaMallocAsync (⚠️ commented out — disabled)
+  │   ├─ PagedAttention (⚠️ `_use_paged_attention` hardcoded `False` on AR path)
+  │   ├─ INT8 KV-cache quant (⚠️ object constructed but never read/written — no-op)
+  │   ├─ CUDA graph capture (⚠️ captured but never replayed — deprecated)
+  │   └─ SpeculativeDecoder initialized (🔬 only if TR_ENABLE_EXPERIMENTAL_SPECULATIVE=1)
   ├─ backend.warmup(batches) + CUDA Graph capture
   └─ Translation loop
       ├─ AsyncPipeline.next_batch() → PipelineBatch
@@ -175,18 +182,32 @@ DECODE (graph.replay() × N tokens):
 
 Block-level virtual memory: 16-token physical blocks, per-sequence block table, free list with LIFO recycling, reference counting for prefix sharing. **40-70% memory savings** vs contiguous allocation.
 
+⚠️ **Two paths, one real, one dead:** On the default AR hot path,
+`_use_paged_attention` is hardcoded `False` and `_convert_to_paged` does not exist
+(comments only). Paged KV that actually feeds the model forward exists only via
+the `--continuous-batching --paged-attention` path (`ContinuousBatcher +
+PagedCache` shim). See [`ARCHITECTURE.md` §7](ARCHITECTURE.md#7-the-two-optimization-stacks).
+
 ### 3.6 CUDA Graphs
 
 `CUDAGraphPool`: pre-captures graphs for batch sizes [1, 2, 4, 8, 12, 16, 24, 32, 48, 64, 96, 128]. Selects smallest ≥ current, pads.
 
 `CUDAGraphDecoder`: static buffers → warmup 3× → capture with `torch.cuda.graph()` → replay.
 
+⚠️ **Deprecated:** The graph pool is instantiated and graphs are captured during
+warmup, but `_extreme_decode` never calls `graph.replay()` — it runs standard
+`model(...)` forwards. See `benchmark/inference/backends/autoregressive.py:1548`.
+The module emits a `FutureWarning` on import. The only active graph path is
+`torch.compile(mode="reduce-overhead")`.
+
 ### 3.7 Observability
 
-**PrometheusExporter**: 20+ metrics (counters, gauges, histograms), `/metrics` endpoint.  
-**DashboardServer**: HTML dashboard at `/`, JSON API at `/api/snapshot`.  
-**NsightProfiler**: NVTX ranges + Chrome trace export.  
-**PerformanceBaselineManager**: Welch t-test regression detection with severity classification.
+**PrometheusExporter**: 20+ metrics (counters, gauges, histograms), `/metrics` endpoint.
+**PerfRegressionManager** (not yet wired): Welch t-test regression detection with severity classification.
+
+*(DashboardServer, NsightProfiler, and LiveDashboard were removed in v3.6 cleanup — 
+they had zero callers. The PrometheusExporter provides in-process HTTP; the full 
+Grafana stack is external via `make dashboard`.)*
 
 ---
 
@@ -216,7 +237,7 @@ Block-level virtual memory: 16-token physical blocks, per-sequence block table, 
 | Disk full | Graceful stop, save checkpoint |
 | NCCL hang | Timeout + worker restart |
 
-## 6. Technology Stack
+## 6. Technology Stack & Model Presets
 
 Python 3.11+, PyTorch 2.6+, HuggingFace transformers 4.57+, CUDA 12.4+, Triton 3.2+, Rust tokenizers crate 0.22+, orjson 3.11+, BERTScore 0.3+, COMET-22 + COMET-Kiwi 2.2+, Pydantic v2, pytest 9.1+, bitsandbytes (INT8/INT4 quantization), Docker, Grafana, Prometheus.
 
@@ -239,3 +260,27 @@ Central registry of 11 supported model configurations:
 | diffusiongemma-26b-a4b | google/diffusiongemma-26B-A4B-it | 48 | 8 | BF16 |
 
 Presets are resolved via `get_preset_by_name()` or `resolve_architecture_defaults()`. They provide architecture constants (num_layers, num_kv_heads, head_dim, hidden_size) to other components, eliminating hardcoded constants.
+
+---
+
+## 7. Current Reality vs. This Design
+
+This SDD v3.6 was written at design time. Several optimizations described here
+were implemented but subsequently **gated off** due to compatibility issues
+(PyTorch 2.6/2.11 `cudagraph_trees`, `torch.compile` conflicts, TRT 11.x API
+removals). The production AR hot path is:
+
+- `torch.compile(mode="reduce-overhead")`
+- Transformer-Engine FP8 (`te.Linear`)
+- Flash + mem-efficient SDPA
+
+Everything else (fused kernels, CUDA graphs, cudaMallocAsync, PagedAttention on
+the AR path, INT8 KV-cache, Fast-dLLM caching, TensorRT decode, tensor
+parallelism) is either gated off, broken, or dead code.
+
+The authoritative status of every feature is
+[`ARCHITECTURE.md` §8 Feature Status](ARCHITECTURE.md#8-feature-status-the-truth-table).
+
+See also: [`AI_CODING_ANTIPATTERNS.md`](AI_CODING_ANTIPATTERNS.md) —
+especially A1 (dead code masquerading as a feature), A2 (docstring/comment lies),
+A3 (copy-paste divergence).

@@ -136,7 +136,7 @@ def fused_rms_norm_residual(
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """RMSNorm(x + residual) — one kernel.
 
-    Equivalent to, but 2-3× faster than:
+    Equivalent to, but 2-3× faster than (micro-benchmark claim; not measured on this codebase):
         summed = x + residual
         rms = (summed^2).mean().sqrt()
         out = summed / rms * weight
@@ -172,7 +172,7 @@ def fused_swiglu_gate_up(
 ) -> torch.Tensor:
     """Fused SiLU(gate) * up — one kernel.
 
-    Equivalent to, but 1.5-2× faster than:
+    Equivalent to, but 1.5-2× faster than (micro-benchmark claim; not measured on this codebase):
         gate = F.silu(F.linear(hidden, gate_proj_weight))
         up = F.linear(hidden, up_proj_weight)
         return gate * up

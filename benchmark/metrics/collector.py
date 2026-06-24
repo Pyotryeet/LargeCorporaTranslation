@@ -83,7 +83,10 @@ class MetricsCollector:
 
     def log_batch(self, batch_result) -> None:
         self.batch_logger.log(batch_result)
-        self.throughput_tracker.add(batch_result.output_tokens_total)
+        self.throughput_tracker.add(
+            batch_result.output_tokens_total,
+            latency_ms=batch_result.total_latency_ms,
+        )
 
     def get_rolling_throughput(self) -> float:
         return self.throughput_tracker.current()

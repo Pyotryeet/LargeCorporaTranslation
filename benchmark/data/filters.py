@@ -20,7 +20,7 @@ class FilterStats:
     passed: int = 0
     rejected_too_short: int = 0
     rejected_garbage: int = 0
-    rejected_language: int = 0
+    rejected_language: int = 0  # reserved for future language-ID filter
 
     @property
     def rejected(self) -> int:

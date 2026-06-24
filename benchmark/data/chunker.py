@@ -44,23 +44,23 @@ class TextChunker:
 
         Notes
         -----
-        Token count checks are based on token IDs without special tokens
-        (``add_special_tokens=False``), so the chunk boundary reflects the
-        raw text length, not text+special tokens.  This matches the pre-v2.0
-        behavior and avoids inflating the token count with BOS/EOS.
+        Token count checks include special tokens (``add_special_tokens=True``)
+        to match the pipeline's re-encode (``pipeline.py:611-616``).  Without
+        this, the chunk boundary underestimates the true token count and the
+        prompt may exceed ``max_input_tokens``, triggering silent truncation.
         """
         if not text or not text.strip():
             return
-        token_ids = self.tokenizer.encode(text, add_special_tokens=False)
+        token_ids = self.tokenizer.encode(text, add_special_tokens=True)
         if len(token_ids) <= self.max_input_tokens:
             yield text
             return
         stride = self._stride()
         for start in range(0, len(token_ids), stride):
             chunk_ids = token_ids[start:start + self.max_input_tokens]
-            if len(chunk_ids) < 10:
+            if len(chunk_ids) < 1:
                 logger.debug(
-                    "chunk: tail chunk %d tokens < 10 — skipping",
+                    "chunk: tail chunk %d tokens < 1 — skipping",
                     len(chunk_ids),
                 )
                 break
@@ -107,14 +107,13 @@ class TextChunker:
         stride = self._stride()
         for start in range(0, n, stride):
             chunk_ids = token_ids[start:start + self.max_input_tokens]
-            if len(chunk_ids) < 10:
-                # Tail chunk is too small to stand alone — append to previous
-                # chunk (if one exists) instead of silently discarding.
-                # For very short documents that still exceed max_input_tokens
-                # (unusual but possible), emit the small chunk anyway.
+            if len(chunk_ids) < 1:
+                # Only skip truly empty tail chunks.  Short but non-empty
+                # chunks are yielded; downstream ChunkFilter handles them
+                # via its min_tokens setting — that is the filter's job,
+                # not the chunker's.
                 logger.debug(
-                    "chunk_with_tokens: tail chunk %d tokens < 10 — skipping",
-                    len(chunk_ids),
+                    "chunk_with_tokens: tail chunk empty — skipping",
                 )
                 break
             # Strip BOS/EOS that may appear at chunk boundaries after slicing.

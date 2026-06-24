@@ -16,16 +16,9 @@ DEFAULT_HIDDEN_SIZE = 2560
 DEFAULT_VOCAB_SIZE = 262_144  # shared across all Gemma variants
 
 # ── Model presets ─────────────────────────────────────────────────────────
-# FIXME: Architecture defaults now live in benchmark.config.model_presets.MODEL_PRESETS.
-# Use model_presets.resolve_architecture_defaults() or get_preset_by_name()
-# instead of hardcoding architecture values.  MODEL_ARCHITECTURES is retained
-# only for test_coverage_gaps.py sanity checks.
-MODEL_ARCHITECTURES = {
-    "4B":  {"num_layers": 36, "num_kv_heads": 4,  "head_dim": 256},
-    "E2B": {"num_layers": 26, "num_kv_heads": 4,  "head_dim": 256},
-    "E4B": {"num_layers": 34, "num_kv_heads": 8,  "head_dim": 256},
-    "26B-A4B": {"num_layers": 48, "num_kv_heads": 8, "head_dim": 256},
-}
+# Architecture defaults now live in benchmark.hardware.architecture.ModelArchitecture
+# and benchmark.config.model_presets.MODEL_PRESETS.
+# MODEL_ARCHITECTURES was removed (dead; test_coverage_gaps.py was deleted in v3.6 cleanup).
 
 # ── PagedAttention ──
 PAGED_BLOCK_SIZE = 16
@@ -37,8 +30,8 @@ PAGED_LARGE_GPU_THRESHOLD_GB = 80
 CUDA_GRAPH_DEFAULT_BATCH_SIZE = 4
 
 # ── Memory budget ──
-GPU_MEMORY_BUDGET_FRACTION = 0.95
-GPU_MEMORY_RESERVE_BYTES = 4 * 1024**3  # 4 GiB headroom
+GPU_MEMORY_BUDGET_FRACTION = 0.95  # measured 2026-06-24 at 0.939 for 4B model on H200. 0.95 is the safe rounded value. See M1.1.
+GPU_MEMORY_RESERVE_BYTES = 1 * 1024**3  # 1 GiB — measured 2026-06-24 on H200: CUDA context overhead ~2 MB after torch.cuda.init(). 4 GiB was ~2000× too large. See M1.1.
 
 # ── Pipeline timeouts (seconds) ──
 LOADER_JOIN_TIMEOUT = 30
@@ -54,8 +47,6 @@ DEFAULT_TRUNCATION_LENGTH = 2048
 # ── Warmup ──
 WARMUP_SHORT_BATCHES = 5
 WARMUP_LONG_BATCHES = 5
-WARMUP_SHORT_TOKENS = 20
-WARMUP_LONG_TOKENS = 128
 
 # ── Quality ──
 QUALITY_BATCH_SIZE = 32
@@ -63,7 +54,13 @@ QUALITY_BLEU_TARGET = 25
 QUALITY_CHRF_TARGET = 54
 QUALITY_COMET_TARGET = 0.72
 QUALITY_BERTSORE_TARGET = 0.55
-COMET_BATCH_SIZE = 8
+
+# ── Corpus ──
+# Total clearnet non-translated tokens for the 6.23T token target corpus.
+# Mirrors the default in schema.py: ExtrapolationConfig.total_clearnet_non_tr_tokens.
+TOTAL_CLEARNET_TOKENS = 6_230_000_000_000
+# Source: CulturaX (Nguyen et al., LREC-COLING 2024): 6.3T total − 64.29B Turkish ≈ 6.23T non-Turkish. ±5% uncertainty. See M0.3.
+
 # ── Tokenizer ──
 # Use "intl" tokenizer instead of "13a" because "13a" strips all non-ASCII
 # characters, destroying Turkish-specific characters (s-cedilla, g-breve,
@@ -90,7 +87,6 @@ BATCH_FLUSH_INTERVAL = 50
 MAX_METRICS_BUFFER_SIZE = 10_000   # drop oldest samples if buffer exceeds this after flush failure
 
 # ── Shuffle load ──
-SHUFFLE_LOAD_TIMEOUT = 15
 MAX_IN_MEMORY_DOCS = 10_000_000
 
 # ── External shuffle ──
@@ -115,7 +111,6 @@ DEFAULT_GUIDANCE_SCALE = 1.0
 DEFAULT_TARGET_LENGTH_MULTIPLIER = 2.0
 
 # ── Checkpoint ──
-DEFAULT_CHECKPOINT_INTERVAL = 300
 CHECKPOINT_ROTATION = 3
 
 # ── Thread pool ──
@@ -139,9 +134,7 @@ QAT_MODEL_KEYWORDS: tuple[str, str, str] = (
     "qat", "qat-mobile", "q4_0",
 )
 
-# DiffusionGemma model path and default steps.
-DIFFUSION_GEMMA_MODEL_PATH = "google/diffusiongemma-26B-A4B-it"
-# DiffusionGemma uses fewer steps than LLaDA — 128 is the recommended default.
+# DiffusionGemma — fewer steps than LLaDA (128 recommended).
 DIFFUSION_GEMMA_DEFAULT_STEPS = 128
 # DiffusionGemma noise schedule — "linear" or "cosine".
 DIFFUSION_GEMMA_NOISE_SCHEDULE = "linear"

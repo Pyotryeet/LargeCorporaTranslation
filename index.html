@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EN→TR Çeviri Modeli Seçim Arayüzü</title>
+    <style>
+        :root {
+            --bg: #f4f7f6; --card: #ffffff; --primary: #4F46E5;
+            --primary-hover: #4338CA; --text: #1f2937; --muted: #6b7280;
+            --border: #e5e7eb; --green: #10B981; --red: #EF4444;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: var(--bg); color: var(--text); padding: 1.5rem; display: flex; justify-content: center; }
+        .container { background: var(--card); max-width: 900px; width: 100%; border-radius: 12px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); padding: 2rem; }
+        h1 { margin-bottom: 0.5rem; font-size: 1.4rem; }
+        h2 { font-size: 1.1rem; color: var(--text); margin: 1.5rem 0 0.5rem; }
+        .section { display: none; }
+        .section.active { display: block; }
+
+        textarea { width: 100%; height: 120px; padding: 10px; border: 1px solid var(--border); border-radius: 8px; font-family: inherit; resize: vertical; margin-bottom: 1rem; }
+        button { background: var(--primary); color: white; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; font-weight: bold; font-size: 0.95rem; transition: background 0.2s; }
+        button:hover { background: var(--primary-hover); }
+        button:disabled { background: var(--muted); cursor: not-allowed; }
+        button.secondary { background: white; color: var(--primary); border: 1px solid var(--primary); }
+
+        .source-box { background: #f0f4ff; border-left: 4px solid var(--primary); padding: 1rem; border-radius: 8px; margin-bottom: 1.5rem; font-size: 1.05rem; line-height: 1.6; }
+        .label { font-weight: bold; color: var(--muted); font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.3rem; }
+
+        .translation-row { display: flex; align-items: flex-start; gap: 1rem; padding: 0.75rem; border: 1px solid var(--border); border-radius: 8px; margin-bottom: 0.5rem; background: #fafbfc; }
+        .translation-row .model-tag { background: var(--primary); color: white; padding: 2px 10px; border-radius: 12px; font-size: 0.75rem; font-weight: bold; white-space: nowrap; min-width: 60px; text-align: center; }
+        .translation-row .text { flex: 1; font-size: 0.95rem; line-height: 1.5; }
+        .rating-controls { display: flex; gap: 4px; align-items: center; flex-shrink: 0; }
+        .rating-btn { width: 32px; height: 32px; border-radius: 50%; border: 2px solid var(--border); background: white; color: var(--text); font-size: 0.8rem; font-weight: bold; cursor: pointer; transition: all 0.15s; display: flex; align-items: center; justify-content: center; }
+        .rating-btn:hover { border-color: var(--primary); background: #eef2ff; }
+        .rating-btn.selected { background: var(--primary); color: white; border-color: var(--primary); }
+        .rating-btn.rated { border-color: var(--green); color: var(--green); }
+
+        .progress-bar { display: flex; align-items: center; gap: 1rem; margin: 1rem 0; }
+        .progress-fill { height: 6px; background: var(--green); border-radius: 3px; transition: width 0.3s; }
+        .progress-track { flex: 1; height: 6px; background: var(--border); border-radius: 3px; }
+
+        .nav-buttons { display: flex; gap: 0.5rem; margin-top: 1.5rem; }
+        .message-box { text-align: center; padding: 3rem 0; }
+        .file-loader { border: 2px dashed var(--border); border-radius: 8px; padding: 1.5rem; text-align: center; margin-bottom: 1rem; cursor: pointer; }
+        .file-loader:hover { border-color: var(--primary); }
+        .file-loader input { display: none; }
+        .status-badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 0.7rem; font-weight: bold; }
+        .status-badge.done { background: #d1fae5; color: #065f46; }
+        .status-badge.pending { background: #fef3c7; color: #92400e; }
+    </style>
+</head>
+<body>
+<div class="container">
+
+    <!-- SETUP -->
+    <div id="setup-section" class="section active">
+        <h1>EN→TR Çeviri Modeli Seçimi</h1>
+        <p style="margin-bottom:1rem">Otomatik veri yükleniyor...</p>
+        <div class="file-loader" onclick="document.getElementById('file-input').click()" id="file-loader">
+            <p>📂 <strong>human_eval_data.json</strong> yüklemek için tıklayın</p>
+            <p style="color:var(--muted);font-size:0.85rem">veya aşağıya manuel metin girin</p>
+            <input type="file" id="file-input" accept=".json" onchange="loadJSONFile(event)">
+        </div>
+        <textarea id="corpora-input" placeholder="İngilizce metinleri satır satır girin...&#10;The quick brown fox jumps over the lazy dog.&#10;To be or not to be, that is the question."></textarea>
+        <button onclick="startBenchmark()">Değerlendirmeye Başla</button>
+        <p id="auto-load-status" style="color:var(--muted);font-size:0.85rem;margin-top:0.5rem"></p>
+    </div>
+
+    <!-- EVALUATION -->
+    <div id="evaluation-section" class="section">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
+            <span style="font-weight:bold" id="progress-indicator">Metin 1/30 | Çeviri 0/6</span>
+            <span style="color:var(--muted);font-size:0.8rem" id="completion-status"></span>
+        </div>
+        <div class="progress-track"><div class="progress-fill" id="progress-fill" style="width:0%"></div></div>
+
+        <div class="label">Orijinal Metin (İngilizce)</div>
+        <div class="source-box" id="source-text">...</div>
+
+        <div class="label">Model Çevirileri (Kör Test — sıralama rastgele)</div>
+        <div id="translations-container"></div>
+
+        <button id="next-btn" class="secondary hidden" onclick="goToNext()">İlerle (Sonraki Metne Geç) →</button>
+    </div>
+
+    <!-- END -->
+    <div id="end-section" class="section">
+        <div class="message-box">
+            <h2>✅ Tüm metinler değerlendirildi!</h2>
+            <p id="end-summary"></p>
+            <button onclick="downloadJSON()">📥 Sonuçları İndir (JSON)</button>
+            <button class="secondary" onclick="location.reload()" style="margin-left:0.5rem">🔄 Yeniden Başlat</button>
+        </div>
+    </div>
+
+</div>
+
+<script>
+// ── State ──
+let sources = [];          // [{id, text, translations: [{model_label, text, _metrics?}]}, ...]
+let currentSourceIdx = 0;
+let ratings = {};          // {sourceId: {modelLabel: score}}
+let modelMapping = {};     // {label: realName}
+let totalModels = 5;
+
+// ── Auto-load ──
+(async function autoLoad() {
+    const status = document.getElementById('auto-load-status');
+    try {
+        const resp = await fetch('data/output/model_selection/human_eval_data.json');
+        if (resp.ok) {
+            const data = await resp.json();
+            sources = data.sources;
+            modelMapping = data.model_mapping || {};
+            totalModels = data.models_per_source || 6;
+            status.textContent = `✅ Otomatik yüklendi: ${sources.length} metin, ${totalModels} model`;
+            document.getElementById('file-loader').style.display = 'none';
+            document.getElementById('corpora-input').style.display = 'none';
+        } else {
+            status.textContent = '⚠️ JSON bulunamadı — manuel metin girin';
+        }
+    } catch (e) {
+        status.textContent = '⚠️ JSON yüklenemedi — manuel metin girin (' + e.message + ')';
+    }
+})();
+
+// ── File upload ──
+function loadJSONFile(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = function(e) {
+        try {
+            const data = JSON.parse(e.target.result);
+            sources = data.sources;
+            modelMapping = data.model_mapping || {};
+            totalModels = data.models_per_source || Object.keys(sources[0]?.translations[0]?.model_label ? sources[0].translations.length : 6);
+            document.getElementById('auto-load-status').textContent = `✅ Dosyadan yüklendi: ${sources.length} metin, ${totalModels} model`;
+        } catch (err) {
+            alert('JSON parse error: ' + err.message);
+        }
+    };
+    reader.readAsText(file);
+}
+
+// ── Start ──
+function startBenchmark() {
+    // If sources loaded from JSON, use those
+    if (sources.length > 0) {
+        ratings = {};
+        currentSourceIdx = 0;
+        document.getElementById('setup-section').classList.remove('active');
+        document.getElementById('evaluation-section').classList.add('active');
+        renderSource();
+        return;
+    }
+    // Fallback: manual textarea input
+    const input = document.getElementById('corpora-input').value.trim();
+    if (!input) { alert("Lütfen metin girin veya JSON dosyası yükleyin."); return; }
+    const lines = input.split('\n').filter(l => l.trim());
+    sources = lines.map((text, i) => ({
+        id: i, text: text.trim(),
+        translations: Array.from({length: totalModels}, (_, j) => ({
+            model_label: String.fromCharCode(65 + j),
+            text: `[Manuel mod — otomatik çeviri mevcut değil]`,
+        })),
+    }));
+    modelMapping = {};
+    ratings = {};
+    currentSourceIdx = 0;
+    document.getElementById('setup-section').classList.remove('active');
+    document.getElementById('evaluation-section').classList.add('active');
+    renderSource();
+}
+
+// ── Render current source ──
+function renderSource() {
+    const src = sources[currentSourceIdx];
+    document.getElementById('source-text').textContent = src.text;
+    document.getElementById('progress-indicator').textContent =
+        `Metin ${currentSourceIdx + 1}/${sources.length} | ${totalModels} çeviri`;
+    document.getElementById('progress-fill').style.width =
+        ((currentSourceIdx / sources.length) * 100) + '%';
+    document.getElementById('next-btn').classList.add('hidden');
+
+    // Initialize ratings for this source
+    if (!ratings[src.id]) ratings[src.id] = {};
+
+    const container = document.getElementById('translations-container');
+    container.innerHTML = '';
+
+    src.translations.forEach((t, idx) => {
+        const label = t.model_label;
+        const currentRating = ratings[src.id][label];
+
+        const row = document.createElement('div');
+        row.className = 'translation-row';
+        row.innerHTML = `
+            <span class="model-tag">Model ${label}</span>
+            <span class="text">${escapeHtml(t.text)}</span>
+            <div class="rating-controls" id="rating-${label}">
+                ${[1,2,3,4,5,6,7,8,9,10].map(n =>
+                    `<button class="rating-btn${currentRating === n ? ' selected' : ''}" onclick="rate('${label}', ${n})">${n}</button>`
+                ).join('')}
+            </div>
+        `;
+        container.appendChild(row);
+    });
+
+    updateCompletionStatus();
+}
+
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+// ── Rating ──
+function rate(modelLabel, score) {
+    const src = sources[currentSourceIdx];
+    ratings[src.id][modelLabel] = score;
+
+    // Update button visuals
+    const container = document.getElementById('rating-' + modelLabel);
+    if (container) {
+        container.querySelectorAll('.rating-btn').forEach(btn => {
+            btn.classList.toggle('selected', parseInt(btn.textContent) === score);
+        });
+    }
+    updateCompletionStatus();
+}
+
+function updateCompletionStatus() {
+    const src = sources[currentSourceIdx];
+    const rated = Object.keys(ratings[src.id] || {}).length;
+    document.getElementById('completion-status').innerHTML =
+        `<span class="status-badge ${rated >= totalModels ? 'done' : 'pending'}">${rated}/${totalModels} puanlandı</span>`;
+
+    if (rated >= totalModels) {
+        document.getElementById('next-btn').classList.remove('hidden');
+    }
+}
+
+// ── Navigation ──
+function goToNext() {
+    currentSourceIdx++;
+    if (currentSourceIdx < sources.length) {
+        renderSource();
+    } else {
+        document.getElementById('evaluation-section').classList.remove('active');
+        document.getElementById('end-section').classList.add('active');
+        const totalRatings = Object.values(ratings).reduce((s, r) => s + Object.keys(r).length, 0);
+        document.getElementById('end-summary').textContent =
+            `${sources.length} metin × ${totalModels} model = ${totalRatings} puan toplandı.`;
+    }
+}
+
+// ── Download ──
+function downloadJSON() {
+    const output = {
+        evaluated_at: new Date().toISOString(),
+        total_sources: sources.length,
+        models_per_source: totalModels,
+        model_mapping: modelMapping,
+        ratings: sources.map(src => ({
+            source_id: src.id,
+            source_text: src.text,
+            ratings: ratings[src.id] || {},
+        })),
+    };
+    const blob = new Blob([JSON.stringify(output, null, 2)], {type: 'application/json'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'benchmark_sonuclari.json';
+    a.click();
+    URL.revokeObjectURL(url);
+}
+</script>
+</body>
+</html>

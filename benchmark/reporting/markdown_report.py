@@ -8,7 +8,10 @@ import tempfile
 from datetime import datetime
 from pathlib import Path
 
-from benchmark.config.constants import QUALITY_BLEU_TARGET, QUALITY_CHRF_TARGET, QUALITY_COMET_TARGET
+from benchmark.config.constants import (
+    QUALITY_BLEU_TARGET, QUALITY_CHRF_TARGET, QUALITY_COMET_TARGET,
+    QUALITY_BERTSORE_TARGET,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -116,7 +119,14 @@ class MarkdownReportWriter:
         chrf_s = q.get("chrF", {}).get("score", "N/A")
         lines.append(f"| chrF++ | {chrf_s} | >= {QUALITY_CHRF_TARGET} | {'✅' if isinstance(chrf_s, (int, float)) and chrf_s >= QUALITY_CHRF_TARGET else '—'} |")
         comet_s = q.get("comet", {}).get("system_score", "N/A")
-        lines.append(f"| COMET-22 | {comet_s} | >= {QUALITY_COMET_TARGET} | {'✅' if isinstance(comet_s, (int, float)) and comet_s >= QUALITY_COMET_TARGET else '—'} |")
+        comet_s_fmt = f"{comet_s:.4f}" if isinstance(comet_s, (int, float)) and math.isfinite(comet_s) else "N/A"
+        lines.append(f"| COMET-22 | {comet_s_fmt} | >= {QUALITY_COMET_TARGET} | {'✅' if isinstance(comet_s, (int, float)) and comet_s >= QUALITY_COMET_TARGET else '—'} |")
+        bertscore_s = q.get("bertscore", {}).get("system_score", "N/A")
+        bertscore_s_fmt = f"{bertscore_s:.4f}" if isinstance(bertscore_s, (int, float)) and math.isfinite(bertscore_s) else "N/A"
+        lines.append(f"| BERTScore | {bertscore_s_fmt} | >= {QUALITY_BERTSORE_TARGET} | {'✅' if isinstance(bertscore_s, (int, float)) and bertscore_s >= QUALITY_BERTSORE_TARGET else '—'} |")
+        comet_kiwi_s = q.get("comet_kiwi", {}).get("system_score", "N/A")
+        comet_kiwi_s_fmt = f"{comet_kiwi_s:.4f}" if isinstance(comet_kiwi_s, (int, float)) and math.isfinite(comet_kiwi_s) else "N/A"
+        lines.append(f"| COMET-Kiwi | {comet_kiwi_s_fmt} | >= {QUALITY_COMET_TARGET} | {'✅' if isinstance(comet_kiwi_s, (int, float)) and comet_kiwi_s >= QUALITY_COMET_TARGET else '—'} |")
         lines.append("")
         ext = r.get("extrapolation", {})
         lines.append("## Extrapolation")

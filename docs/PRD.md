@@ -15,6 +15,18 @@
 
 ---
 
+> ⚠️ **Historical spec.** This PRD describes the *product intent* at design time.
+> The authoritative description of what the code *actually does* today is
+> [`ARCHITECTURE.md`](ARCHITECTURE.md). Where they disagree,
+> **ARCHITECTURE is correct.** Several requirements here (tensor parallelism,
+> CUDA graphs, fused kernels, TensorRT) were implemented but subsequently gated
+> off or broken — see
+> [ARCHITECTURE §8 Feature Status](ARCHITECTURE.md#8-feature-status-the-truth-table).
+> This document is included for understanding the original goals and
+> requirements, not for navigating the current code.
+
+---
+
 ## Revision History
 
 | Version | Date | Changes |
@@ -39,7 +51,14 @@ This project builds the instrumentation harness that runs for a **2-hour burn-in
 
 **Development workflow**: All code is developed and smoke-tested on **Apple Silicon (MPS backend)** using **TranslateGemma 4B** (BF16) before being promoted to the H200 cluster with **TranslateGemma 12B** (FP8). The harness is backend-agnostic — automatically detecting the available device (CUDA or MPS) and adapting tensor-parallelism strategy, precision, and metrics collection accordingly. The same Python code runs unmodified on both platforms; only the model ID and hardware differ.
 
-**Implementation status (v3.6)**: 75 Python modules, 27 test files (~75 unit tests). Benchmarked on M4 Max 48 GB achieving ~103 tok/s with TranslateGemma 4B (BF16). Production deployed on 2× NVIDIA H200 NVL with TranslateGemma 12B (FP8). Real data pipeline: FineWeb sample-10BT (English web text) + OPUS-100 (EN→TR golden references). 39 optimizations (37 verified wired, 2 experimental). 4 backends (AR, encoder-decoder/NLLB, diffusion, TensorRT), 11 model presets, 4 quantization levels.
+**Implementation status (v3.6, note from June 2026):** 75 Python modules,
+27 test files (~75 unit tests). ~44 optimization features implemented — many are
+**built but gated off** (hardcoded `False`, env-gated, or broken against current
+dependencies). The production AR hot path is plain eager `model(...)` + 
+`torch.compile(reduce-overhead)` + Transformer-Engine FP8. See
+[`ARCHITECTURE.md` §8](ARCHITECTURE.md#8-feature-status-the-truth-table) for the
+authoritative Feature Status table. 4 backends defined (AR, encoder-decoder/NLLB,
+diffusion, TensorRT; TensorRT is safety-gated and falls back to AR).
 
 ---
 
@@ -123,7 +142,8 @@ Build a **self-contained benchmarking harness** that:
 2. Streams a representative sample of the ClearNet English corpus through the model.
 3. Translates continuously for a fixed **2-hour window**.
 4. Simultaneously logs per-second hardware and throughput metrics.
-5. At the 2-hour mark, runs a **translation-quality benchmark** (BLEU, COMET, chrF) against a held-out golden reference set.
+5. At the 2-hour mark, runs a **translation-quality benchmark** (BERTScore,
+   COMET-22, COMET-Kiwi, BLEU, chrF++) against a held-out golden reference set.
 6. Aggregates all data into a single **benchmark report** suitable for extrapolation to full-dataset scale.
 
 The harness itself is **not** the production translator — it is the measurement tool that informs whether and how to build the production translator.
@@ -137,7 +157,7 @@ The harness itself is **not** the production translator — it is the measuremen
 | G1 | Measure sustained translation throughput | Quantitative | Mean tokens/second over the 2 h window, ±95% CI |
 | G2 | Characterise GPU utilisation | Quantitative | Mean & p99 GPU SM utilisation, memory bandwidth utilisation, idle-time breakdown |
 | G3 | Identify the bottleneck | Diagnostic | Definitively classify bound: GPU-compute, GPU-memory, CPU-prep, or I/O |
-| G4 | Measure translation quality | Quantitative | BLEU ≥ 28, chrF ≥ 0.54, COMET ≥ 0.78 on the reference set |
+| G4 | Measure translation quality | Quantitative | BERTScore ≥ 0.55, COMET-22 ≥ 0.72, COMET-Kiwi ≥ 0.72, BLEU ≥ 25, chrF++ ≥ 54 on the reference set |
 | G5 | Produce a full-dataset time/cost estimate | Predictive | Extrapolated days-to-completion with upper/lower bounds |
 | G6 | Reproducibility | Process | Single-command launch; all config captured in the output; run-to-run variance < 5 % |
 
@@ -274,3 +294,10 @@ The harness itself is **not** the production translator — it is the measuremen
 | **Golden Reference Set** | A set of 1 000 English sentences with professionally verified Turkish translations, held out from the translation run and used only for quality evaluation |
 | **SM Utilisation** | The fraction of Streaming Multiprocessor cycles spent on active warps (reported by `nvidia-smi`) |
 | **Tokens Translated** | Output (Turkish) token count produced by the model, counted by the Gemma tokeniser decode step |
+
+
+---
+
+*This document is part of the historical spec set. See [`docs/README.md`](README.md)
+for navigation, [`ARCHITECTURE.md`](ARCHITECTURE.md) for current reality, and
+[`AI_CODING_ANTIPATTERNS.md`](AI_CODING_ANTIPATTERNS.md) for mistakes to avoid.*

@@ -70,7 +70,7 @@ SPECULATIVE=false              # Enable speculative decoding
 SPEC_MODE="self"               # self | draft_model
 SPEC_TOKENS=3                  # K speculative tokens
 SPEC_DRAFT_LAYERS=0            # 0 = auto
-PYTHON_BIN="${PYTHON_BIN:-python3.11}"
+PYTHON_BIN="${PYTHON_BIN:-python3}"  # override with e.g. PYTHON_BIN=python3.12 if needed
 VENV_DIR="${VENV_DIR:-.venv}"
 EXTRA_ARGS=()
 # ── H200 compatibility flags (from run_h200.sh) ──

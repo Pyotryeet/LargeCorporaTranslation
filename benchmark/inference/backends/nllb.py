@@ -390,7 +390,7 @@ class NLLBBackend(InferenceBackend):
         device = self.devices[0]
         wall_start = time.monotonic()
 
-        # ── Async H2D transfer (CUDA: DMA at ~50 GB/s) ──
+        # ── Async H2D transfer (CUDA: DMA at ~6.6 GB/s effective, 2.1× vs pageable; see M2.5) ──
         if self.backend_name == "cuda" and self._transfer_stream is not None:
             with torch.cuda.stream(self._transfer_stream):
                 input_ids = batch.input_ids.to(device, non_blocking=True)

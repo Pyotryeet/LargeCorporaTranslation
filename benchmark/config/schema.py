@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 
 
 class ModelConfig(BaseModel):
+    model_config = {"extra": "forbid"}
     model_path: str = Field(default="google/translategemma-4b-it", max_length=500)
     tokenizer_path: str = Field(default="", max_length=500)
     max_input_tokens: int = Field(default=512, ge=1, le=4096)
@@ -157,6 +158,7 @@ class ModelConfig(BaseModel):
 
 
 class RuntimeConfig(BaseModel):
+    model_config = {"extra": "forbid"}
     target_duration_seconds: int = Field(default=7200, ge=60, le=86400)
     checkpoint_interval_seconds: int = Field(default=300, ge=30, le=3600)
     heartbeat_interval_seconds: int = Field(default=30, ge=1, le=120)
@@ -166,11 +168,12 @@ class RuntimeConfig(BaseModel):
 
 
 class DataConfig(BaseModel):
+    model_config = {"extra": "forbid"}
     input_paths: list[str] = Field(default_factory=lambda: ["./data/input/*.jsonl.gz"])
     output_dir: str = "./output"
     reference_set_path: str = "./data/references/golden_en_tr.jsonl"
     shard_size_mb: int = Field(default=100, ge=10, le=1024)
-    prefetch_workers: int = Field(default=4, ge=1, le=16)
+    prefetch_workers: int = Field(default=4, ge=1, le=16)  # measured 2026-06-24: recommend 8 for H200 (64 cores), 4 is conservative. See M3.2.
     shuffle: bool = True
     min_chunk_tokens: int = Field(default=10, ge=1)
     max_garbage_ratio: float = Field(default=0.95, ge=0.0, le=1.0)
@@ -188,8 +191,9 @@ class DataConfig(BaseModel):
 
 
 class ExtrapolationConfig(BaseModel):
+    model_config = {"extra": "forbid"}
     total_clearnet_non_tr_tokens: int = Field(default=6_230_000_000_000, ge=1_000_000)
-    gpu_cost_per_hour_usd: Optional[float] = None
+    gpu_cost_per_hour_usd: Optional[float] = None  # cloud-equivalent ~$3.00/GPU-hour for H200 on-demand. See M0.4.
 
 
 class BenchmarkConfig(BaseModel):

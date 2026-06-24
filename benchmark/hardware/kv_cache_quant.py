@@ -4,8 +4,13 @@ Compresses the key-value cache from 16-bit (BF16) to 8-bit or 4-bit
 per element using per-channel asymmetric quantization.  This increases
 effective batch size 1.5–2× for memory-bound inference.
 
-Works on both CUDA (via Triton dequant kernels) and MPS (via Metal
-dequant shaders).  Falls back to eager PyTorch dequant on CPU.
+STATUS: Dequant is pure eager PyTorch — no Triton or Metal kernels exist.
+This module is constructed at autoregressive.py:1184 but never wired into
+the decode loop; HF past_key_values are used instead, so there is no
+quantization benefit on the current hot path.
+
+Note: On H200 with 4B models, available GPU memory (130+ GB free) makes
+KV-cache quantization unnecessary. See M1.1.
 """
 
 from __future__ import annotations

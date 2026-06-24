@@ -28,9 +28,13 @@ Gauges (instantaneous value):
   - tr_benchmark_quality_bertscore
   - tr_benchmark_quality_comet_kiwi
 
+Gauges (rolling):
+  - tr_benchmark_throughput_tokens_per_second_rolling  (60 s rolling avg; safe
+    for Prometheus scraping at 15-60 s intervals)
+
 Histograms:
-  - tr_benchmark_throughput_tokens_per_second  (per-batch TPS samples; meaningful
-    distribution even at 15-60 s scrape intervals)
+  - tr_benchmark_throughput_tokens_per_second  (per-batch TPS samples;
+    use histogram_quantile() for distribution analysis)
   - tr_benchmark_batch_latency_seconds
   - tr_benchmark_decode_time_seconds
   - tr_benchmark_prefill_time_seconds
@@ -51,6 +55,7 @@ import json
 import logging
 import threading
 import time
+from collections import deque
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from typing import Optional
 
@@ -237,8 +242,8 @@ class PrometheusRegistry:
         self.register(m)
         return m
 
-    def histogram(self, name: str, help_text: str, labels: dict[str, str] | None = None) -> Histogram:
-        m = Histogram(name, help_text, labels)
+    def histogram(self, name: str, help_text: str, labels: dict[str, str] | None = None, buckets: list[float] | None = None) -> Histogram:
+        m = Histogram(name, help_text, labels, buckets=buckets)
         self.register(m)
         return m
 
@@ -270,6 +275,7 @@ class PrometheusExporter:
     >>> exporter.start()
     >>> # During benchmark:
     >>> exporter.record_batch(tokens=128, latency_ms=450, prefill_ms=80, decode_ms=370)
+    >>> # TPS gauge now shows a 60 s rolling average — safe for 15-60 s scrape intervals
     >>> exporter.record_device(gpu_id=0, util_pct=85.0, mem_bytes=42e9, temp_c=65.0, power_w=300.0)
     >>> exporter.record_quality(bleu=32.5, chrf=58.2, comet=0.785)
     >>> exporter.stop()
@@ -347,6 +353,16 @@ class PrometheusExporter:
             "tr_benchmark_swap_used_bytes",
             "Swap used in bytes.",
         )
+        self.throughput_rolling = self.registry.gauge(
+            "tr_benchmark_throughput_tokens_per_second_rolling",
+            "Throughput in tokens per second (60 s rolling average, "
+            "safe for Prometheus scraping at 15-60 s intervals).",
+        )
+
+        # Rolling window for throughput gauge.
+        # Each entry is (monotonic_timestamp, tokens, latency_ms).
+        self._tps_window: deque[tuple[float, int, float]] = deque()
+        self._tps_window_seconds: float = 60.0
 
         # Per-device gauges (one instance per GPU).
         self._device_gauges: list[dict[str, Gauge]] = []
@@ -447,13 +463,7 @@ class PrometheusExporter:
     def start(self) -> None:
         """Start the Prometheus HTTP metrics server on a background thread.
 
-        .. warning::
-
-           Only one process can bind to a given (host, port) pair.  If you
-           also use DashboardServer (server.py), do **not** call start() on
-           both objects — use only DashboardServer and pass this exporter as
-           ``DashboardServer(exporter=...)`` so /metrics, /dashboard, /health,
-           and /api/snapshot are all served through a single port.
+        Only one process can bind to a given (host, port) pair.
 
         Raises
         ------
@@ -537,9 +547,17 @@ class PrometheusExporter:
         decode_ms: float = 0.0,
         batch_size: int = 1,
     ) -> None:
+        """Record a batch completion and update all throughput/latency metrics.
+
+        Updates counters, the latency histograms, the per-batch TPS histogram,
+        and the 60 s rolling-average TPS gauge.  The rolling gauge is safe for
+        Prometheus scraping at 15-60 s intervals because a single fast batch
+        cannot dominate the window.
+        """
         self.batches_total.inc()
         self.tokens_total.inc(tokens)
         self.sequences_completed.inc(batch_size)
+
         # Record per-batch TPS as a histogram sample — produces a meaningful
         # distribution even when Prometheus scrapes at 15-60 s intervals.
         # The histogram's _sum / _count gives the average TPS; use
@@ -551,6 +569,26 @@ class PrometheusExporter:
             self.prefill_hist.observe(prefill_ms / 1000.0)
         if decode_ms > 0:
             self.decode_hist.observe(decode_ms / 1000.0)
+
+        # ── Rolling-average TPS gauge ──────────────────────────────────
+        # Maintain a deque of (timestamp, tokens, latency_ms) samples and
+        # compute TPS as sum(tokens) / sum(latencies).  This smooths out
+        # per-batch jitter and avoids the trap where a single fast batch
+        # coinciding with a scrape paints a misleading picture.
+        #
+        # We use sum(latencies) rather than wall-clock time so that idle
+        # gaps between batches do not deflate TPS, and tight test loops
+        # do not inflate it.
+        now = time.monotonic()
+        self._tps_window.append((now, tokens, latency_ms))
+        # Prune entries older than the window.
+        while self._tps_window and now - self._tps_window[0][0] > self._tps_window_seconds:
+            self._tps_window.popleft()
+        # Compute rolling TPS from sum(tokens) / sum(latency_seconds).
+        window_tokens = sum(t[1] for t in self._tps_window)
+        window_latency_s = sum(t[2] for t in self._tps_window) / 1000.0
+        rolling_tps = window_tokens / window_latency_s if window_latency_s > 0 else 0.0
+        self.throughput_rolling.set(rolling_tps)
 
     def record_device(
         self,
@@ -620,16 +658,14 @@ class PrometheusExporter:
 
     def snapshot(self) -> dict:
         """Return a JSON-serializable summary of all current metric values."""
-        # Compute mean TPS from the throughput histogram (sum / count).
-        _tps_sum = self.throughput_hist._sum
-        _tps_count = self.throughput_hist._count
-        _mean_tps = _tps_sum / _tps_count if _tps_count > 0 else 0.0
+        _rolling = self.throughput_rolling.get()
         return {
             "batches_total": self.batches_total.get(),
             "tokens_total": self.tokens_total.get(),
             "sequences_completed": self.sequences_completed.get(),
             "errors_total": self.errors_total.get(),
-            "throughput_tps": _mean_tps,
+            "throughput_tps": _rolling,               # legacy key
+            "throughput_tps_rolling": _rolling,       # explicit name
             "queue_depth": self.queue_depth.get(),
             "data_starvation_pct": self.data_starvation.get(),
             "cpu_util_pct": self.cpu_util.get(),

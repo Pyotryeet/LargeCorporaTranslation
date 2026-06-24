@@ -1,7 +1,6 @@
 """Quality benchmarking — BLEU, chrF++, COMET-22, BERTScore, COMET-Kiwi evaluation.
 
-v2.0 additions: ensemble translation, confidence estimation,
-back-translation verification, domain classification.
+All five metrics run in parallel via ThreadPoolExecutor (quality/benchmark.py).
 """
 
 from benchmark.quality.benchmark import QualityBenchmark, QualityResults

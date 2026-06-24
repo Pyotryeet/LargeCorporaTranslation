@@ -410,7 +410,11 @@ class TensorRTBackend(InferenceBackend):
         total_out = 0
         for i, ids in enumerate(generated_ids):
             text = self.tokenizer.decode(ids, skip_special_tokens=True) if ids else ""
-            in_tok = len(batch.input_ids[i]) if hasattr(batch, 'input_ids') and i < len(batch.input_ids) else 0
+            in_tok = (
+                int(batch.attention_mask[i].sum().item())
+                if hasattr(batch, 'attention_mask') and i < len(batch.attention_mask)
+                else (len(batch.input_ids[i]) if hasattr(batch, 'input_ids') and i < len(batch.input_ids) else 0)
+            )
             generations.append(GenerationOutput(
                 input_text=batch.raw_texts[i] if hasattr(batch, 'raw_texts') and i < len(batch.raw_texts) else "",
                 translated_text=text.strip(),

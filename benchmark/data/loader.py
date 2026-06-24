@@ -1,16 +1,13 @@
-"""Streaming JSONL reader with glob support and deterministic shuffle.
+"""Streaming document reader with glob support, deterministic shuffle, and
+multi-format input (JSONL, JSONL.gz, Parquet).
 
 For datasets that fit within the configured memory budget (~2 GiB by default):
-an in-memory Fisher-Yates shuffle that reads each file once, stores texts,
-then yields in shuffled order.
+an in-memory Fisher-Yates shuffle.  Larger datasets use a disk-backed external
+sort with binary-record k-way merge.
 
-For larger datasets: a disk-backed external sort (Phase A: key generation +
-sorted-run creation; Phase B: k-way merge; Phase C: temp-file cleanup).
-The external sort is deterministic — same seed + same input = same output
-order.
-
-Uses ``orjson`` for 4–10× faster JSON parsing compared to stdlib ``json``.
-Falls back gracefully to stdlib if orjson is not installed.
+Uses ``orjson`` for 4–10× faster JSON parsing and ``pyarrow`` for
+row-group-streamed Parquet reads.  Falls back gracefully to stdlib json and
+plain-text iteration when optional dependencies are absent.
 """
 
 from contextlib import contextmanager
@@ -29,11 +26,17 @@ from typing import Iterator, Optional
 
 try:
     import orjson
-# Module-level state: safe for single-process use. Not thread-safe for multi-harness scenarios.
     HAS_ORJSON = True
 except ImportError:
     import json as _json
     HAS_ORJSON = False
+
+try:
+    import pyarrow.parquet as _pq
+    HAS_PARQUET = True
+except ImportError:
+    _pq = None  # type: ignore[assignment]
+    HAS_PARQUET = False
 
 logger = logging.getLogger(__name__)
 
@@ -243,15 +246,22 @@ class JSONLLoader:
 
         doc_count = 0
         for fp in self._files:
-            with self._open(fp) as fh:
-                doc_count += sum(1 for _ in fh)
+            if self._is_parquet(fp):
+                doc_count += self._count_parquet_rows(fp)
+            else:
+                with self._open(fp) as fh:
+                    doc_count += sum(1 for _ in fh)
 
-        # 4:1 is a conservative estimate for English JSONL text compression.
-        # Safety cap in _should_use_external_sort guards against underestimation
-        # when real compression ratios exceed 4:1 (e.g., highly redundant JSONL).
-        compressed_bytes = sum(fp.stat().st_size for fp in self._files if fp.suffix == '.gz')
-        uncompressed_bytes = sum(fp.stat().st_size for fp in self._files if fp.suffix != '.gz')
-        estimated_text_bytes = compressed_bytes * 4 + uncompressed_bytes
+        # Parquet uses snappy/zstd compression (typically 2–5× for text).
+        # JSONL.gz uses 3–5× for English text.  We use a uniform 3× multiplier
+        # for compressed formats — conservative enough to not underestimate.
+        _compressed = (
+            sum(fp.stat().st_size for fp in self._files if fp.suffix in ('.gz', '.parquet'))
+        )
+        uncompressed_bytes = sum(
+            fp.stat().st_size for fp in self._files if fp.suffix not in ('.gz', '.parquet')
+        )
+        estimated_text_bytes = _compressed * 3 + uncompressed_bytes
 
         self._doc_count = doc_count
         self._total_text_bytes = estimated_text_bytes
@@ -695,13 +705,61 @@ class JSONLLoader:
     # File I/O
     # ------------------------------------------------------------------
 
+    #: Default column name for text data in Parquet files.
+    PARQUET_TEXT_COLUMN = "text"
+
+    @staticmethod
+    def _is_parquet(file_path: Path) -> bool:
+        """Check suffix AND magic bytes so we never misidentify a file."""
+        if file_path.suffix not in (".parquet", ".arrow"):
+            return False
+        if not HAS_PARQUET:
+            return False
+        # Verify magic bytes: Parquet files start with "PAR1".
+        try:
+            with open(file_path, "rb") as probe:
+                magic = probe.read(4)
+            return magic == b"PAR1"
+        except OSError:
+            return False
+
+    def _read_parquet(self, file_path: Path) -> Iterator[str]:
+        """Read a Parquet file, yielding text from the configured column.
+
+        Uses pyarrow's row-group streaming so memory usage is proportional to
+        one row group, not the full file.
+        """
+        pf = _pq.ParquetFile(file_path)
+        col_name = self.PARQUET_TEXT_COLUMN
+        for rg_idx in range(pf.metadata.num_row_groups):
+            table = pf.read_row_group(rg_idx, columns=[col_name])
+            col = table.column(col_name)
+            for i in range(len(col)):
+                val = col[i].as_py()
+                if isinstance(val, str) and val.strip():
+                    yield val
+
+    def _stream_parquet(self, file_path: Path) -> Iterator[str]:
+        """Same as ``_read_parquet`` — Parquet streaming is already row-grouped."""
+        yield from self._read_parquet(file_path)
+
+    def _count_parquet_rows(self, file_path: Path) -> int:
+        """Fast row count from Parquet metadata — no data scan needed."""
+        pf = _pq.ParquetFile(file_path)
+        return pf.metadata.num_rows
+
     def _read_file(self, file_path: Path) -> Iterator[str]:
         """Read and parse one file, yielding text fields.
+        Dispatches to Parquet reader when file is in Parquet format.
 
         Materialises all lines into a list first — used by the sequential
         and in-memory shuffle paths where per-file buffering is acceptable.
         For the external sort path, use ``_stream_file`` instead.
         """
+        if self._is_parquet(file_path):
+            yield from self._read_parquet(file_path)
+            return
+
         with self._open(file_path) as f:
             lines = list(f)
             total_lines = len(lines)
@@ -727,13 +785,15 @@ class JSONLLoader:
                     yield text
 
     def _stream_file(self, file_path: Path) -> Iterator[str]:
-        """Yield text from one file line-by-line — no full-file buffer.
+        """Yield text from one file — no full-file buffer.
 
-        Used by the external sort path and the byte-estimation pre-pass
-        to avoid materialising entire files in memory.  Parse errors are
-        counted and summarised at the end rather than logged per-line
-        (to avoid flooding the log on large datasets).
+        Dispatches to Parquet reader when the file is in Parquet format.
+        Used by the external sort path and the byte-estimation pre-pass.
         """
+        if self._is_parquet(file_path):
+            yield from self._stream_parquet(file_path)
+            return
+
         skipped = 0
         skipped_first_lines: list[str] = []  # capture first few malformed lines for diagnosis
         with self._open(file_path) as f:

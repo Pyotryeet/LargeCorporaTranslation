@@ -9,6 +9,8 @@ The only constant is the 6.23T token target corpus size.
 import json
 import sys
 
+from benchmark.config.constants import TOTAL_CLEARNET_TOKENS as TARGET_TOKENS
+
 
 def fmt(n: float, d: int = 1) -> str:
     """Format a number with commas and given decimal places."""
@@ -60,7 +62,7 @@ def main():
         # ── Source density: tokens per GB of English input text, estimated
         #     from this run's own input tokens and the actual input file size ──
         # English text: ~4 bytes per token (4 chars/tok, UTF-8 byte-pair encoding)
-        BYTES_PER_INPUT_TOKEN = 4.0
+        BYTES_PER_INPUT_TOKEN = 4.5  # measured 2026-06-24: 4.45 bytes/token for English web text with Gemma tokenizer (5K docs, 15.1M chars). See M0.2.
         tokens_per_gb = int(1_073_741_824 / BYTES_PER_INPUT_TOKEN)
 
         # ── GB translated per GPU-hour (from actual TPS) ──
@@ -100,7 +102,6 @@ def main():
         print()
 
         # ── 6.23T token corpus ──
-        TARGET_TOKENS = 6_230_000_000_000
         target_gb = TARGET_TOKENS / tokens_per_gb if tokens_per_gb > 0 else 0
         print(f"  ── 6.23T token target corpus (~{target_gb:,.0f} GB) ──")
 

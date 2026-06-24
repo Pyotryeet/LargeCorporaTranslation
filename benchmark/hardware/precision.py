@@ -4,6 +4,11 @@ CUDA:  FP8 compute via Transformer Engine (default).  Master weights stay in
        BF16; TE ``fp8_autocast`` context converts to FP8 for tensor-core matmul
        and back to BF16 for accumulation.  This is the native H200 fast path.
        Falls back to pure BF16 if TE is not installed.
+
+       NOTE: On H200 with 4B models, TE FP8 is counterproductive (40% throughput
+       regression, 0% memory savings) because the model is memory-bandwidth-bound
+       rather than compute-bound. See M1.5.
+
 MPS:   BF16 (native on Apple Silicon M2+; M1 may fall back to FP32 at the op
        level).
 CPU:   FP32 (CPU does not benefit from reduced precision in general).
@@ -126,13 +131,19 @@ class PrecisionConfig:
 
     **TF32 note**: On Ampere+ GPUs (SM80+), PyTorch defaults to TF32 for
     ``torch.matmul`` and ``torch.nn.Linear``.  TF32 uses a 19-bit mantissa
-    (vs FP32's 23-bit), giving ~8x throughput over FP32 on tensor cores.
+    (vs FP32's 23-bit), giving ~8x throughput over FP32 on tensor cores
+    (NVIDIA literature claim; not measured on this codebase).
     TF32 is automatically managed by CUDA's ``torch.backends.cuda.matmul.allow_tf32``
     (default True on CUDA 11+).  This config does NOT disable TF32 — it remains
     active unless the user explicitly sets ``torch.backends.cuda.matmul.allow_tf32 = False``.
     On H200 (SM90), TF32 is superseded by FP8 whenever Transformer Engine is active,
     but TF32 still applies to operations outside ``fp8_autocast`` (e.g., attention
     softmax, RMSNorm weight multiplication).
+
+    NOTE: On H200 with 4B models, TE FP8 is counterproductive —
+    40% throughput regression, 0% memory savings (measured 2026-06-24),
+    because the model is memory-bandwidth-bound rather than compute-bound.
+    See M1.5.
 
     Attributes
     ----------

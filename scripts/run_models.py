@@ -17,7 +17,7 @@ Platform-specific optimizations:
 
 Usage:
   source .venv/bin/activate
-  python -m benchmark.run_models  [--cuda | --mps | --auto]
+  python scripts/run_models.py  [--cuda | --mps | --auto]
 """
 
 from __future__ import annotations
@@ -257,7 +257,7 @@ def run_python_engine(model_def, device_info, plat, run_idx, run_dir):
             mb.raw_texts = srcs; mb.batch_id = 0
             tres = engine.translate(mb)
             hyps = [g.translated_text for g in tres.generations]
-            bs_r = compute_bertscore(srcs, hyps)
+            bs_r = compute_bertscore(refs, hyps)
             quality = {"bertscore": bs_r.get("system_score"),
                        "num_references": len(refs), "num_translated": len(hyps)}
             print(f"    BERTScore: {quality['bertscore']}")
@@ -363,7 +363,7 @@ def run_llama_subprocess(model_def, device_info, plat, run_idx, run_dir):
     quality = {}
     try:
         if hyps and any(h for h in hyps):
-            bs = compute_bertscore(srcs[:len(hyps)], hyps)
+            bs = compute_bertscore(refs[:len(hyps)], hyps)
             quality = {"bertscore": bs.get("system_score"), "num_references": len(refs[:len(hyps)]),
                        "num_translated": len([h for h in hyps if h])}
             print(f"    BERTScore: {quality['bertscore']}")

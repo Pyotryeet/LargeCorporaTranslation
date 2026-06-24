@@ -7,6 +7,9 @@ memory traffic.
 Fusions (backend-aware):
   - ``fused_rms_norm_residual`` : RMSNorm + residual add (1 kernel vs 3).
     CUDA path uses Triton when available; falls back to eager PyTorch.
+    Speedup depends on model size and batch size. On 4B models, the
+    overall throughput gain is <5% (measured 2026-06-24) because RMSNorm
+    is a small fraction of total compute. See M2.1.
   - ``fused_swiglu_gate_up`` : SiLU gate + up projection + multiply.
     Uses eager PyTorch matmuls (auto-fused by the CUDA compiler); a true
     Triton kernel for this operation is available in

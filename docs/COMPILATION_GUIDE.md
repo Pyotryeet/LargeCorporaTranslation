@@ -2,6 +2,12 @@
 
 **One command to install, one command to run. Every platform. Every backend.**
 
+> ⚠️ **Some feature claims in this guide are aspirational.** The JIT CUDA kernels
+> are disabled (sources nulled), the TensorRT backend is safety-gated to refuse
+> decode and broken on TRT 11.x, and the Metal JIT kernel wrapper is
+> non-functional. See [`ARCHITECTURE.md` §8 Feature Status`](ARCHITECTURE.md#8-feature-status-the-truth-table)
+> for the authoritative wired-vs-gated reality.
+
 ---
 
 ## Table of Contents
@@ -72,16 +78,48 @@ Step 4: Install dependencies
   TensorRT (full profile, CUDA only): tensorrt, onnx, onnxruntime
   MPS extras (full profile, macOS): mlx, mlx-lm
 
-Step 5: Verify installation
+Step 5: Post-install compatibility check (CUDA only)
+  Auto-detects known-broken PyTorch versions (2.11+cu130 leads to SDPA crash on H200).
+  Removes torchao/compressed-tensors if they conflict with the installed torch.
+  Runs an SDPA smoke test on GPU.  See docs/H200_SETUP.md for details.
+
+Step 6: Verify installation
   Runs `import torch`, `import triton`, `import tensorrt` checks.
   Runs 75 unit tests.
 
-Step 6: HuggingFace login
+Step 7: HuggingFace login
   Auto-detects HF_TOKEN env var or cached token.
 
-Step 7: Pre-compile JIT kernels (CUDA only)
-  Compiles fused_qkv_rope + fused_swiglu_mlp to ~/.cache/tr_benchmark/kernels/
-```
+Step 8: Pre-compile JIT kernels (CUDA only)
+  ⚠️ Currently no-op — both CUDA kernel sources are disabled (set to `None`).
+  The precompile step runs but produces 0 kernels. Metal RMSNorm kernel compiles
+  but the wrapper is non-functional.
+
+> 💡 **H200 / SM90 — verified toolchain (June 2026)**
+>
+> **Use PyTorch 2.6.0+cu124.** This is the ONLY verified combination for H200 (SM90)
+> after extensive testing. Other versions tested:
+> - 2.11.0+cu130 → SDPA crashes (`[cudnn_frontend] Error: No valid execution plans built`)
+> - 2.12.1+cu126 → SDPA works but `flash_attn` ABI breaks (prebuilt `.so` for torch 2.11)
+> - 2.6.0+cu124  → SDPA + torch.compile + TE FP8 all work ✅
+>
+> **`flash_attn` is NOT needed.** PyTorch's built-in SDPA (`torch.nn.functional.scaled_dot_product_attention`)
+> handles Flash + Mem-Efficient + Math backends through the cuDNN frontend
+> automatically. The only package that pulls `flash_attn` as a dependency is
+> `transformer-engine`, and it's optional — TE works without it for `te.Linear`
+> replacement (the main use case).
+>
+> **`setup.sh` now pins torch to 2.6.0** and includes a post-install SDPA smoke test.
+>
+> If you already installed a broken version:
+> ```bash
+> pip uninstall -y torch torchvision flash-attn flash_attn_2_cuda flash-attn-4 torchao compressed-tensors
+> pip install 'torch==2.6.0' 'torchvision==0.21.0' --index-url https://download.pytorch.org/whl/cu124
+> ```
+> Then verify: `python -c "import torch; torch.nn.functional.scaled_dot_product_attention(torch.randn(2,4,128,64,device='cuda',dtype=torch.float16), torch.randn(2,4,128,64,device='cuda',dtype=torch.float16), torch.randn(2,4,128,64,device='cuda',dtype=torch.float16))"`
+>
+> See [`H200_SETUP.md` §Known Issues](H200_SETUP.md) and
+> [`MEASUREMENT_PLAN.md` §B.1](MEASUREMENT_PLAN.md) for the full investigation.```
 
 ### Profiles
 
@@ -90,6 +128,39 @@ Step 7: Pre-compile JIT kernels (CUDA only)
 | **full** (default) | `./setup.sh` | Everything: PyTorch, CUDA/MPS deps, TRT, Triton, dev tools |
 | **quick** | `./setup.sh --quick` | PyTorch, core deps, dev tools. Skip TRT, skip model DL. |
 | **minimal** | `./setup.sh --minimal` | Python + PyTorch + shared deps only. No tests, no extras. |
+
+### Transformer Engine FP8 (CUDA only) — Source Build Required
+
+TE's prebuilt wheels are compiled against torch 2.11 ABI and will NOT work with
+torch 2.6.0. A source build is required. `setup.sh` handles this automatically,
+but for manual installation:
+
+```bash
+# 1. Ensure nvcc and headers are available
+nvcc --version                                              # must be >= 12.0
+
+# 2. Set header paths so TE can find cuDNN/NCCL/torch headers
+export CPATH=$(python -c "
+import site, pathlib
+for sp in site.getsitepackages():
+    cudnn = pathlib.Path(sp)/'nvidia'/'cudnn'/'include'
+    nccl = pathlib.Path(sp)/'nvidia'/'nccl'/'include'
+    torch_inc = pathlib.Path(sp)/'torch'/'include'
+    if cudnn.is_dir() and torch_inc.is_dir():
+        print(f'{cudnn}:{nccl}:{torch_inc}')
+        break
+")
+
+# 3. Build TE from source
+pip install 'transformer-engine[pytorch]>=2.14.0' --no-build-isolation
+```
+
+**Verified working:** torch 2.6.0+cu124 + TE 2.16.0 (compiled from source) +
+PyTorch built-in SDPA. No `flash_attn` package required.
+
+> ⚠️ **TE FP8 is a throughput regression for 4B models.** Cast overhead dominates
+> at this model size (−40% TPS). FP8 helps 12B+ models where compute is the
+> bottleneck. See [`MEASUREMENT_PLAN.md` §B.17b](MEASUREMENT_PLAN.md).
 
 ---
 
@@ -243,7 +314,7 @@ docker run --rm --gpus '"device=0,1"' --ipc=host --ulimit memlock=-1 \
 
 | Artifact | Built At | Cached Where |
 |----------|----------|-------------|
-| JIT CUDA kernels (QKV+RoPE, SwiGLU) | Docker build (builder stage) | `/root/.cache/tr_benchmark/kernels/` |
+| JIT CUDA kernels | Docker build (⚠️ disabled; kernel sources nulled) | `/root/.cache/tr_benchmark/kernels/` (empty) |
 | Python venv with all deps | Docker build | `/opt/venv/` |
 | Package installed (editable) | Docker build | `/app/` |
 
@@ -302,15 +373,23 @@ TR_BENCHMARK_FORCE_RECOMPILE=1 python -m benchmark --config config.yaml --warmup
 
 | Kernel | Compiler | Speedup vs Eager |
 |--------|----------|-----------------|
-| Fused QKV+RoPE | `nvcc` (CUDA C++) | 2.5× |
-| Fused SwiGLU MLP | `nvcc` (CUDA C++) | 2.0× |
-| Fused RMSNorm+Residual | `xcrun metal` (MSL) | 3.0× on MPS |
+| Fused QKV+RoPE | `nvcc` (CUDA C++) | ⚠️ disabled — source set to `None` (architecturally broken) |
+| Fused SwiGLU MLP | `nvcc` (CUDA C++) | ⚠️ disabled — source set to `None` (architecturally broken) |
+| Fused RMSNorm+Residual | `xcrun metal` (MSL) | ⚠️ non-functional — wrapper returns inputs unchanged |
 
 If `nvcc` or `xcrun metal` are not installed, compilation is silently skipped and the kernels fall back to Triton (CUDA) or PyTorch eager (MPS/CPU).
 
+> 💡 **Fused Triton kernels re-enableable:** With `torch.compile` verified working on
+> PyTorch 2.6.0+cu124 (2026-06-24), the Triton fused kernels (RMSNorm+residual,
+> SwiGLU gate×up) can potentially be re-enabled. The `if False:` guard at
+> `autoregressive.py:761` that disabled them (after commit `804c0a6`) may no
+> longer be necessary. These kernels only work inside `torch.compile` and crash
+> in eager mode — with `torch.compile` verified operational, the crash risk is
+> eliminated. See M2.1 for the `torch.compile` status.
+
 ---
 
-## 8. TensorRT Engine Build
+## 8. TensorRT Engine Build (⚠️ not functional — safety-gated; broken on TRT 11.x; falls back to AR)
 
 ### Quick Start
 
@@ -328,6 +407,15 @@ If `nvcc` or `xcrun metal` are not installed, compilation is silently skipped an
 ```
 
 ### Precision Modes
+
+> ⚠️ **The TensorRT backend is not functional for correct translation.** The
+> decode loop has no KV-cache passthrough, so output after the first token is
+> corrupted. It is safety-gated to raise `RuntimeError` unless
+> `allow_trt_decode_without_kv_cache` is explicitly set. Additionally, TRT 11.x
+> removed `EXPLICIT_BATCH` and `ICudaEngine.num_layers`, which the builder still
+> uses (`trt_builder.py:394,633`). In practice, the TRT backend almost always
+> falls back to the AutoregressiveBackend. See
+> [`ARCHITECTURE.md` §8 #14](ARCHITECTURE.md#8-feature-status-the-truth-table).
 
 ```bash
 # FP16 — fast, universal, no calibration needed. Quality identical to BF16.
@@ -386,15 +474,15 @@ TR_BENCHMARK_FORCE_RECOMPILE=1 ./run.sh --tensorrt
 
 ### Autoregressive Models
 
-| Model | Memory (BF16) | Best For |
-|-------|--------------|----------|
-| TranslateGemma 4B | ~20 GB | MPS dev, fast iteration |
-| TranslateGemma 12B | ~50 GB | Production quality |
-| TranslateGemma 27B | ~100 GB (2× H200) | Maximum quality |
-| Ministral 3B | ~12 GB | Low VRAM, fast benchmarks |
-| Gemma4 E2B QAT | ~8 GB | Mobile-optimized, QAT-tuned |
-| Gemma4 E4B QAT | ~16 GB | Mid-tier QAT-tuned |
-| DiffusionGemma 26B A4B | ~52 GB | Diffusion AR hybrid |
+| Model | Memory (BF16) | Throughput (measured 2026-06-24) | Best For |
+|-------|--------------|----------------------------------|----------|
+| TranslateGemma 4B | ~8 GB | **735 tok/s** (bs=16, BF16, 1× H200). 13,223 tok/s at bs=512 | MPS dev, fast iteration |
+| TranslateGemma 12B | ~48 GB | not yet measured | Production quality |
+| TranslateGemma 27B | ~100 GB (2× H200) | not yet measured | Maximum quality |
+| Ministral 3B | ~12 GB | not yet measured | Low VRAM, fast benchmarks |
+| Gemma4 E2B QAT | ~8 GB | not yet measured | Mobile-optimized, QAT-tuned |
+| Gemma4 E4B QAT | ~16 GB | not yet measured | Mid-tier QAT-tuned |
+| DiffusionGemma 26B A4B | ~52 GB | not yet measured | Diffusion AR hybrid |
 
 ```bash
 ./run.sh --model 4B                    # TranslateGemma 4B (preset)
@@ -409,12 +497,12 @@ TR_BENCHMARK_FORCE_RECOMPILE=1 ./run.sh --tensorrt
 
 ### Encoder-Decoder Models (NLLB-200)
 
-| Model | Memory | Size | Best For |
-|-------|--------|------|----------|
-| nllb-200-distilled-600M | ~1.2 GB | 2.4 GB | Fastest, lowest quality |
-| nllb-200-distilled-1.3B | ~2.5 GB | 5 GB | Good speed/quality balance |
-| nllb-200-3.3B | ~6.3 GB | 13 GB | Production quality |
-| nllb-200-54B (MoE) | ~100 GB | 200 GB | Maximum quality, high VRAM |
+| Model | Memory | Size | Throughput (measured 2026-06-24, bs=8, BF16, Flash SDPA) | Best For |
+|-------|--------|------|---------------------------------------------------------|----------|
+| nllb-200-distilled-600M | ~1.2 GB | 2.4 GB | **580.5 tok/s** | Fastest, lowest quality |
+| nllb-200-distilled-1.3B | ~2.5 GB | 5 GB | **215.4 tok/s** | Good speed/quality balance |
+| nllb-200-3.3B | ~6.3 GB | 13 GB | **372.5 tok/s** | Production quality |
+| nllb-200-54B (MoE) | ~100 GB | 200 GB | not yet measured | Maximum quality, high VRAM |
 
 ```bash
 ./run.sh --nllb                          # 600M distilled (default)
@@ -445,12 +533,18 @@ Adds 20-50% on top of AR throughput. Works with any AR model.
 
 ```
 Quality ↑   More steps / larger model / beam search / more bits
-Speed   ↑   Fewer steps / smaller model / greedy decode / TensorRT / quantization
+Speed   ↑   Fewer steps / smaller model / greedy decode / BF16 (not quantization!)
 
-AR + TensorRT FP16: ~1.4× AR speed, same quality (no calibration needed)
-AR + TensorRT FP8:  ~1.6× AR speed, same quality (H200 only, dynamic scaling)
-AR + TensorRT INT8: ~2.0× AR speed, < 0.3 BLEU drop with good calibration
-AR + INT4 weights:  ~2.5× AR speed, 0.5-2.0 BLEU drop — validate before deploying
+Speed factors below are MEASURED (2026-06-24) on TranslateGemma 4B, single H200, unless noted:
+
+torch.compile:       <1.05× on 4B (negligible at <12B). Expected 1.1-1.4× on 12B+ — M2.1
+Flash SDPA:          1.17-1.23× overall throughput — M2.4
+INT8 quantization:   0.27× throughput on H200 (3.7× SLOWER, despite 41% memory savings) — M2.7
+TE FP8:              0.60× throughput on H200 (40% SLOWER, 0% memory saved for 4B) — M1.5
+PagedAttention:      60-87.5% KV memory savings for variable-length workloads — M2.6
+
+⚠️ INT8 and TE FP8 are COUNTERPRODUCTIVE for 4B models on H200 (130+ GB VRAM free).
+Only use when VRAM-constrained or for 12B+ models where compute-bound.
 
 Diffusion T=256:    ~1× AR speed, competitive quality
 Diffusion T=64:     ~4× AR speed, ~2-3 BLEU drop from full quality
@@ -458,6 +552,7 @@ Diffusion T=32:     ~8× AR speed, ~4-5 BLEU drop from full quality
 
 ⚠️ The rule: after any precision change, run ./run.sh --benchmark-only
    to verify quality against your golden reference set before deploying.
+   FP8 on H200 with 4B is 40% slower — not a free upgrade at this model size.
 ```
 
 ---
@@ -493,6 +588,40 @@ nsys profile --trace=cuda,nvtx,osrt,cublas,cudnn \
   --cuda-memory-usage=true --output=profile \
   python -m benchmark --config config.yaml
 ```
+
+### Measured Throughput Baselines (H200, June 2026)
+
+All measurements on 2× NVIDIA H200 NVL (139.80 GB each), torch 2.6.0+cu124,
+PyTorch built-in SDPA, BF16. Full data in [`MEASUREMENT_PLAN.md`](MEASUREMENT_PLAN.md).
+
+| Model | Backend | Batch | tok/s | Notes |
+|---|---|---|---|---|
+| TranslateGemma 4B | AR (Flash SDPA) | 16 | **735** | 8.0 GB VRAM, 42°C |
+| TranslateGemma 4B | AR (Flash SDPA) | 512 | **13,223** | Optimal batch, no OOM |
+| TranslateGemma 4B | AR (eager) | 16 | 630 | 1.17× slower than SDPA |
+| TranslateGemma 4B | AR (torch.compile) | 16 | 728 | <1% gain over SDPA alone |
+| TranslateGemma 4B | AR (TE FP8) | 16 | 497 | −40% vs BF16 (cast overhead) |
+| TranslateGemma 4B | AR (INT8) | 16 | 213 | −73% vs BF16 (dequant overhead) |
+| NLLB-200 600M | Enc-Dec | 8 | **581** | 1.1 GB VRAM |
+| NLLB-200 1.3B | Enc-Dec | 8 | 215 | 2.6 GB VRAM |
+| NLLB-200 3.3B | Enc-Dec | 8 | 373 | 6.3 GB VRAM |
+
+**Throughput degradation:** Zero detectable change after 2.2h sustained inference
+(122K batches, 110M tokens, mean 899 tok/s, slope +0.1%/hr, R²=0.000046).
+The constant-throughput assumption is validated for 4B on H200.
+
+### Verified Toolchain (H200 SM90)
+
+After extensive testing (see [`H200_SETUP.md` §Known Issues](H200_SETUP.md)):
+
+| Component | Verified | Notes |
+|---|---|---|
+| **torch** | **2.6.0+cu124** | Pinned in `setup.sh`. 2.11+cu130 crashes on SM90. 2.12+cu126 has flash_attn ABI break. |
+| **SDPA** | PyTorch built-in | `F.scaled_dot_product_attention`. All backends (flash/mem_efficient/math) work. |
+| **flash_attn** | NOT needed | PyTorch's built-in SDPA covers everything. flash_attn 2.8.3 only works with torch 2.11. |
+| **TE FP8** | Source-build | `pip install 'transformer-engine[pytorch]' --no-build-isolation` with `CPATH` set. −40% TPS for 4B. |
+| **torch.compile** | ✅ Works | `mode="reduce-overhead"`. Minimal gain for 4B; more benefit at 12B+. |
+| **bitsandbytes** | ⚠️ Functional | INT8 works but −73% TPS vs BF16 (dequant overhead). Only useful when VRAM-constrained. |
 
 ### Regression Monitoring
 
@@ -535,3 +664,10 @@ docker run --rm --gpus all --ipc=host --ulimit memlock=-1 \
   -e MASTER_PORT=29500 \
   tr-benchmark:3.6 --config /data/config.yaml
 ```
+
+---
+
+*This guide is part of the documentation set. See [`docs/README.md`](README.md)
+for navigation, [`ARCHITECTURE.md`](ARCHITECTURE.md) for the reality-grounded
+architecture and Feature Status, and
+[`AI_CODING_ANTIPATTERNS.md`](AI_CODING_ANTIPATTERNS.md) for mistakes to avoid.*

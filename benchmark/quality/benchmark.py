@@ -99,9 +99,10 @@ class QualityResults:
 
         targets_ok: list[bool] = []
 
-        # BERTScore
-        bs = self.bertscore.get("system_score", 0) or 0.0
-        targets_ok.append(float(bs) >= QUALITY_BERTSORE_TARGET)
+        # BERTScore (reference-based neural, when available)
+        bs = self.bertscore.get("system_score")
+        if bs is not None and isinstance(bs, (int, float)):
+            targets_ok.append(float(bs) >= QUALITY_BERTSORE_TARGET)
 
         # COMET-22 (reference-based, when available)
         cm = self.comet.get("system_score")

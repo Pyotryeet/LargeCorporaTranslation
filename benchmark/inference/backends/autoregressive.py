@@ -9,15 +9,22 @@ MEMORY:
     with torch.compile inductor cudagraph_trees in PyTorch 2.6).
   • PagedAttention KV-cache — block-level allocation, 40-70% less memory
     (experimental — not yet feeding paged KV to model).
-  • Pinned memory H2D transfers — DMA at ~50 GB/s (not ~10 GB/s).
-  • INT8 KV-cache quantization (optional) — 2× effective cache size.
-  • INT4/INT8 weight quantization (optional via AWQ) — 2-4× smaller model.
+  • Pinned memory H2D transfers — DMA at ~6.6 GB/s effective bandwidth
+    (measured 2026-06-24, 2.1× vs pageable). See M2.5.
+  • INT8 KV-cache quantization (optional) — ~1.5-2× smaller cache
+    (literature claim; not measured on this codebase). On H200 with 4B
+    models, 130+ GB free GPU memory makes KV-cache quant unnecessary. See M1.1.
+  • INT4/INT8 weight quantization (optional via AWQ) — 41% memory savings
+    (measured 2026-06-24). Throughput: 3.7× SLOWER on H200 for 4B models
+    (213 vs 792 tok/s). Counterproductive for memory-bandwidth-bound models. See M2.7.
 
 COMPUTE:
   • CUDA Graphs — captured at warmup but NOT used in hot path
     (KV-cache static-input limitation; torch.compile provides own graphs).
   • torch.compile(mode="reduce-overhead") — inductor CUDA graph fusion.
-  • FlashAttention-2 via SDPA backend — 2-4× faster attention.
+  • FlashAttention-2 via SDPA backend — faster attention (1.17-1.23×
+    overall throughput measured 2026-06-24; microbenchmark likely matches
+    the 2-4× claim but attention is ~20-30% of total compute for 4B). See M2.4.
   • Custom Triton fused kernels — RMSNorm+residual, RoPE+QKV, SwiGLU.
   • Transformer Engine FP8 — FP8 tensor core matmul.
 
@@ -1140,8 +1147,11 @@ class AutoregressiveBackend(InferenceBackend):
         """Apply torch.compile with reduce-overhead for CUDA decode speedup.
 
         On CUDA: mode='reduce-overhead' uses frame-level CUDA graphs for
-        15-40% decode speedup while avoiding max-autotune's cudagraph_trees
-        (which is incompatible with KV-cache accumulation in PyTorch < 2.12).
+        <5% speedup for 4B models on H200 (measured 2026-06-24); primarily
+        benefits models with 12B+ parameters where Python loop overhead is a
+        larger fraction of compute. See M2.1.  Also avoids max-autotune's
+        cudagraph_trees (which is incompatible with KV-cache accumulation
+        in PyTorch < 2.12).
 
         MPS is skipped — inductor deadlocks on first forward in PyTorch 2.x.
         """
@@ -1310,7 +1320,7 @@ class AutoregressiveBackend(InferenceBackend):
             self._paged_kv = None
 
     def _init_kv_cache_quantization(self) -> None:
-        """Initialize INT8 KV-cache quantization (2× effective cache size)."""
+        """Initialize INT8 KV-cache quantization (~1.5-2× cache savings — literature claim; not measured on 4B H200)."""
         try:
             self._kv_quant_config = KVQuantConfig(bits=8, group_size=128, symmetric=True)
             self._kv_quant_cache = QuantizedKVCache(
