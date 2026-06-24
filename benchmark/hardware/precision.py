@@ -395,7 +395,6 @@ class NativeFP8Linear(torch.nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if not self.use_fp8 or not x.is_cuda:
-            # Fallback: dequantize weight and do standard matmul.
             w_bf16 = self.weight_fp8.to(torch.bfloat16) * self.weight_scale.to(torch.bfloat16)
             return torch.nn.functional.linear(x, w_bf16, self.bias)
 
@@ -404,27 +403,25 @@ class NativeFP8Linear(torch.nn.Module):
         if x.dim() > 2:
             x = x.reshape(-1, orig_shape[-1])
 
-        # Dynamic input quantization.
-        x_f32 = x.to(torch.float32)
-        x_amax = x_f32.abs().max()
+        # Quantize activations dynamically.  This is the per-token FP8 tax.
+        # TE avoids it by fusing quantize+matmul in one CUDA kernel.
+        # For models >= 8K hidden dim or bs >= 256, the matmul speedup
+        # outweighs this cost.
+        x_amax = x.abs().max()
         if x_amax == 0:
             x_amax = torch.tensor(1.0, device=x.device, dtype=torch.float32)
-        x_scale = (x_amax / 448.0).to(torch.float32)
-        x_fp8 = (x_f32 / x_scale).clamp(-448.0, 447.0).to(torch.float8_e4m3fn)
+        x_scale = (x_amax.to(torch.float32) / 448.0).to(torch.float32)
+        x_fp8 = (x.to(torch.float32) / x_scale).clamp(-448.0, 447.0).to(torch.float8_e4m3fn)
 
-        # FP8 matmul → BF16 output.
         out = torch._scaled_mm(
-            x_fp8,
-            self.weight_fp8.t(),
-            scale_a=x_scale,
-            scale_b=self.weight_scale,
+            x_fp8, self.weight_fp8.t(),
+            scale_a=x_scale, scale_b=self.weight_scale,
             out_dtype=torch.bfloat16,
         )
 
         if self.bias is not None:
             out = out + self.bias
 
-        # Restore original batch shape.
         if len(orig_shape) > 2:
             out = out.reshape(orig_shape[:-1] + (self.out_features,))
         return out
