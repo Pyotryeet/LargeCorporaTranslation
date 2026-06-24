@@ -1146,12 +1146,10 @@ class AutoregressiveBackend(InferenceBackend):
     def _apply_extreme_compile(self) -> None:
         """Apply torch.compile with reduce-overhead for CUDA decode speedup.
 
-        On CUDA: mode='reduce-overhead' uses frame-level CUDA graphs for
-        <5% speedup for 4B models on H200 (measured 2026-06-24); primarily
-        benefits models with 12B+ parameters where Python loop overhead is a
-        larger fraction of compute. See M2.1.  Also avoids max-autotune's
-        cudagraph_trees (which is incompatible with KV-cache accumulation
-        in PyTorch < 2.12).
+        On PyTorch >= 2.12: mode='reduce-overhead' uses frame-level CUDA graphs.
+        On PyTorch < 2.12: reduce-overhead triggers cudagraph_trees KV-cache
+        tensor-overwrite crash ("accessing tensor output of CUDAGraphs that has
+        been overwritten") — falls back to eager mode to avoid silent failure.
 
         MPS is skipped — inductor deadlocks on first forward in PyTorch 2.x.
         """
@@ -1164,12 +1162,23 @@ class AutoregressiveBackend(InferenceBackend):
             self.use_torch_compile = False
             return
 
+        _pt_version = tuple(int(x) for x in torch.__version__.split(".")[:2])
+
         try:
             if self.backend_name == "cuda":
-                opts = {
-                    "mode": "reduce-overhead",
-                    "fullgraph": False,
-                }
+                if _pt_version >= (2, 12):
+                    opts = {"mode": "reduce-overhead", "fullgraph": False}
+                else:
+                    # PyTorch < 2.12: cudagraph_trees crashes on KV-cache
+                    # tensor reuse across decode steps.  Fall back to eager.
+                    logger.info(
+                        "torch.compile skipped — PyTorch %s < 2.12 has "
+                        "cudagraph_trees KV-cache overwrite bug.  Upgrade to "
+                        "PyTorch >= 2.12 for compile support.",
+                        torch.__version__,
+                    )
+                    self.use_torch_compile = False
+                    return
             else:
                 opts = {"mode": "default"}
 
@@ -1178,18 +1187,11 @@ class AutoregressiveBackend(InferenceBackend):
             self.model = compiled
             logger.info("torch.compile applied (mode=%s)", opts.get("mode"))
         except Exception as e:
-            # Fall back to mode='default' instead of retrying the same mode.
             logger.warning(
-                "torch.compile(mode=%s) failed: %s — trying mode='default'",
+                "torch.compile(mode=%s) failed: %s — running eager mode",
                 opts.get("mode"), e,
             )
-            try:
-                self.model = torch.compile(self.model, mode="default", fullgraph=False)
-                logger.info("torch.compile applied (default fallback)")
-            except Exception as e2:
-                logger.warning(
-                    "torch.compile failed entirely: %s — running eager mode", e2,
-                )
+            self.use_torch_compile = False
 
     def _inject_fused_kernels(self) -> None:
         """Replace stock PyTorch ops with Triton fused kernels at runtime.
