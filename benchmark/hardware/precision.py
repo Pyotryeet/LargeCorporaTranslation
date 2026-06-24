@@ -398,11 +398,16 @@ class NativeFP8Linear(torch.nn.Module):
             w_bf16 = self.weight_fp8.to(torch.bfloat16) * self.weight_scale.to(torch.bfloat16)
             return torch.nn.functional.linear(x, w_bf16, self.bias)
 
+        # torch._scaled_mm requires exactly 2-D inputs.  Flatten batch dims.
+        orig_shape = x.shape
+        if x.dim() > 2:
+            x = x.reshape(-1, orig_shape[-1])
+
         # Dynamic input quantization.
         x_f32 = x.to(torch.float32)
         x_amax = x_f32.abs().max()
         if x_amax == 0:
-            x_amax = torch.tensor(1.0, device=x.device)
+            x_amax = torch.tensor(1.0, device=x.device, dtype=torch.float32)
         x_scale = (x_amax / 448.0).to(torch.float32)
         x_fp8 = (x_f32 / x_scale).clamp(-448.0, 447.0).to(torch.float8_e4m3fn)
 
@@ -417,6 +422,10 @@ class NativeFP8Linear(torch.nn.Module):
 
         if self.bias is not None:
             out = out + self.bias
+
+        # Restore original batch shape.
+        if len(orig_shape) > 2:
+            out = out.reshape(orig_shape[:-1] + (self.out_features,))
         return out
 
 
