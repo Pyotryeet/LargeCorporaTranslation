@@ -208,8 +208,9 @@ class BenchmarkHarness:
             # v3.6: NLLB encoder-decoder parameters.
             "nllb_source_lang": model_cfg.nllb_source_lang,
             "nllb_target_lang": model_cfg.nllb_target_lang,
-            # v3.4: QAT model configuration.
-            "use_qat_model": getattr(model_cfg, "use_qat_model", False),
+            # v3.4: QAT model configuration. QAT is auto-detected via
+            # _is_qat_model (keywords in model_path); there is no
+            # `use_qat_model` field on ModelConfig.
             "qat_precision": getattr(model_cfg, "qat_precision", "auto"),
             # v3.6: Quantization level (bf16, int8, int4).
             "quantization": getattr(model_cfg, "quantization", "bf16"),
@@ -240,6 +241,14 @@ class BenchmarkHarness:
         gc.collect()
         if device_info.backend == "mps" and hasattr(torch.mps, "empty_cache"):
             torch.mps.empty_cache()
+
+        # ── Capability registry (verified feature states) ──
+        if (hasattr(self.engine.backend, '_capability_registry')
+                and self.engine.backend._capability_registry is not None):
+            reg = self.engine.backend._capability_registry
+            active, total = reg.active_vs_total()
+            logger.info("Capability summary: %d active / %d total features", active, total)
+            logger.info(reg.report_text())
 
         # ── Batch size ──
         if self.batch_size_override:
@@ -399,6 +408,7 @@ class BenchmarkHarness:
             batch_size=batch_size,
             prefetch_workers=self.config.data.prefetch_workers,
             backend=device_info.backend,  # ← v2.0: pinned memory on CUDA
+            pretokenized_loader=self._resolve_pretokenized_loader(),
         )
 
         self._init_translation_infra(device_info)
@@ -613,7 +623,8 @@ class BenchmarkHarness:
                 quality_results = quality_bench.run(self.engine, max_references=max_q_refs)
                 if quality_results is not None and self._prometheus is not None:
                     self._prometheus.record_quality(
-                        bleu=None, chrf=None,
+                        bleu=quality_results.bleu.get('score'),
+                        chrf=quality_results.chrf.get('score'),
                         comet=quality_results.comet.get('system_score'),
                         bertscore=quality_results.bertscore.get('system_score'),
                         comet_kiwi=quality_results.comet_kiwi.get('system_score'),
@@ -1025,6 +1036,39 @@ class BenchmarkHarness:
         self._prometheus.start()
         if self.metrics is not None:
             self.metrics.set_prometheus_exporter(self._prometheus)
+
+    # ── Pre-tokenized cache resolution ─────────────────────────────────────
+
+    def _resolve_pretokenized_loader(self):
+        """Return a :class:`PreTokenizedLoader` if a valid cache exists.
+
+        Checks the cache directory for a pre-tokenized Parquet file matching
+        the current model + tokenizer + data configuration.  Returns ``None``
+        on cache miss (the pipeline falls back to normal chunk→tokenize path).
+        Set ``TR_NO_PRETOKENIZED_CACHE=1`` to force-disable.
+        """
+        if os.environ.get("TR_NO_PRETOKENIZED_CACHE") == "1":
+            return None
+        try:
+            from benchmark.data.pretokenizer import has_cache, ensure_pretokenized
+        except ImportError:
+            return None  # pyarrow not installed
+
+        model_cfg = self.config.model
+        if has_cache(
+            model_cfg.model_path, self.engine.tokenizer,
+            max_input_tokens=model_cfg.max_input_tokens,
+            overlap_tokens=self.config.data.chunk_overlap_tokens,
+            input_paths=self.config.data.input_paths,
+        ):
+            logger.info("Using pre-tokenized cache for %s", model_cfg.model_path)
+            return ensure_pretokenized(
+                model_cfg.model_path, self.engine.tokenizer,
+                max_input_tokens=model_cfg.max_input_tokens,
+                overlap_tokens=self.config.data.chunk_overlap_tokens,
+                input_paths=self.config.data.input_paths,
+            )
+        return None
 
     def _init_translation_infra(self, device_info: DeviceInfo) -> None:
         """Shared setup for metrics, checkpoint, signal handler, and cleanup.

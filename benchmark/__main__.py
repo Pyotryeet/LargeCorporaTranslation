@@ -17,6 +17,7 @@ import argparse
 import sys
 import warnings
 import os as _os
+from pathlib import Path
 
 from benchmark.utils.version import VERSION
 
@@ -32,6 +33,66 @@ warnings.filterwarnings("ignore", message=".*generation flags are not valid.*",
 _os.environ.setdefault("TRANSFORMERS_VERBOSITY", "error")
 
 from benchmark.orchestration.harness import BenchmarkHarness
+
+
+def _run_pretokenize(args) -> int:
+    """Run pre-tokenization for one or all models, then exit."""
+    import sys as _sys
+
+    # Determine which models to pre-tokenize.
+    if args.pretokenize_all:
+        from benchmark.config.model_presets import MODEL_PRESETS
+        models = list(MODEL_PRESETS.keys())
+    elif args.model:
+        models = [args.model]
+    else:
+        # Default: the model from config
+        import yaml as _yaml
+        with open(args.config, "r") as _f:
+            _raw = _yaml.safe_load(_f) or {}
+        models = [_raw.get("model", {}).get("model_path", "google/translategemma-4b-it")]
+
+    total_chunks = 0
+    for model_key in models:
+        print(f"\n{'='*60}")
+        print(f"Pre-tokenizing: {model_key}")
+        print(f"{'='*60}")
+
+        # Resolve model path from presets or use as-is.
+        try:
+            from benchmark.config.model_presets import get_preset_by_name
+            preset = get_preset_by_name(model_key)
+            model_path = preset.hf_model_id if preset else model_key
+        except Exception:
+            model_path = model_key  # raw HF model ID or path
+
+        # Load tokenizer only (no model weights needed for pre-tokenization).
+        from transformers import AutoTokenizer
+        tokenizer = AutoTokenizer.from_pretrained(
+            model_path, trust_remote_code=False,
+        )
+
+        from benchmark.data.pretokenizer import PreTokenizer
+        pretok = PreTokenizer(
+            model_path=model_path,
+            tokenizer=tokenizer,
+            max_input_tokens=512,
+            overlap_tokens=50,
+            input_paths=["./data/input/*.jsonl.gz"],
+            cache_dir=(
+                Path(args.pretokenized_cache_dir)
+                if args.pretokenized_cache_dir
+                else None
+            ),
+        )
+        chunks = pretok.run(force=args.no_pretokenized_cache)
+        total_chunks += chunks
+        print(f"  → {chunks} chunks written to {pretok.parquet_path}")
+
+    print(f"\n{'='*60}")
+    print(f"Done. {total_chunks} chunks across {len(models)} model(s).")
+    print(f"Run benchmarks as usual — cache auto-detected.")
+    return 0
 
 
 def main():
@@ -68,6 +129,11 @@ Examples:
                             help="Skip translation, run quality benchmark only")
     mode_group.add_argument("--translate-only", action="store_true",
                             help="Skip quality benchmark after translation")
+
+    mode_group.add_argument("--pretokenize", action="store_true",
+                            help="Pre-tokenize input data for model(s) and exit")
+    mode_group.add_argument("--pretokenize-all", action="store_true",
+                            help="Pre-tokenize for all models in the preset registry")
 
     # ── Resume ──
     parser.add_argument("--resume", metavar="DIR",
@@ -119,13 +185,24 @@ Examples:
     parser.add_argument("--model", type=str, default=None,
                         help="Model preset name or HF model ID (e.g. '4B', 'ministral-3b', "
                              "'google/gemma-4-E2B-it-qat-mobile-ct')")
+    parser.add_argument("--no-pretokenized-cache", action="store_true",
+                        help="Force re-tokenization; skip pre-tokenized cache")
+    parser.add_argument("--pretokenized-cache-dir", type=str, default=None,
+                        help="Override pre-tokenization cache directory")
 
     args = parser.parse_args()
 
     # ── Apply MPS memory-safe mode before harness creation ──
     if args.mps_safe:
-        import os as _os
         _os.environ["TR_MPS_MEMORY_SAFE"] = "1"
+
+    # ── Enable speculative decoding gate before harness creation ──
+    # The speculative decoding path is gated by TR_ENABLE_EXPERIMENTAL_SPECULATIVE=1
+    # in benchmark/inference/speculative.py:1129.  Without this env var,
+    # create_speculative_decoder() returns None and falls back to standard AR decode,
+    # logging only a warning.  Set it here so --speculative "just works".
+    if args.speculative:
+        _os.environ["TR_ENABLE_EXPERIMENTAL_SPECULATIVE"] = "1"
 
     # ── Inject CLI overrides into config (speculative, paged attention, NLLB, etc.) ──
     _needs_inject = (
@@ -185,8 +262,18 @@ Examples:
         run_mode = "quick"
     elif args.benchmark_only:
         run_mode = "benchmark-only"
+    elif args.pretokenize or args.pretokenize_all:
+        run_mode = "pretokenize"
     else:
         run_mode = "full"
+
+    # ── Pre-tokenization mode — run once and exit ──────────────────────
+    if run_mode == "pretokenize":
+        return _run_pretokenize(args)
+
+    # ── Disable pre-tokenized cache if requested ──────────────────────
+    if args.no_pretokenized_cache:
+        os.environ["TR_NO_PRETOKENIZED_CACHE"] = "1"
 
     harness = BenchmarkHarness(
         config_path=args.config,

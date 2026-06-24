@@ -161,7 +161,8 @@ class AsyncPipeline:
     def __init__(self, loader: JSONLLoader, chunker, tokenizer: PreTrainedTokenizerBase,
                  text_filter: ChunkFilter, batch_size: int = 8, prefetch_workers: int = 4,
                  max_queue_size: int = 32, backend: str = "cpu",
-                 max_input_tokens: Optional[int] = None):
+                 max_input_tokens: Optional[int] = None,
+                 pretokenized_loader=None):
         self.loader = loader
         self.chunker = chunker
         self.tokenizer = tokenizer
@@ -180,6 +181,8 @@ class AsyncPipeline:
         self.max_input_tokens = min(self.max_input_tokens, _DEFAULT_MAX_SEQ_LEN)
         # Pinned memory only benefits CUDA (discrete GPU with PCIe).
         self._use_pinned = (backend == "cuda")
+        # Pre-tokenized fast path: skips chunker + tokenizer + filter.
+        self._pretokenized_loader = pretokenized_loader
 
         # Pre-allocated pinned memory pool (avoids per-batch mlock overhead).
         self._pinned_pool: Optional[PinnedBufferPool] = None
@@ -234,8 +237,6 @@ class AsyncPipeline:
         self._done.clear()
 
         # Drain any stale items left from a previous pipeline run.
-        # Without this, leftover chunks from a prior start/stop cycle can
-        # appear in the tokenised queue and cause batch assembly confusion.
         while not self._raw_queue.empty():
             try:
                 self._raw_queue.get_nowait()
@@ -246,6 +247,19 @@ class AsyncPipeline:
                 self._tokenised_queue.get_nowait()
             except queue.Empty:
                 break
+
+        # ── Pre-tokenized fast path ────────────────────────────────────
+        if self._pretokenized_loader is not None:
+            logger.info(
+                "Async pipeline: pre-tokenized cache — %d chunks, "
+                "skipping chunker + tokenizer + filter",
+                self._pretokenized_loader.total_chunks,
+            )
+            self._loader_thread = threading.Thread(
+                target=self._pre_tokenized_loop, name="pretok-feeder", daemon=True,
+            )
+            self._loader_thread.start()
+            return
 
         # NOTE: Thread-local tokenizer instances are NOT pre-warmed here.
         # Each worker thread lazily creates its own deep copy via
@@ -656,3 +670,44 @@ class AsyncPipeline:
                     break  # shutdown
 
         logger.debug("Tokenizer worker exiting after %d chunks", chunk_produced)
+
+    # ── Pre-tokenized fast path ─────────────────────────────────────────────
+
+    def _pre_tokenized_loop(self) -> None:
+        """Feed pre-tokenized chunks directly into the tokenised queue.
+
+        Reads ``(raw_text, token_ids, token_count)`` from a
+        :class:`~benchmark.data.pretokenizer.PreTokenizedLoader` and pushes
+        them onto ``_tokenised_queue`` — the exact same tuple format the
+        normal ``_tokeniser_loop`` produces.  ``next_batch()`` is unchanged.
+
+        This skips: loader, chunker, prompt wrapping, tokenization, filter.
+        A single thread saturates the queue because there's no CPU work.
+        """
+        chunk_produced = 0
+        for text, token_ids, count in self._pretokenized_loader.iter_chunks_seekable():
+            if not self._running.is_set():
+                break
+
+            # Push into tokenised queue with timeout — same pattern as
+            # _tokeniser_loop so shutdown is clean.
+            while self._running.is_set():
+                try:
+                    self._tokenised_queue.put(
+                        (text, token_ids, count), timeout=1.0,
+                    )
+                    break
+                except queue.Full:
+                    pass  # retry: check _running flag
+            if not self._running.is_set():
+                break
+
+            with self._chunk_counter_lock:
+                self.total_chunks_produced += 1
+            chunk_produced += 1
+
+        self.notify_done()
+        logger.debug(
+            "Pre-tokenized feeder exiting after %d chunks (of %d total)",
+            chunk_produced, self._pretokenized_loader.total_chunks,
+        )
