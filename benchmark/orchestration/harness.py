@@ -1055,18 +1055,27 @@ class BenchmarkHarness:
             return None  # pyarrow not installed
 
         model_cfg = self.config.model
+        cache_dir = None
+        if os.environ.get("TR_PRETOKENIZED_CACHE_DIR"):
+            cache_dir = Path(os.environ["TR_PRETOKENIZED_CACHE_DIR"])
         if has_cache(
             model_cfg.model_path, self.engine.tokenizer,
             max_input_tokens=model_cfg.max_input_tokens,
             overlap_tokens=self.config.data.chunk_overlap_tokens,
+            min_chunk_tokens=self.config.data.min_chunk_tokens,
+            max_garbage_ratio=self.config.data.max_garbage_ratio,
             input_paths=self.config.data.input_paths,
+            cache_dir=cache_dir,
         ):
             logger.info("Using pre-tokenized cache for %s", model_cfg.model_path)
             return ensure_pretokenized(
                 model_cfg.model_path, self.engine.tokenizer,
                 max_input_tokens=model_cfg.max_input_tokens,
                 overlap_tokens=self.config.data.chunk_overlap_tokens,
+                min_chunk_tokens=self.config.data.min_chunk_tokens,
+                max_garbage_ratio=self.config.data.max_garbage_ratio,
                 input_paths=self.config.data.input_paths,
+                cache_dir=cache_dir,
             )
         return None
 

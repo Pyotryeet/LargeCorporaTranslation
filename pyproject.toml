@@ -27,6 +27,7 @@ dependencies = [
     "sentencepiece>=0.2.0",
     "orjson>=3.10.0",
     "tokenizers>=0.20.0",
+    "pyarrow>=17.0.0",
 ]
 
 [project.optional-dependencies]
