@@ -433,6 +433,7 @@ def apply_native_fp8_to_model(
     model: torch.nn.Module,
     *,
     skip_lm_head: bool = True,
+    mlp_only: bool = True,
 ) -> int:
     """Replace ``nn.Linear`` layers with :class:`NativeFP8Linear` for FP8 inference.
 
@@ -447,6 +448,11 @@ def apply_native_fp8_to_model(
     skip_lm_head : bool
         If True, keep the lm_head in the original dtype (FP8 precision loss
         on the vocabulary projection hurts token selection).
+    mlp_only : bool
+        If True (default), only replace MLP layers (gate_proj, up_proj,
+        down_proj).  Attention projections (q_proj, k_proj, v_proj, o_proj)
+        stay in BF16 — their small matmul sizes make dynamic FP8 quantization
+        overhead dominate the compute savings.
 
     Returns
     -------
@@ -459,6 +465,9 @@ def apply_native_fp8_to_model(
         logger.info("Native FP8 skipped — requires Hopper GPU (SM 9.0+).")
         return 0
 
+    # Attention projection names — small matmuls, skip when mlp_only=True.
+    _ATTN_NAMES = {"q_proj", "k_proj", "v_proj", "o_proj"}
+
     replaced = 0
 
     def _replace(module: torch.nn.Module, parent_name: str = ""):
@@ -466,6 +475,8 @@ def apply_native_fp8_to_model(
         for name, child in module.named_children():
             full_name = f"{parent_name}.{name}" if parent_name else name
             if skip_lm_head and (name == "lm_head" or full_name.endswith(".lm_head")):
+                continue
+            if mlp_only and name in _ATTN_NAMES:
                 continue
             if isinstance(child, torch.nn.Linear) and not isinstance(child, NativeFP8Linear):
                 setattr(module, name, NativeFP8Linear(child))
@@ -477,9 +488,9 @@ def apply_native_fp8_to_model(
 
     if replaced > 0:
         logger.info(
-            "Native FP8: %d nn.Linear layers replaced with NativeFP8Linear "
-            "(torch._scaled_mm, no Transformer Engine required).",
-            replaced,
+            "Native FP8: %d nn.Linear replaced (MLP-only=%s, "
+            "torch._scaled_mm, no TE).",
+            replaced, mlp_only,
         )
     return replaced
 
