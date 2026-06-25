@@ -51,10 +51,12 @@ H200Research/
 │   ├── quality/               # benchmark · metrics_{bertscore,comet,bleu,chrf} · references · confidence · ensemble
 │   ├── reporting/             # aggregator · extrapolation · json_report · markdown_report
 │   └── utils/                 # env_check · logging_setup · timer · version · json_utils · print_summary
-├── scripts/                   # standalone runners (bench_full · benchmark_all_models · run_* )
+├── quantization/              # static FP8 pipeline (smoothquant · qat · static_fp8)
+├── scripts/                   # benchmarks (benchmark_single · benchmark_models · run_nllb · bench_format)
+│   └── evaluation/            # human eval (build_data · select_sentences · translate · evaluate · tune_weights)
 ├── tests/                     # pytest suite (~27 files)
 ├── docs/                      # this documentation set (see docs/README.md)
-├── setup.sh / run.sh / Makefile / Dockerfile   # operational entry points
+├── setup.sh / run.sh / Makefile / Dockerfile / Dockerfile.ngc   # operational entry points
 └── config.yaml                # production H200/CUDA config
 ```
 

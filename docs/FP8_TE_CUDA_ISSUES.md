@@ -177,8 +177,8 @@ When multiple CUDA streams (TE's internal stream + PyTorch's default stream + th
 | `benchmark/config/schema.py` | Default model remains `google/translategemma-4b-it` (backward compat). |
 | `benchmark/utils/env_check.py` | Model preset resolution before preflight check. |
 | `benchmark/__main__.py` | `--model` arg resolves presets to HF IDs before config injection. |
-| `scripts/run_one_model.py` | `use_torch_compile=is_cuda` (re-enabled from hardcoded False). |
-| `scripts/benchmark_all_models.py` | Same compile re-enable for both AR and NLLB paths. |
+| `scripts/benchmark_single.py` | `use_torch_compile=is_cuda` (re-enabled from hardcoded False). |
+| `scripts/benchmark_models.py` | Same compile re-enable for both AR and NLLB paths. |
 | `Dockerfile.ngc` | NGC-based Docker image (created, not yet built). |
 | `docs/FP8_TE_CUDA_ISSUES.md` | This document. |
 

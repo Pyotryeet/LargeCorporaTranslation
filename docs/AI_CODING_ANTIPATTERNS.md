@@ -441,7 +441,7 @@ These are risks specific to this codebase. Each is preventable by a cheap check.
 | 🟡 | **Reasoning about performance from the README's optimization count.** | Use [Feature Status](ARCHITECTURE.md#8-feature-status-the-truth-table); the hot path is eager + `torch.compile` + TE FP8. |
 | 🟡 | **Disabling `torch.compile` without re-checking dependents.** | grep `not use_torch_compile` / `use_torch_compile` guards (see A6). |
 | 🟡 | **Assuming `device_map="auto"` delivers the "2×H200" story.** | The single-GPU fast path (`autoregressive.py:919`) bypasses multi-GPU for every model actually run; `apply_tensor_parallelism` is never called. |
-| 🟡 | **Passing user input through shell interpolation / `subprocess` without sanitizing.** (RCE history in `run.sh`, `benchmark_all_models.py`.) | Use `argv` lists, never shell interpolation; sanitize/whitelist env. |
+| 🟡 | **Passing user input through shell interpolation / `subprocess` without sanitizing.** (RCE history in `run.sh`, `benchmark_models.py`.) | Use `argv` lists, never shell interpolation; sanitize/whitelist env. |
 | 🟡 | **Letting exceptions fall through to defaults in quality/metrics paths.** | Surface the failure (set `error`, log with context); see A4/A15. |
 | 🟡 | **Hardcoding constants instead of importing from `config/constants.py` / reading `model.config`.** | See A11. |
 | 🟡 | **Coercing `None → 0` in a target check.** | See A15 — skip or fail-loud, consistently. |

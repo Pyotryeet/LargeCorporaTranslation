@@ -97,7 +97,7 @@ TR_SKIP_FP8=1 python -m benchmark --model translategemma-4b-bf16 --dry-run
 python -m benchmark --model translategemma-4b-bf16 --qat
 
 # 2. In your training script:
-from benchmark.quantization.qat import prepare_qat, export_qat_weights
+from quantization.qat import prepare_qat, export_qat_weights
 from benchmark.hardware.precision import save_fp8_weights
 
 prepare_qat(model)
