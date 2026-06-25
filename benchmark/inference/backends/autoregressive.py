@@ -1171,11 +1171,17 @@ class AutoregressiveBackend(InferenceBackend):
 
         try:
             if self.backend_name == "cuda":
-                if _pt_version >= (2, 12):
+                if _pt_version >= (2, 14):
+                    # PyTorch >= 2.14: reduce-overhead is safe (cudagraph_trees
+                    # fixed for KV-cache sliding-window attention).
                     opts = {"mode": "reduce-overhead", "fullgraph": False}
+                elif _pt_version >= (2, 12):
+                    # PyTorch 2.12-2.13: kernel fusion + autotuning without
+                    # cudagraph_trees. Gets ~half the compile speedup with
+                    # zero stability risk.
+                    opts = {"mode": "default", "fullgraph": False}
                 else:
-                    # PyTorch < 2.12: cudagraph_trees crashes on KV-cache
-                    # tensor reuse across decode steps.  Fall back to eager.
+                    # PyTorch < 2.12: cudagraph_trees crashes on KV-cache.
                     logger.info(
                         "torch.compile skipped — PyTorch %s < 2.12 has "
                         "cudagraph_trees KV-cache overwrite bug.  Upgrade to "
