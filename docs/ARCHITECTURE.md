@@ -40,8 +40,13 @@ documentation historically advertised "39 optimizations (37 wired)," but the
 production AR hot path is, in reality, **plain eager `model(...)` in a Python
 loop with HuggingFace `past_key_values`**, accelerated only by:
 
-- `torch.compile(mode="reduce-overhead")`, and
-- Transformer-Engine FP8 (`te.Linear` replacement) on CUDA.
+- **Pre-tokenized Parquet cache** (skips CPU tokenization, +60% TPS),
+- **TF32 + Flash SDPA** (always on for CUDA),
+- **BF16** (native H200 dtype; FP8 TE blocked by driver — see
+  [`FP8_TE_CUDA_ISSUES.md`](FP8_TE_CUDA_ISSUES.md)), and
+- **`torch.compile(mode="default")`** on PyTorch 2.12–2.13, or
+  **`torch.compile(mode="reduce-overhead")`** on PyTorch 2.14+
+  (cudagraph_trees KV-cache bug persists through 2.12.1).
 
 Almost every other "optimization" is **built but gated off** — hardcoded `False`,
 commented out, env-gated, safety-gated, or captured-but-never-replayed. The
@@ -178,11 +183,20 @@ The primary backend. `model_type = AUTOREGRESSIVE`; capabilities
 4. Model load: QAT/Gemma-4/Q4_0 → `_try_load_qat_model`; else `_load_standard_model`
    (single-GPU fast path when model < 10% of one GPU's memory; else
    `device_map="auto"`).
-5. TE FP8 (`te.Linear` replacement, `lm_head` skipped) — **only when not `safe_mode`**. Source-build required for torch 2.6: `pip install 'transformer-engine[pytorch]' --no-build-isolation`. Pinned to torch 2.6.0+cu124 (2.11+cu130 crashes on SM90; 2.12+cu126 has flash_attn ABI break). **Measured: −40% TPS vs BF16 on 4B** — cast overhead dominates at this model size.
+5. TE FP8 (`te.Linear` replacement, `lm_head` skipped) — **gate: TE must be installed
+   and functional.**  On pip venvs TE source-build succeeds but runtime cuBLASLt
+   crashes on all drivers tested (580, 565).  See
+   [`FP8_TE_CUDA_ISSUES.md`](FP8_TE_CUDA_ISSUES.md).  When TE is absent, native
+   `torch._scaled_mm` is attempted (MLP-only, gated behind the model-size heuristic).
+   Measured on 4B: −40% TPS vs BF16 (quantization tax dominates small matmuls).
+   Default on pip: `TR_SKIP_FP8=1` ↔ pure BF16.
 6. **Fused-kernel injection is hardcoded `if False:`** (`:761`) — dead.
-7. `torch.compile(mode="reduce-overhead")` on CUDA (disabled on MPS/CPU/safe-mode).
-   **On failure, falls back to `mode='default'`** (not a retry of `reduce-overhead`);
-   if that also fails, runs eager mode. `_apply_extreme_compile:1139`.
+7. `torch.compile` (CUDA only; skipped on MPS/CPU/safe-mode). Version-gated:
+   **< 2.12** → skipped (eager). **2.12–2.13** → `mode="default"` (inductor fusion,
+   no cudagraph_trees — warmup takes 30s but decode is stable).
+   **≥ 2.14** → `mode="reduce-overhead"` (frame-level CUDA graphs).
+   `_apply_extreme_compile:1167`.
+   **Measured (no-compile, PyTorch 2.12.1): 1,650 tok/s** (4B, bs=32, 1×H200).
 8. JIT kernel precompile (only the non-functional Metal RMSNorm is live; see §8).
 9. PagedAttention init — **never runs** (`_use_paged_attention` hardcoded `False`, `:596`).
 10. INT8 KV-cache object — **constructed but never read/written** (`:1184`).
@@ -305,8 +319,9 @@ on which path you mean.
 
 | # | Feature | Status | How to activate | Evidence | Notes |
 |---|---|---|---|---|---|
-| 1 | `torch.compile(reduce-overhead)` | ✅ | on by default (CUDA); `--no-compile` to disable | `autoregressive.py:767` | Disabled on MPS/CPU/safe-mode. Measured 2026-06-24: <5% speedup for 4B model at bs=16 (727.8 vs 735.3 tok/s). Primary benefit is for 12B+ models where Python overhead is a larger fraction of compute. See M2.1. |
-| 2 | Transformer-Engine FP8 (`te.Linear`) | ✅ | CUDA + TE installed; off under `--safe-mode` | `autoregressive.py:751`, `hardware/precision.py:182` | `lm_head` skipped. ⚠️ Under `--safe-mode`, `precision_config.uses_fp8` stays `True` while runtime runs BF16 (config-vs-reality inconsistency). — measured 2026-06-24: TE FP8 is counterproductive on 4B (40% slower, 0% memory saved). Likely benefits 12B+ models where compute-bound. BLOCKED on torch 2.6.0 (TE 2.16 requires torch ≥2.11). See M1.5. |
+| 1 | `torch.compile` | ⚠️ | on by default (CUDA); version-gated | `autoregressive.py:1167` | **< 2.12** → skipped (eager). **2.12–2.13** → `mode="default"` (stable, warmup 30s). **≥ 2.14** → `mode="reduce-overhead"`. No-compile baseline 1,650 tok/s (2.12.1, 4B, bs=32). |
+| 2 | Transformer-Engine FP8 (`te.Linear`) | ❌ | CUDA + TE installed and working | `autoregressive.py:762` | **TE source-build succeeds on pip but runtime cuBLASLt crashes on all tested drivers (580, 565).** See [`FP8_TE_CUDA_ISSUES.md`](FP8_TE_CUDA_ISSUES.md). Only works in NGC container (tested), but NGC has its own transformers version compatibility issues. Native `torch._scaled_mm` fallback is −40% TPS on 4B. `TR_SKIP_FP8=1` is the practical default on pip venvs. |
+| 2b | Pre-tokenized Parquet cache | ✅ | automatic (checks `~/.cache/tr_benchmark/pretokenized/`) | `benchmark/data/pretokenizer.py` | +60% TPS on AR models. 198K chunks cached. `--pretokenize` to create, auto-detected thereafter. |
 | 3 | Flash + mem-efficient SDPA | ✅ | CUDA default | `autoregressive.py:695` | — measured 2026-06-24: 1.17-1.23× overall throughput for 4B model. Attention-only speedup is higher (likely 2-4×) but attention is ~20-30% of total compute for 4B. See M2.4. |
 | 4 | CUDA Graph decode | ⚠️ | — (deprecated) | `hardware/cuda_graphs.py:3` (FutureWarning on import); capture at `autoregressive.py:1339`; **never replayed** in `_extreme_decode:1548` | Captured graph excludes `past_key_values` as a static input → replay would feed zero-context garbage. Capture cost is paid, benefit never collected. |
 | 5 | Fused Triton kernels (RMSNorm, SwiGLU) | 💀 | — | injection hardcoded `if False:` (`autoregressive.py:761`) | Triton fused ops only work inside `torch.compile`; crash in eager (commit `804c0a6`). |

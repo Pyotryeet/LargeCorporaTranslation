@@ -197,9 +197,14 @@ See `docs/MEASUREMENT_PLAN.md` for methodology and raw data.
 - [`ARCHITECTURE.md` §8 Feature Status](ARCHITECTURE.md#8-feature-status-the-truth-table)
 - [`AI_CODING_ANTIPATTERNS.md`](AI_CODING_ANTIPATTERNS.md)
 
-**Verified toolchain (2026-06-24):**
-- **torch 2.6.0+cu124** — the only version tested on H200 SM90. Pinned in `setup.sh`.
-- **PyTorch built-in SDPA** — `F.scaled_dot_product_attention` handles all attention. Do NOT install `flash_attn` — it's not needed and the prebuilt .so only works with torch 2.11.
+**Verified toolchain (June 2026):**
+- **torch 2.12.1+cu126** — recommended. +27% TPS over 2.6.0 (1,650 vs 1,300 tok/s on 4B).
+  `torch.compile(mode="default")` active for 2.12-2.13; `mode="reduce-overhead"` for 2.14+.
+- **torch 2.6.0+cu124** — still works but compile auto-skipped (cudagraph_trees bug).
+- **PyTorch built-in SDPA** — `F.scaled_dot_product_attention` handles all attention.
+- **FP8**: not working on pip venvs (TE cuBLASLt crash); TR_SKIP_FP8=1 is the default.
+  See [`FP8_TE_CUDA_ISSUES.md`](FP8_TE_CUDA_ISSUES.md).
+- **Pre-tokenization**: `--pretokenize` once per model; cache auto-detected thereafter (+60% TPS).
 - **TE FP8** — source-build required: `pip install 'transformer-engine[pytorch]' --no-build-isolation` with CPATH set. −40% TPS for 4B models.
 - **torch.compile** — works but minimal gain (<1%) for 4B. More benefit at 12B+.
 - See `docs/COMPILATION_GUIDE.md` §Verified Toolchain and `docs/H200_SETUP.md` §Known Issues for full details.

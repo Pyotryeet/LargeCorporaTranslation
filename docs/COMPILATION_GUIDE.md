@@ -97,29 +97,22 @@ Step 8: Pre-compile JIT kernels (CUDA only)
 
 > 💡 **H200 / SM90 — verified toolchain (June 2026)**
 >
-> **Use PyTorch 2.6.0+cu124.** This is the ONLY verified combination for H200 (SM90)
-> after extensive testing. Other versions tested:
-> - 2.11.0+cu130 → SDPA crashes (`[cudnn_frontend] Error: No valid execution plans built`)
-> - 2.12.1+cu126 → SDPA works but `flash_attn` ABI breaks (prebuilt `.so` for torch 2.11)
-> - 2.6.0+cu124  → SDPA + torch.compile + TE FP8 all work ✅
+> **Use PyTorch 2.12.1+cu126.** This is the RECOMMENDED version after extensive testing.
+> - **2.12.1+cu126** — ✅ SDPA works, +27% TPS over 2.6.0 (1,650 tok/s vs 1,300 tok/s on 4B).
+>   `torch.compile(mode="default")` active (stable, no cudagraph_trees crash).
+> - **2.6.0+cu124** — ⚠️ Works but slower. `torch.compile` auto-skipped (cudagraph_trees bug).
+> - **2.11.0+cu130** — ❌ SDPA crashes.
 >
-> **`flash_attn` is NOT needed.** PyTorch's built-in SDPA (`torch.nn.functional.scaled_dot_product_attention`)
-> handles Flash + Mem-Efficient + Math backends through the cuDNN frontend
-> automatically. The only package that pulls `flash_attn` as a dependency is
-> `transformer-engine`, and it's optional — TE works without it for `te.Linear`
-> replacement (the main use case).
+> **FP8 / Transformer Engine:** TE source-build compiles but **runtime cuBLASLt crashes on all
+> tested driver versions (580, 565)**. See [`FP8_TE_CUDA_ISSUES.md`](FP8_TE_CUDA_ISSUES.md).
+> The practical default is `TR_SKIP_FP8=1` (pure BF16). Only known-working FP8 path is
+> the NGC container (`nvcr.io/nvidia/pytorch:24.12-py3`), which has its own transformers
+> version compatibility issues.
 >
-> **`setup.sh` now pins torch to 2.6.0** and includes a post-install SDPA smoke test.
->
-> If you already installed a broken version:
+> **`setup.sh` installs the latest stable PyTorch.** To pin a specific version:
 > ```bash
-> pip uninstall -y torch torchvision flash-attn flash_attn_2_cuda flash-attn-4 torchao compressed-tensors
-> pip install 'torch==2.6.0' 'torchvision==0.21.0' --index-url https://download.pytorch.org/whl/cu124
+> pip install 'torch==2.12.1' --index-url https://download.pytorch.org/whl/cu126
 > ```
-> Then verify: `python -c "import torch; torch.nn.functional.scaled_dot_product_attention(torch.randn(2,4,128,64,device='cuda',dtype=torch.float16), torch.randn(2,4,128,64,device='cuda',dtype=torch.float16), torch.randn(2,4,128,64,device='cuda',dtype=torch.float16))"`
->
-> See [`H200_SETUP.md` §Known Issues](H200_SETUP.md) and
-> [`MEASUREMENT_PLAN.md` §B.1](MEASUREMENT_PLAN.md) for the full investigation.```
 
 ### Profiles
 
@@ -129,38 +122,62 @@ Step 8: Pre-compile JIT kernels (CUDA only)
 | **quick** | `./setup.sh --quick` | PyTorch, core deps, dev tools. Skip TRT, skip model DL. |
 | **minimal** | `./setup.sh --minimal` | Python + PyTorch + shared deps only. No tests, no extras. |
 
-### Transformer Engine FP8 (CUDA only) — Source Build Required
+### Transformer Engine FP8 (CUDA only) — CURRENTLY BROKEN ON PIP VENVS
 
-TE's prebuilt wheels are compiled against torch 2.11 ABI and will NOT work with
-torch 2.6.0. A source build is required. `setup.sh` handles this automatically,
-but for manual installation:
+**TLDR:** TE source-build compiles successfully but **runtime cuBLASLt crashes on all
+tested driver versions (580, 565)**. See [`FP8_TE_CUDA_ISSUES.md`](FP8_TE_CUDA_ISSUES.md)
+for the full investigation (18 errors, 5 driver combos, 4 TE versions).
 
+The only known-working FP8 path is the **NGC container**:
 ```bash
-# 1. Ensure nvcc and headers are available
-nvcc --version                                              # must be >= 12.0
-
-# 2. Set header paths so TE can find cuDNN/NCCL/torch headers
-export CPATH=$(python -c "
-import site, pathlib
-for sp in site.getsitepackages():
-    cudnn = pathlib.Path(sp)/'nvidia'/'cudnn'/'include'
-    nccl = pathlib.Path(sp)/'nvidia'/'nccl'/'include'
-    torch_inc = pathlib.Path(sp)/'torch'/'include'
-    if cudnn.is_dir() and torch_inc.is_dir():
-        print(f'{cudnn}:{nccl}:{torch_inc}')
-        break
-")
-
-# 3. Build TE from source
-pip install 'transformer-engine[pytorch]>=2.14.0' --no-build-isolation
+docker run --rm --gpus all --ipc=host --ulimit memlock=-1 \
+  -v ~/LargeCorporaTranslation:/workspace \
+  -v ~/.cache/huggingface:/root/.cache/huggingface \
+  -w /workspace -e PYTHONPATH=/workspace \
+  nvcr.io/nvidia/pytorch:24.12-py3 \
+  python3 -m benchmark --model translategemma-4b-bf16 --dry-run --batch-size 32
 ```
 
-**Verified working:** torch 2.6.0+cu124 + TE 2.16.0 (compiled from source) +
-PyTorch built-in SDPA. No `flash_attn` package required.
+For pip venvs, the practical default is `TR_SKIP_FP8=1` (pure BF16 at 1,650 tok/s on 2.12.1).
 
-> ⚠️ **TE FP8 is a throughput regression for 4B models.** Cast overhead dominates
-> at this model size (−40% TPS). FP8 helps 12B+ models where compute is the
-> bottleneck. See [`MEASUREMENT_PLAN.md` §B.17b](MEASUREMENT_PLAN.md).
+---
+
+### Pre-tokenization — tokenize once, skip CPU work forever
+
+Pre-tokenization runs the chunk→filter→prompt→tokenize pipeline once and caches
+the result as model-specific Parquet files. On subsequent runs, the pipeline reads
+token IDs directly from cache, eliminating the CPU bottleneck (+60% TPS).
+
+```bash
+# Pre-process for a model (run once)
+python -m benchmark --pretokenize --model translategemma-4b-bf16
+
+# Pre-process all registered models
+python -m benchmark --pretokenize-all
+
+# Subsequent runs auto-detect the cache — zero config
+./run.sh --config config.yaml
+
+# Force fresh tokenization
+TR_NO_PRETOKENIZED_CACHE=1 ./run.sh
+```
+
+Cache location: `~/.cache/tr_benchmark/pretokenized/<key>.parquet`
+Cache key: `SHA256(model_path + tokenizer_hash + max_input_tokens + input_files)[:16]`
+Auto-invalidation on model update, tokenizer change, or input data change.
+
+**Measured throughput impact:** TranslateGemma 4B: 816 → 1,300 tok/s (+59% on 2.6.0).
+
+---
+
+## 3. Benchmark Reference Results (GPU 1, June 2026)
+
+| Model | TPS (bs=max) | Pre-tok | Compile | Notes |
+|---|---|---|---|---|
+| **NLLB-200-600M** | **~11,000** (bs=64) | ✅ | ✅ (generate path) | Encoder-decoder, highest throughput |
+| **TranslateGemma 4B** | **~1,650** (bs=32) | ✅ | ❌ (eager, PT 2.12.1) | Decoder-only, stable baseline |
+| NLLB-200-1.3B | ~5,000–8,000 (est.) | ✅ | ✅ | Cache ready, not yet measured |
+| NLLB-200-3.3B | ~2,000–4,000 (est.) | — | — | Not yet measured |
 
 ---
 
