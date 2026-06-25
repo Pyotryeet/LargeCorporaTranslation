@@ -559,11 +559,7 @@ class BenchmarkHarness:
 
                 now = timer.elapsed()
                 if now - last_heartbeat >= self.config.runtime.heartbeat_interval_seconds:
-                    # First few batches: use cumulative TPS (rolling window not yet populated).
-                    if batches_completed < 3 and now > 0:
-                        tps = total_tokens / now
-                    else:
-                        tps = self.metrics.get_rolling_throughput()
+                    tps = self.metrics.get_rolling_throughput()
                     logger.info(
                         "[%4.0fs] batches=%d tokens=%s tps=%.0f%s node=%s",
                         now, batches_completed, format(total_tokens, ','), tps,
