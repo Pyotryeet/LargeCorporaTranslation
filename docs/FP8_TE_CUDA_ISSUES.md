@@ -116,9 +116,8 @@ The NGC container is NVIDIA's own tested stack. TE imports cleanly. The crash is
 | Path | TPS (TranslateGemma 4B, bs=32) | Optimizations active |
 |---|---|---|
 | **pip venv (safe_mode)** | **816 tok/s** | TF32, FlashSDPA |
-| pip venv (native FP8) | 440 tok/s | TF32, FlashSDPA, torch._scaled_mm (slower!) |
-| NGC container (TE, any model) | **CRASH** | N/A |
-| NGC container (BF16, no TE) | ~800-900 tok/s (estimated) | TF32, FlashSDPA, torch.compile (NVIDIA fork) |
+| pip venv (native FP8) | 440 tok/s | TF32, FlashSDPA, torch._scaled_mm — **removed June 2026** |
+| pip venv (2.12.1, no-compile) | **1,650 tok/s** | TF32, FlashSDPA, pre-tokenized |
 
 ### What we're leaving on the table
 
@@ -166,12 +165,14 @@ When multiple CUDA streams (TE's internal stream + PyTorch's default stream + th
 
 ## 6. Resolution — what we actually did
 
-### 6a. Code changes committed (2026-06-24–25)
+### 6a. Code changes committed (2026-06-24–26)
 
-| File | Change |
-|---|---|
-| `benchmark/hardware/precision.py` | `apply_te_fp8_to_model()` receives `mlp_only` flag. `NativeFP8Linear` with weight-cache path. `save_fp8_weights()` / `load_fp8_weights()` for on-disk FP8 weight persistence. |
-| `benchmark/inference/backends/autoregressive.py` | `_apply_fp8()` tries TE first (with Gemma auto-detection for `mlp_only`), native `torch._scaled_mm` as fallback. Version guard skips compile on PyTorch < 2.12. |
+| Date | File | Change |
+|---|---|---|
+| 2026-06-24 | `benchmark/hardware/precision.py` | `apply_te_fp8_to_model()` receives `mlp_only` flag. `save_fp8_weights()` / `load_fp8_weights()` for static FP8 weight persistence (SmoothQuant/QAT). |
+| 2026-06-24 | `benchmark/inference/backends/autoregressive.py` | `_apply_fp8()` tries TE with Gemma mlp_only auto-detection. Version guard skips compile on PyTorch < 2.12. |
+| 2026-06-26 | `benchmark/hardware/precision.py` | **Removed dynamic quantization path** — `NativeFP8Linear`, `apply_native_fp8_to_model()`, `_is_hopper()`, `native_fp8_autocast()` deleted (213 lines). Measured 2× slower than BF16 on 4B models. |
+| 2026-06-26 | `benchmark/inference/backends/autoregressive.py` | `_apply_fp8()` simplified to TE-only. `TR_FORCE_NATIVE_FP8` removed. `_fp8_context()` simplified. |
 | `benchmark/config/model_presets.py` | Gemma models: `supports_fp8=False`. Ministral: `supports_fp8=True`. New `4B` alias → Ministral. |
 | `benchmark/config/schema.py` | Default model remains `google/translategemma-4b-it` (backward compat). |
 | `benchmark/utils/env_check.py` | Model preset resolution before preflight check. |
@@ -186,15 +187,15 @@ When multiple CUDA streams (TE's internal stream + PyTorch's default stream + th
 ```
 On CUDA (non-safe-mode):
   1. Try Transformer Engine → imports? no → skip
-  2. Try native torch._scaled_mm → Hopper? yes → apply on MLP layers only
-     → Forward pays 21 µs quantization tax per matmul
-     → For 4B models: net slower than BF16
-  3. Fall through to BF16 if both fail
+  2. TE installed and working? → apply te.Linear + fp8_autocast
+  3. Neither? → BF16 (log message)
 
 User controls:
-  TR_SKIP_FP8=1          → skip all FP8, pure BF16 (recommended for 4B models)
-  TR_FORCE_NATIVE_FP8=1  → skip TE attempt entirely
-  TR_DISABLE_TORCH_COMPILE=1 → force eager mode
+  TR_SKIP_FP8=1          → skip all FP8, pure BF16 (recommended)
+
+Static quantization (SmoothQuant / QAT) is handled via:
+  save_fp8_weights()     → quantize weights once, cache to disk
+  load_fp8_weights()     → load pre-quantized weights at startup
 ```
 
 ### 6c. Recommended operating mode for asus02

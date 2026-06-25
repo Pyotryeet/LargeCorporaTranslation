@@ -186,10 +186,11 @@ The primary backend. `model_type = AUTOREGRESSIVE`; capabilities
 5. TE FP8 (`te.Linear` replacement, `lm_head` skipped) — **gate: TE must be installed
    and functional.**  On pip venvs TE source-build succeeds but runtime cuBLASLt
    crashes on all drivers tested (580, 565).  See
-   [`FP8_TE_CUDA_ISSUES.md`](FP8_TE_CUDA_ISSUES.md).  When TE is absent, native
-   `torch._scaled_mm` is attempted (MLP-only, gated behind the model-size heuristic).
-   Measured on 4B: −40% TPS vs BF16 (quantization tax dominates small matmuls).
-   Default on pip: `TR_SKIP_FP8=1` ↔ pure BF16.
+   [`FP8_TE_CUDA_ISSUES.md`](FP8_TE_CUDA_ISSUES.md).
+   **Dynamic quantization (torch._scaled_mm) was removed in June 2026** — measured
+   −40% TPS vs BF16 on 4B models.  Static quantization (SmoothQuant / QAT) is the
+   path forward; pre-quantized weights are cached via `save_fp8_weights()` /
+   `load_fp8_weights()`.  Default on pip: `TR_SKIP_FP8=1` ↔ pure BF16.
 6. **Fused-kernel injection is hardcoded `if False:`** (`:761`) — dead.
 7. `torch.compile` (CUDA only; skipped on MPS/CPU/safe-mode). Version-gated:
    **< 2.12** → skipped (eager). **2.12–2.13** → `mode="default"` (inductor fusion,
@@ -320,7 +321,7 @@ on which path you mean.
 | # | Feature | Status | How to activate | Evidence | Notes |
 |---|---|---|---|---|---|
 | 1 | `torch.compile` | ⚠️ | on by default (CUDA); version-gated | `autoregressive.py:1167` | **< 2.12** → skipped (eager). **2.12–2.13** → `mode="default"` (stable, warmup 30s). **≥ 2.14** → `mode="reduce-overhead"`. No-compile baseline 1,650 tok/s (2.12.1, 4B, bs=32). |
-| 2 | Transformer-Engine FP8 (`te.Linear`) | ❌ | CUDA + TE installed and working | `autoregressive.py:762` | **TE source-build succeeds on pip but runtime cuBLASLt crashes on all tested drivers (580, 565).** See [`FP8_TE_CUDA_ISSUES.md`](FP8_TE_CUDA_ISSUES.md). Only works in NGC container (tested), but NGC has its own transformers version compatibility issues. Native `torch._scaled_mm` fallback is −40% TPS on 4B. `TR_SKIP_FP8=1` is the practical default on pip venvs. |
+| 2 | Transformer-Engine FP8 (`te.Linear`) | ❌ | CUDA + TE installed and working | `autoregressive.py:762` | **TE source-build succeeds but runtime cuBLASLt crashes on all tested drivers (580, 565).** See [`FP8_TE_CUDA_ISSUES.md`](FP8_TE_CUDA_ISSUES.md). Dynamic quantization (torch._scaled_mm) removed — 2× slower than BF16. Static quantization (SmoothQuant/QAT) via `save_fp8_weights`/`load_fp8_weights` is the path forward. `TR_SKIP_FP8=1` is the practical default. |
 | 2b | Pre-tokenized Parquet cache | ✅ | automatic (checks `~/.cache/tr_benchmark/pretokenized/`) | `benchmark/data/pretokenizer.py` | +60% TPS on AR models. 198K chunks cached. `--pretokenize` to create, auto-detected thereafter. |
 | 3 | Flash + mem-efficient SDPA | ✅ | CUDA default | `autoregressive.py:695` | — measured 2026-06-24: 1.17-1.23× overall throughput for 4B model. Attention-only speedup is higher (likely 2-4×) but attention is ~20-30% of total compute for 4B. See M2.4. |
 | 4 | CUDA Graph decode | ⚠️ | — (deprecated) | `hardware/cuda_graphs.py:3` (FutureWarning on import); capture at `autoregressive.py:1339`; **never replayed** in `_extreme_decode:1548` | Captured graph excludes `past_key_values` as a static input → replay would feed zero-context garbage. Capture cost is paid, benefit never collected. |
