@@ -6,7 +6,7 @@ library.  It operates on raw tensors and nn.Module graphs.
 Quick start
 -----------
     # 1. SmoothQuant PTQ (Post-Training Quantization)
-    from benchmark.quantization.smoothquant import SmoothQuantCalibrator
+    from quantization.smoothquant import SmoothQuantCalibrator
     calibrator = SmoothQuantCalibrator(model, tokenizer)
     calibrator.calibrate(calibration_texts)
 
@@ -19,7 +19,7 @@ Quick start
     # --- OR ---
 
     # 1. QAT (Quantization-Aware Training)
-    from benchmark.quantization.qat import prepare_qat, export_qat_weights
+    from quantization.qat import prepare_qat, export_qat_weights
     prepare_qat(model)
     # ... train ...
     weights = export_qat_weights(model)
@@ -29,14 +29,14 @@ Quick start
     save_fp8_weights(model, model_path)
 """
 
-from benchmark.quantization.smoothquant import (
+from quantization.smoothquant import (
     SmoothQuantCalibrator,
     ActivationCapture,
     compute_smooth_scales,
     apply_smooth_scales,
     compute_activation_scales,
 )
-from benchmark.quantization.qat import (
+from quantization.qat import (
     FP8FakeQuantize,
     FakeQuantizedLinear,
     prepare_qat,

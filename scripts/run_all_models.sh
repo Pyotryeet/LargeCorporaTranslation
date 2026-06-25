@@ -66,7 +66,7 @@ for i in "${!PYTHON_MODELS[@]}"; do
     idx=$((i + 1))
     echo ""
     echo "===== [$idx/$TOTAL] $model ====="
-    python -u scripts/run_one_model.py "$model" 2>&1 | tee "/tmp/bm_${model}.log" || true
+    python -u scripts/benchmark_single.py "$model" 2>&1 | tee "/tmp/bm_${model}.log" || true
     python3 -c "import gc; gc.collect(); import torch; torch.cuda.empty_cache() if torch.cuda.is_available() else None" 2>/dev/null || true
     sleep 2
 done

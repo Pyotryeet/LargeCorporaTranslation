@@ -1943,7 +1943,7 @@ class AutoregressiveBackend(InferenceBackend):
         without requiring dynamic per-token scaling.
         """
         try:
-            from benchmark.quantization.smoothquant import SmoothQuantCalibrator
+            from quantization.smoothquant import SmoothQuantCalibrator
             from benchmark.data.loader import JSONLLoader
         except ImportError as e:
             logger.warning("SmoothQuant not available: %s", e)

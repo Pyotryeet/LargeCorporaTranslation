@@ -7,8 +7,8 @@ test) that downloaded multi-GB models at module import time.
 Usage:
     python scripts/run_e2e_benchmark.py [--model MODEL_ID] [--duration SECONDS]
 
-The heavy lifting is delegated to scripts/run_one_model.py for single-model
-runs and scripts/benchmark_all_models.py for multi-model comparison runs.
+The heavy lifting is delegated to scripts/benchmark_single.py for single-model
+runs and scripts/benchmark_models.py for multi-model comparison runs.
 """
 import sys
 from pathlib import Path
@@ -54,7 +54,7 @@ def main():
     args = parser.parse_args()
 
     # Delegate to the single-model runner
-    runner_path = PROJECT_ROOT / "scripts" / "run_one_model.py"
+    runner_path = PROJECT_ROOT / "scripts" / "benchmark_single.py"
     if runner_path.exists():
         # Run via subprocess so the sub-script gets its own clean environment
         import subprocess

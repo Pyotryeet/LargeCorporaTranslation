@@ -3,7 +3,7 @@
 # Launch llama.cpp server with 1M context on 2×H200
 #
 # Usage:
-#   ./scripts/launch-llama-server.sh [MODEL_KEY] [PORT]
+#   ./scripts/launch_llama_server.sh [MODEL_KEY] [PORT]
 #
 #   MODEL_KEY defaults to GLM-5.2-UD-IQ2_M
 #   PORT defaults to 8080
@@ -12,9 +12,9 @@
 # Set LLAMA_SINGLE_GPU=1 to force single-GPU (offloads KV to RAM).
 #
 # Examples:
-#   ./scripts/launch-llama-server.sh                           # auto 2×GPU
-#   ./scripts/launch-llama-server.sh Qwen3-235B-A22B-IQ2_XXS 9090
-#   LLAMA_SINGLE_GPU=1 ./scripts/launch-llama-server.sh        # single-GPU fallback
+#   ./scripts/launch_llama_server.sh                           # auto 2×GPU
+#   ./scripts/launch_llama_server.sh Qwen3-235B-A22B-IQ2_XXS 9090
+#   LLAMA_SINGLE_GPU=1 ./scripts/launch_llama_server.sh        # single-GPU fallback
 # ──────────────────────────────────────────────────────────────
 set -euo pipefail
 

@@ -12,7 +12,7 @@ Backends covered:
 
 Usage:
   source .venv/bin/activate
-  python scripts/benchmark_all_models.py
+  python scripts/benchmark_models.py
 """
 
 from __future__ import annotations

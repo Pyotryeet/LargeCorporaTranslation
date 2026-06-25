@@ -62,4 +62,4 @@ dev = [
 tr-benchmark = "benchmark.__main__:main"
 
 [tool.setuptools.packages.find]
-include = ["benchmark*"]
+include = ["benchmark*", "quantization*"]

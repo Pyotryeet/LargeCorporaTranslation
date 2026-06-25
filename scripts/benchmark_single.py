@@ -386,7 +386,7 @@ def run_llama_model(model_def: dict) -> dict:
 if __name__ == "__main__":
     model_name = sys.argv[1] if len(sys.argv) > 1 else None
     if model_name is None:
-        print("Usage: python run_one_model.py <model_name>")
+        print("Usage: python benchmark_single.py <model_name>")
         sys.exit(1)
 
     # ── Model definitions ──
