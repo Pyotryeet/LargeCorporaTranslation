@@ -282,6 +282,13 @@ class PagedKVCache:
 
         k_cat = torch.cat(keys, dim=1)  # [num_heads, total_blocks * block_size, head_dim]
         v_cat = torch.cat(values, dim=1)
+        # Trim to actual sequence length — blocks are pre-allocated for
+        # the full prompt but only the written positions contain valid data.
+        # Without this trim, multi-sequence batches with different allocation
+        # sizes produce dimension mismatches in the attention kernel.
+        seq_len = self._seq_lengths.get(seq_id, k_cat.shape[1])
+        k_cat = k_cat[:, :seq_len, :]
+        v_cat = v_cat[:, :seq_len, :]
         return k_cat, v_cat
 
     def share_prefix(self, src_seq_id: int, dst_seq_id: int, num_shared_tokens: int) -> None:
