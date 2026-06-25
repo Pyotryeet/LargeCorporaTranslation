@@ -764,8 +764,13 @@ class AutoregressiveBackend(InferenceBackend):
         # weight-only FP8 as the default fallback.  Static FP8 stores
         # weights in float8_e4m3fn on GPU — dequantized on-chip at
         # forward time with zero per-token overhead.
+        # Optional SmoothQuant calibration (--smoothquant) runs BEFORE
+        # FP8 to migrate activation outliers into weights.
         # Skip with TR_SKIP_FP8=1 or --safe-mode.
         if self.backend_name == "cuda" and not self._safe_mode:
+            _do_smoothquant = os.environ.get("TR_SMOOTHQUANT") == "1"
+            if _do_smoothquant:
+                self._calibrate_smoothquant()
             self._apply_fp8()
 
         # ── 7. Fused kernel injection (DISABLED — compile-incompatible) ──
@@ -1927,6 +1932,41 @@ class AutoregressiveBackend(InferenceBackend):
             "head_dim": head_dim,
             "max_seq_len": self.max_input_tokens + self.max_new_tokens,
         }
+
+    # ── SmoothQuant calibration (opt-in via TR_SMOOTHQUANT=1) ─────────────
+
+    def _calibrate_smoothquant(self) -> None:
+        """Run SmoothQuant calibration before static FP8 quantization.
+
+        Uses the current data pipeline input as calibration source.  SmoothQuant
+        migrates activation outliers into weights, improving static FP8 accuracy
+        without requiring dynamic per-token scaling.
+        """
+        try:
+            from benchmark.quantization.smoothquant import SmoothQuantCalibrator
+            from benchmark.data.loader import JSONLLoader
+        except ImportError as e:
+            logger.warning("SmoothQuant not available: %s", e)
+            return
+
+        logger.info("SmoothQuant calibration starting...")
+        calibrator = SmoothQuantCalibrator(
+            self.model, self.tokenizer,
+            alpha=0.5,
+            max_calibration_tokens=min(self.max_input_tokens * 8, 4096),
+            device=self.devices[0],
+        )
+        # Use a small slice of the input data for calibration.
+        loader = JSONLLoader(
+            ["./data/input/*.jsonl.gz"], shuffle=False,
+        )
+        cal_texts: list[str] = []
+        for _doc_id, _fname, text in loader.iter_documents():
+            cal_texts.append(text)
+            if len(cal_texts) >= 50:  # 50 docs is plenty for calibration
+                break
+        count = calibrator.calibrate(cal_texts)
+        logger.info("SmoothQuant calibration done: %d layers smoothed", count)
 
     # ── FP8 — static weight quantization enforced on CUDA ─────────────────
 

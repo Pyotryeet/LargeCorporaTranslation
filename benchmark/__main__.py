@@ -200,6 +200,10 @@ Examples:
     parser.add_argument("--quantization", choices=["bf16", "fp16", "int8", "int4"], default=None,
                         help="Model quantization level: bf16 (unquantized), int8 (8-bit), "
                              "int4 (4-bit NF4)")
+    parser.add_argument("--smoothquant", action="store_true",
+                        help="Run SmoothQuant calibration before static FP8 quantization")
+    parser.add_argument("--qat", action="store_true",
+                        help="Prepare model for QAT fine-tuning (replaces Linear with FakeQuantizedLinear)")
     parser.add_argument("--model", type=str, default=None,
                         help="Model preset name or HF model ID (e.g. '4B', 'ministral-3b', "
                              "'google/gemma-4-E2B-it-qat-mobile-ct')")
@@ -226,6 +230,7 @@ Examples:
     _needs_inject = (
         args.speculative or args.paged_attention or args.continuous_batching
         or args.nllb or args.quantization is not None or args.model is not None
+        or args.smoothquant or args.qat
     )
     if _needs_inject:
         import yaml
@@ -304,6 +309,16 @@ Examples:
 
     if args.pretokenized_cache_dir:
         _os.environ["TR_PRETOKENIZED_CACHE_DIR"] = args.pretokenized_cache_dir
+
+    # ── SmoothQuant calibration (opt-in) ───────────────────────────────
+    if args.smoothquant:
+        _os.environ["TR_SMOOTHQUANT"] = "1"
+        logger = __import__("logging").getLogger(__name__)
+        logger.info("SmoothQuant calibration enabled (--smoothquant)")
+
+    # ── QAT mode — prepare model with FakeQuantizedLinear ───────────────
+    if args.qat:
+        _os.environ["TR_QAT"] = "1"
 
     harness = BenchmarkHarness(
         config_path=args.config,
