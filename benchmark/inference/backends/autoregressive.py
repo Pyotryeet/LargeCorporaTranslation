@@ -1430,9 +1430,9 @@ class AutoregressiveBackend(InferenceBackend):
         device = self.devices[0]
         ws = time.monotonic()
 
-        # Dry-run / quick mode: minimal warmup (2 passes each phase).
-        # Full mode: production warmup (5 passes each phase).
-        if batches <= 5:
+        # Dry-run / quick mode (<=10 batches): minimal warmup (2+2 passes).
+        # Production (20+ batches): production warmup (5+5 passes).
+        if batches <= 10:
             n_short = 2
             n_long = 2
             _tag = "minimal"
@@ -1484,7 +1484,7 @@ class AutoregressiveBackend(InferenceBackend):
         ).to(device)
         mask_long = torch.ones_like(ids_long).to(device)
         ws2 = time.monotonic()
-        for _ in range(n_iters):
+        for _ in range(n_long):
             with torch.no_grad(), self._fp8_context():
                 self.model(
                     input_ids=ids_long, attention_mask=mask_long, use_cache=True,
