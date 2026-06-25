@@ -621,8 +621,13 @@ def native_fp8_autocast() -> bool:
 # FP8 activation helper — replaces nn.Linear with te.Linear
 # ---------------------------------------------------------------------------
 
-def apply_te_fp8_to_model(model: torch.nn.Module, *, skip_lm_head: bool = True) -> bool:
-    """Replace every ``nn.Linear`` in *model* with ``te.Linear`` for FP8 compute.
+def apply_te_fp8_to_model(
+    model: torch.nn.Module,
+    *,
+    skip_lm_head: bool = True,
+    mlp_only: bool = False,
+) -> bool:
+    """Replace ``nn.Linear`` in *model* with ``te.Linear`` for FP8 compute.
 
     This is the single canonical FP8 activation function.  Call it once after
     model loading and before any forward pass.
@@ -632,9 +637,12 @@ def apply_te_fp8_to_model(model: torch.nn.Module, *, skip_lm_head: bool = True) 
     model : nn.Module
         The loaded PyTorch model.
     skip_lm_head : bool
-        If True (default), the lm_head (final vocabulary projection) is kept
-        in BF16 — FP8 precision loss on the 262K-dimensional vocab projection
-        directly corrupts token probability rankings.
+        If True, the lm_head is kept in BF16.
+    mlp_only : bool
+        If True, only replace MLP layers (gate_proj, up_proj, down_proj).
+        Attention projections (q_proj, k_proj, v_proj, o_proj) are kept in
+        BF16.  Use this for architectures where TE's cuBLAS gemm path crashes
+        on attention matmul shapes (e.g. Gemma 3).
 
     Returns
     -------
@@ -647,15 +655,18 @@ def apply_te_fp8_to_model(model: torch.nn.Module, *, skip_lm_head: bool = True) 
         logger.warning("Transformer Engine not installed — FP8 activation skipped.")
         return False
 
+    _ATTN_NAMES = {"q_proj", "k_proj", "v_proj", "o_proj"}
     replaced = 0
 
     def _replace(module: torch.nn.Module, parent_name: str = ""):
         nonlocal replaced
         for name, child in module.named_children():
             full_name = f"{parent_name}.{name}" if parent_name else name
-            # Skip lm_head — FP8 on vocab projection hurts token selection.
             if skip_lm_head and (name == "lm_head" or full_name.endswith(".lm_head")):
-                logger.debug("TE FP8: skipping lm_head (kept in BF16)")
+                logger.debug("TE FP8: skipping lm_head")
+                continue
+            if mlp_only and name in _ATTN_NAMES:
+                logger.debug("TE FP8: skipping %s (mlp_only)", full_name)
                 continue
             if isinstance(child, torch.nn.Linear) and not isinstance(child, te.Linear):
                 te_lin = te.Linear(
@@ -674,8 +685,9 @@ def apply_te_fp8_to_model(model: torch.nn.Module, *, skip_lm_head: bool = True) 
 
     if replaced > 0:
         logger.info(
-            "FP8: %d nn.Linear layers replaced with te.Linear "
-            "(lm_head excluded — kept in BF16).  "
+            "FP8: %d te.Linear replaced (mlp_only=%s, lm_head excluded).",
+            replaced, mlp_only,
+        )
             "Forward passes must be wrapped in te.fp8_autocast().",
             replaced,
         )

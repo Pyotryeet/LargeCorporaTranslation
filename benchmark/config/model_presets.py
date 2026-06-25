@@ -110,7 +110,25 @@ class ModelPreset:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 MODEL_PRESETS: dict[str, ModelPreset] = {
-    # ── TranslateGemma 4B variants ──────────────────────────────────────────
+    # ── Primary default (TE-FP8 safe) ────────────────────────────────────────
+    "4B": ModelPreset(
+        name="4B",
+        display_name="Ministral 3B (BF16) ★ TE-FP8 SAFE",
+        hf_model_id="mistralai/Ministral-3B-Instruct",
+        num_layers=24,
+        num_kv_heads=8,
+        head_dim=128,
+        hidden_size=2048,
+        vocab_size=131_072,
+        quantization="bf16",
+        quantization_method="none",
+        eos_token_id=2,
+        end_of_turn_token_id=-1,
+        max_seq_len=4096,
+        supports_fp8=True,
+        recommended_batch_size=1,
+    ),
+    # ── TranslateGemma 4B variants (⚠️ TE FP8 crashes on attention) ────────
     "translategemma-4b-bf16": ModelPreset(
         name="translategemma-4b-bf16",
         display_name="TranslateGemma 4B (BF16)",
@@ -125,7 +143,7 @@ MODEL_PRESETS: dict[str, ModelPreset] = {
         eos_token_id=1,
         end_of_turn_token_id=106,  # <end_of_turn>
         max_seq_len=2048,
-        supports_fp8=True,
+        supports_fp8=False,     # TE cuBLAS crash on Gemma attention shapes
         recommended_batch_size=1,
     ),
     "translategemma-4b-int8": ModelPreset(
@@ -142,7 +160,7 @@ MODEL_PRESETS: dict[str, ModelPreset] = {
         eos_token_id=1,
         end_of_turn_token_id=106,
         max_seq_len=2048,
-        supports_fp8=True,
+        supports_fp8=False,     # TE cuBLAS crash on Gemma attention shapes
         recommended_batch_size=1,
     ),
     "translategemma-4b-int4": ModelPreset(
@@ -159,17 +177,13 @@ MODEL_PRESETS: dict[str, ModelPreset] = {
         eos_token_id=1,
         end_of_turn_token_id=106,
         max_seq_len=2048,
-        supports_fp8=True,
+        supports_fp8=False,     # TE cuBLAS crash on Gemma attention shapes
         recommended_batch_size=1,
     ),
     # ── Ministral 3B ────────────────────────────────────────────────────────
     "ministral-3b-bf16": ModelPreset(
         name="ministral-3b-bf16",
-        display_name="Ministral 3B (BF16)",
-        # Keep the preset aligned with the working run.sh path. The
-        # -2512 repo exposes a tokenizer config that resolves to the
-        # non-importable "TokenizersBackend" class in our current
-        # transformers stack.
+        display_name="Ministral 3B (BF16) ★ TE-FP8 SAFE",
         hf_model_id="mistralai/Ministral-3B-Instruct",
         num_layers=24,
         num_kv_heads=8,      # GQA: 8 KV heads, 16 query heads
@@ -181,7 +195,7 @@ MODEL_PRESETS: dict[str, ModelPreset] = {
         eos_token_id=2,      # Mistral uses </s>
         end_of_turn_token_id=-1,
         max_seq_len=4096,    # Ministral supports longer context
-        supports_fp8=True,
+        supports_fp8=True,      # Mistral arch — safe with TE FP8
         recommended_batch_size=1,
     ),
     # ── Gemma 4 E2B QAT variants (v3.4) ──────────────────────────────────────
@@ -199,7 +213,7 @@ MODEL_PRESETS: dict[str, ModelPreset] = {
         eos_token_id=1,
         end_of_turn_token_id=106,
         max_seq_len=2048,
-        supports_fp8=True,
+        supports_fp8=False,     # TE cuBLAS crash on Gemma attention shapes
         recommended_batch_size=1,
     ),
     "gemma4-e2b-qat-int4": ModelPreset(
@@ -216,7 +230,7 @@ MODEL_PRESETS: dict[str, ModelPreset] = {
         eos_token_id=1,
         end_of_turn_token_id=106,
         max_seq_len=2048,
-        supports_fp8=True,
+        supports_fp8=False,     # TE cuBLAS crash on Gemma attention shapes
         recommended_batch_size=1,
     ),
     # ── Gemma 4 E4B QAT variants (v3.4) ──────────────────────────────────────
@@ -234,7 +248,7 @@ MODEL_PRESETS: dict[str, ModelPreset] = {
         eos_token_id=1,
         end_of_turn_token_id=106,
         max_seq_len=2048,
-        supports_fp8=True,
+        supports_fp8=False,     # TE cuBLAS crash on Gemma attention shapes
         recommended_batch_size=1,
     ),
     "gemma4-e4b-qat-int4": ModelPreset(
@@ -251,7 +265,7 @@ MODEL_PRESETS: dict[str, ModelPreset] = {
         eos_token_id=1,
         end_of_turn_token_id=106,
         max_seq_len=2048,
-        supports_fp8=True,
+        supports_fp8=False,     # TE cuBLAS crash on Gemma attention shapes
         recommended_batch_size=1,
     ),
     # ── Gemma 4 E2B Q4_0 quantized (v3.4) ────────────────────────────────────
@@ -269,7 +283,7 @@ MODEL_PRESETS: dict[str, ModelPreset] = {
         eos_token_id=1,
         end_of_turn_token_id=106,
         max_seq_len=2048,
-        supports_fp8=True,
+        supports_fp8=False,     # TE cuBLAS crash on Gemma attention shapes
         recommended_batch_size=1,
     ),
     # ── Gemma 4 E4B Q4_0 quantized (v3.4) ────────────────────────────────────
@@ -287,7 +301,7 @@ MODEL_PRESETS: dict[str, ModelPreset] = {
         eos_token_id=1,
         end_of_turn_token_id=106,
         max_seq_len=2048,
-        supports_fp8=True,
+        supports_fp8=False,     # TE cuBLAS crash on Gemma attention shapes
         recommended_batch_size=1,
     ),
     # ── DiffusionGemma 26B-A4B (v3.4) ────────────────────────────────────────
@@ -311,7 +325,7 @@ MODEL_PRESETS: dict[str, ModelPreset] = {
         # sufficient unified memory.
         supports_mps=False,
         supports_cuda=True,
-        supports_fp8=True,
+        supports_fp8=True,      # Diffusion backend — different FP8 path
         recommended_batch_size=1,
     ),
 }

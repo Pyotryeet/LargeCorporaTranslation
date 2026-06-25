@@ -1926,7 +1926,19 @@ class AutoregressiveBackend(InferenceBackend):
         if not _force_native:
             try:
                 from benchmark.hardware.precision import apply_te_fp8_to_model
-                te_ok = apply_te_fp8_to_model(self.model, skip_lm_head=True)
+                # Gemma 3/4 attention projections trigger a cuBLAS bug in
+                # TE's cublaslt_gemm path at batch=1 warmup.  Use mlp_only
+                # for Gemma architectures — FP8 on gate/up/down (MLP) still
+                # gives ~50% of the full FP8 benefit without the crash.
+                _is_gemma = (
+                    hasattr(self.model, 'config')
+                    and getattr(self.model.config, 'model_type', '')
+                    in ('gemma', 'gemma2', 'gemma3', 'gemma3_text', 'gemma4')
+                )
+                te_ok = apply_te_fp8_to_model(
+                    self.model, skip_lm_head=True,
+                    mlp_only=_is_gemma,
+                )
                 if te_ok:
                     self._fp8_active = True
                     self._fp8_method = "te"
