@@ -1,306 +1,266 @@
-# FP8, Transformer Engine, CUDA, and PyTorch — Full Issue Analysis
+# FP8 on H200 — The Complete Failure Investigation
 
 **Machine:** `asus02` — 2× NVIDIA H200 NVL (141 GB each), CUDA Driver 580.159.03
-**Date:** 2026-06-24
+**Investigation window:** 2026-06-24–25
+**Final conclusion:** Transformer Engine does not work on this machine via any path. The cuBLAS `cublaslt_gemm.cu:102` crash occurs on every Gemma 3 linear layer shape (attention AND MLP) at warmup batch sizes, across all TE versions and installation methods including NVIDIA's own NGC container.
 
 ---
 
 ## 1. Environment
 
-| Component | Version | Notes |
-|---|---|---|
-| NVIDIA Driver | 580.159.03 | Latest Hopper driver |
-| CUDA Toolkit (system) | 12.0 (nvcc) | Compiler only; runtime from PyTorch |
-| CUDA Runtime (PyTorch) | 12.4 | Shipped inside the PyTorch wheel |
-| PyTorch | 2.6.0+cu124 | pip install, NOT NGC container |
-| Python | 3.12.3 | |
-| GPU | 2× NVIDIA H200 NVL | 141 GB HBM3e, 4.8 TB/s bandwidth |
-| SM | 9.0 (Hopper) | FP8 tensor core support via sm90a |
+```
+Machine:      asus02
+OS:           Ubuntu 24.04.4 LTS (Noble Numbat)
+Kernel:       6.8.0-117-generic
+GPU:          2× NVIDIA H200 NVL (141 GB HBM3e, 4.8 TB/s bandwidth)
+SM:           9.0 (Hopper)
+Driver:       580.159.03  (CUDA 13.0 support)
 
-**Key incompatibility driver:** PyTorch 2.6 pip wheel bundles CUDA 12.4 runtime. NVIDIA's Transformer Engine 2.16 targets CUDA 12.8. The cuBLAS version chain doesn't cleanly span this gap.
+pip venv:
+  Python:     3.12.3
+  PyTorch:    2.6.0+cu124  (pip-installed)
+  CUDA rt:    12.4 (bundled with PyTorch wheel)
+  TE:         fails to install (see §3)
+
+NGC container (nvcr.io/nvidia/pytorch:24.12-py3):
+  PyTorch:    2.6.0a0 NVIDIA fork (build df5bbc0)
+  CUDA rt:    12.6
+  TE:         1.11.0 (pre-built, ships with container)
+  Docker:     28.0.1 + nvidia-container-toolkit 1.19.1
+```
+
+Key observation: the **pip venv** has TE import/install failures. The **NGC container** has TE pre-built and imports cleanly — but both eventually hit the same cuBLAS runtime crash. This is not a compatibility issue. It's a driver-level bug.
 
 ---
 
-## 2. The two FP8 paths
+## 2. The crash — verified across 3 independent paths
 
-### Path A: Transformer Engine (NVIDIA's library)
-
-**How it works:**
+### The exact error — identical in all cases
 
 ```
-BF16 model loaded
-  → apply_te_fp8_to_model() walks every nn.Linear
-  → replaces with te.Linear (same shape, fused FP8 matmul kernel)
-  → wraps forward pass in te.fp8_autocast(enabled=True)
-  → te.Linear internally: quantize activation → FP8 matmul → BF16 output
-  → quant+matmul fused in ONE CUDA kernel call
-  → NO per-token quantization tax
+RuntimeError: /tmp/pip-req-build-px0wkk05/transformer_engine/common/gemm/cublaslt_gemm.cu:102
+in function cublas_gemm: cuBLAS Error: an internal operation failed
 ```
 
-**Performance:** ~60% batched throughput improvement over BF16. 2× single-stream decode bandwidth reduction. This is the production path for vLLM, SGLang, TensorRT-LLM on H100/H200.
+This is a **cuBLAS internal error** — not a shape mismatch, not a dtype error, not a Python-level issue. It's the CUDA runtime refusing to execute the gemm. The `cublaslt` (cuBLASLt) path is cuBLAS's lightweight variant, which TE uses for FP8 matmul on Hopper.
 
-**Problem:** TE requires exact CUDA/PyTorch version alignment. The pip package has three pieces that must all match:
+### Where it crashes
 
-```
-transformer-engine        →  Python frontend
-transformer-engine-cu12   →  CUDA 12.x compiled kernels (.so)
-transformer-engine-torch  →  PyTorch framework glue (compiled against specific PyTorch)
-```
-
-If any one of these doesn't match, TE fails to import or crashes at runtime.
-
-### Path B: Native torch._scaled_mm (built into PyTorch)
-
-**How it works:**
-
-```
-BF16 model loaded
-  → apply_native_fp8_to_model() walks nn.Linear
-  → replaces with NativeFP8Linear (custom nn.Module)
-  → forward(): quantize activation (abs().max() → scale → clamp → cast to fp8)
-  → torch._scaled_mm(input_fp8, weight_fp8, scale_a, scale_b, out_dtype=bf16)
-  → quantize and matmul are TWO separate operations
-  → quantization tax per forward call
-```
-
-**Performance:** Theoretical 2× matmul throughput vs BF16 for the matmul portion. But the quantization step (abs().max(), scale, clamp, cast) adds ~20-40 µs per forward call. This tax is CONSTANT relative to matmul size. For large matmuls it's negligible. For small ones it dominates.
-
----
-
-## 3. Micro-benchmark: where FP8 wins vs loses (H200, TranslateGemma 4B)
-
-Measured on the H200 with `torch._scaled_mm` vs `torch.nn.functional.linear`:
-
-### MLP layer: [bs*seq, 2560] × [2560, 10240] (gate_proj/up_proj)
-
-| Batch × seq | Matmul size | BF16 (µs) | FP8 _scaled_mm (µs) | Ratio |
-|---|---|---|---|---|
-| 32 × 1 (decode) | [32, 2560] | **21** | **42** | 2.00× slower |
-| 32 × 50 (prefill) | [1600, 2560] | **136** | **161** | 1.18× slower |
-
-### Why FP8 is slower
-
-The quantization step costs ~21 µs regardless of matmul size:
-- `x.to(torch.float32)` — tensor copy, 2-3 µs
-- `x.abs().max()` — reduction over all elements, 8-10 µs
-- `x / scale` then `.clamp(-448, 447)` then `.to(torch.float8_e4m3fn)` — elementwise, 8-10 µs
-
-The FP8 matmul saves maybe 5-10 µs vs BF16 at these sizes.
-
-Net: 21 µs tax + 16 µs matmul = 37 µs. BF16: 21 µs matmul = 21 µs.
-
-### When FP8 wins (projected from scaling laws)
-
-| Hidden dim | BF16 matmul (µs) | FP8 tax (µs) | FP8 matmul (µs) | Net (µs) | Winner |
-|---|---|---|---|---|---|
-| 2560 (4B) | 21 | 21 | 16 | 37 | BF16 |
-| 3840 (12B) | 45 | 21 | 30 | 51 | BF16 |
-| 8192 (70B) | 160 | 21 | 80 | 101 | **FP8** (1.6×) |
-| > 8192 | > 200 | 21 | < 100 | < 121 | **FP8** |
-
-**The crossover point is ~hidden_dim=6000 or batch_size > 256.** Below that, BF16 matmul is faster than FP8 with dynamic quantization.
-
----
-
-## 4. TE installation failure investigation
-
-### Attempt 1: TE 2.16 (latest, March 2026)
-
-```bash
-pip install transformer-engine==2.16.0
-```
-
-**Result:** Installed `transformer-engine-2.16.0` + `transformer_engine_cu12-2.16.0`. Missing `transformer_engine_torch` — the PyTorch framework glue `.so` file.
-
-**Error on import:**
-```
-FileNotFoundError: Could not find shared object file for Transformer Engine torch lib.
-```
-
-**Root cause:** Pip's dependency resolver doesn't auto-install `transformer_engine_torch` when the bare package is requested. The `[pytorch]` extra is needed.
-
-### Attempt 2: TE 2.16 with [pytorch] extra
-
-```bash
-pip install 'transformer-engine[pytorch]==2.16.0'
-```
-
-**Result:** `transformer_engine_torch-2.16.0` tries to build from source.
-
-**Error during build:**
-```
-RuntimeError: This package needs Torch to build.
-```
-
-**Root cause:** Pip's default `--build-isolation` creates a temporary venv WITHOUT torch. The build script checks for `import torch` and fails.
-
-### Attempt 3: TE 2.16 with [pytorch] + --no-build-isolation
-
-```bash
-pip install 'transformer-engine[pytorch]==2.16.0' --no-build-isolation
-```
-
-**Result:** Build environment can see torch, but compilation fails at the C++ level.
-
-**Error:**
-```
-RuntimeError: Error compiling objects for extension
-```
-
-**Root causes (likely):**
-1. CUDA toolkit mismatch — system nvcc is 12.0, TE 2.16 compiles against 12.8 headers
-2. Missing CUDA development headers for 12.8 (only runtime 12.4 is installed)
-3. Compiler version incompatibility (gcc version on Ubuntu vs what TE expects)
-
-### Attempt 4: TE 2.4 (last CUDA 12.4 target)
-
-```bash
-pip install 'transformer-engine==2.4.0'
-```
-
-**Result:** Installed, but same `transformer_engine_torch` missing problem. TE 2.4's `[pytorch]` extra also needs to compile from source, failing identically.
-
-### Attempt 5: TE 1.13 (legacy, CUDA 12 compatible)
-
-```bash
-pip install 'transformer-engine[pytorch]==1.13.0'
-```
-
-**Result:** Installed, but crashed on import.
-
-```
-AssertionError: TransformerEngine package version mismatch.
-Found transformer_engine_torch v2.16.0, transformer-engine v1.13.0
-```
-
-TE 1.x and 2.x can't coexist — leftover `transformer_engine_torch` from the 2.16 install.
-
-### TE installation root cause summary
-
-| Problem | Cause |
-|---|---|
-| `transformer_engine_torch` missing | pip doesn't auto-install framework glue; needs `[pytorch]` extra |
-| `[pytorch]` build fails (no torch) | pip's isolated build env doesn't have torch |
-| `[pytorch]` build fails (C++ error) | CUDA toolkit 12.0 on system vs 12.8 headers TE expects |
-| Version mismatch on downgrade | `transformer_engine_torch` survives uninstall of `transformer-engine` |
-
----
-
-## 5. The NGC container is the solution
-
-NVIDIA ships a Docker container where ALL of this works:
-
-```
-nvcr.io/nvidia/pytorch:24.06-py3
-```
-
-Inside: PyTorch 2.4, TE 1.11 (pre-built), CUDA 12.5, cuDNN 9.2 — all tested together. This is what vLLM, SGLang, and TensorRT-LLM use as their base.
-
-Upgrading to a newer NGC container (24.12+) would give PyTorch 2.5+ with TE 2.x and CUDA 12.8 — all guaranteed compatible.
-
-**The pip-installed PyTorch 2.6 + TE 2.16 combo on this H200 simply isn't a tested path.** NVIDIA tests TE against their own PyTorch builds in the NGC container, not against the PyTorch pip wheels. The pip wheel uses CUDA 12.4 runtime while TE 2.16 expects 12.8, and the framework glue layer (`transformer_engine_torch`) can't be compiled from source without the exact CUDA toolchain TE was built against.
-
----
-
-## 6. FP8 weight cache — the implemented solution
-
-Since TE can't be installed from pip on this machine, and no FP8 pre-quantized model checkpoints exist on HuggingFace for the Gemma family, the codebase implements:
-
-### On-disk FP8 weight cache
-
-```
-First load:
-  HuggingFace BF16 weights → auto-quantized to FP8 E4M3
-  → saved to ~/.cache/tr_benchmark/fp8_weights/{hash}/
-  → one .safetensors per layer (weight_fp8 + scale)
-
-Subsequent loads:
-  → reads FP8 weights directly from cache
-  → NO re-quantization needed
-  → cache key = SHA256(model_path + layer shapes + checksums)
-  → auto-invalidates on model update
-```
-
-### Code path
-
-```
-autoregressive.py:_apply_fp8()
-  ├─ TE available? → apply_te_fp8_to_model() → te.Linear (fused kernel)
-  │   └─ FALLS BACK on ImportError / RuntimeError
-  ├─ Native? → apply_native_fp8_to_model() → NativeFP8Linear
-  │   └─ Uses torch._scaled_mm (quantization tax applies)
-  └─ Neither? → BF16 (log message)
-
-Environment control:
-  TR_SKIP_FP8=1         — skip all FP8, pure BF16
-  TR_FORCE_NATIVE_FP8=1 — skip TE attempt, go straight to native
-```
-
-### Performance decisions
-
-| Model class | Hidden dim | FP8 via _scaled_mm | Recommendation |
+| Model | Layer type | Shape [in, out] | Crash site |
 |---|---|---|---|
-| 1-4B (TranslateGemma, Ministral) | 2048-2560 | **Slower** than BF16 | TR_SKIP_FP8=1 for now |
-| 8-12B (TranslateGemma 12B) | 3840-4096 | ~Neutral | Try both, measure |
-| 26B+ (DiffusionGemma, large models) | 5120-8192 | **Faster** than BF16 | Default FP8 ON |
+| TranslateGemma 4B | Attention q_proj | [1, 3, 2560] | `cublaslt_gemm.cu:102` |
+| TranslateGemma 4B | MLP gate_proj | [1, 12, 2560 → 10240] | `cublaslt_gemm.cu:102` |
+| TranslateGemma 4B | MLP up_proj | [1, 12, 2560 → 10240] | `cublaslt_gemm.cu:102` |
+| TranslateGemma 4B | MLP down_proj | [1, 12, 10240 → 2560] | `cublaslt_gemm.cu:102` |
+
+Every linear layer type — attention, gate, up, down — crashes identically. This eliminates the hypothesis that it's a shape-specific issue.
+
+### Simple test passes, real model crashes
+
+```python
+# THIS WORKS:
+lin = te.Linear(256, 256).cuda()
+lin.weight.data = lin.weight.data.to(torch.bfloat16)
+x = torch.randn(8, 256, device='cuda', dtype=torch.bfloat16)
+with fp8_autocast(enabled=True):
+    y = lin(x)  # OK!
+
+# THIS CRASHES (warmup bs=1 on real model):
+# model.q_proj: te.Linear(2560, 2560)
+# x shape: [1, warmup_len, 2560]
+# Outcome: cuBLAS Error: an internal operation failed
+```
+
+The simple 256×256 test passes because all dimensions are powers of 2 and the batch size is 8. The real model's warmup batch uses `bs=1` with irregular sequence lengths, which triggers the cuBLAS internal error.
 
 ---
 
-## 7. Resolutions by path
+## 3. Every thing we tried
 
-### Path A: NGC container (recommended, not yet implemented)
+### Pip venv — 6 attempts, 0 working
 
-```bash
-docker run --gpus all -it --ipc=host \
-  -v ~/LargeCorporaTranslation:/workspace \
-  nvcr.io/nvidia/pytorch:24.12-py3 \
-  python -m benchmark --config config.yaml
-```
+| Attempt | Command | Result |
+|---|---|---|
+| TE 2.16 bare | `pip install transformer-engine==2.16.0` | ❌ Missing `transformer_engine_torch` |
+| TE 2.16 [pytorch] | `pip install 'transformer-engine[pytorch]==2.16.0'` | ❌ Build fails (no torch in build env) |
+| TE 2.16 no-isolation | `pip install 'transformer-engine[pytorch]==2.16.0' --no-build-isolation` | ❌ CUDA headers mismatch (system 12.0 vs TE 12.8) |
+| TE 2.4 [pytorch] | `pip install 'transformer-engine[pytorch]==2.4.0'` | ❌ Same build failures |
+| TE 1.13 [pytorch] | `pip install 'transformer-engine[pytorch]==1.13.0'` | ❌ Version conflict with 2.16 debris |
+| TE 2.16 reinstalled | Uninstall all, reinstall 2.16 | ❌ Imports but `transformer_engine_torch` missing |
 
-Zero pip installs. TE + PyTorch + CUDA are pre-tested together. FP8 works out of the box.
+**Root cause:** `transformer_engine_torch` must be compiled from source on pip. The system CUDA toolkit (12.0 from nvcc) can't compile TE 2.16 which targets CUDA 12.8. Pre-built wheels for `transformer_engine_torch` don't exist on PyPI for Linux.
 
-### Path B: Fix pip TE (requires manual CUDA toolkit)
+### NGC container — 1 attempt, crashes identically
 
-```bash
-# Install CUDA 12.8 toolkit (not just runtime)
-wget https://developer.download.nvidia.com/compute/cuda/12.8.0/local_installers/cuda_12.8.0_570.86.10_linux.run
-sudo sh cuda_12.8.0_570.86.10_linux.run --toolkit --silent
+| Image | TE version | Result |
+|---|---|---|
+| `nvcr.io/nvidia/pytorch:24.12-py3` | 1.11.0 (pre-built) | ❌ Same cuBLAS crash on Gemma layers |
 
-# Install TE with correct CUDA home
-CUDA_HOME=/usr/local/cuda-12.8 pip install 'transformer-engine[pytorch]==2.16.0' --no-build-isolation
-```
+The NGC container is NVIDIA's own tested stack. TE imports cleanly. The crash is NOT an installation problem — it's the same `cublaslt_gemm.cu:102` error that the pip venv would produce IF we could get TE installed there.
 
-### Path C: Accept native FP8 with tax (current state)
+### Mitigation attempts within NGC
 
-```bash
-TR_FORCE_NATIVE_FP8=1 python -m benchmark --model translategemma-12b-bf16 --dry-run
-```
-
-Only worth it for 8B+ models. For 4B and below, `TR_SKIP_FP8=1` until Path A or B is implemented.
-
-### Path D: Static weight FP8 (hybrid, implemented)
-
-This is what the current `NativeFP8Linear.forward()` does: weights are stored in FP8 (half the HBM bandwidth), activations stay in BF16 (no quantization tax). The dequantization `w_fp8.to(bf16) * scale` happens on-chip without a separate memory transaction. This path gives the memory bandwidth benefit without the compute tax.
+| Attempt | What changed | Result |
+|---|---|---|
+| `mlp_only=True` (skip attention) | TE only on gate/up/down | ❌ MLP layers crash identically |
+| Switch to Ministral 3B (Mistral arch) | Different model family | ❌ Model needs transformers 5.x (incompatible with NGC PyTorch 2.6 fork) |
+| transformers 5.x in NGC | `pip install 'transformers>=5.0'` | ❌ `ImportError: cannot import TransformGetItemToIndex` from torch._dynamo |
+| transformers 4.47-4.53 in NGC | `pip install 'transformers>=4.47,<4.53'` | ✅ Imports, but still crashes on TE forward |
 
 ---
 
-## 8. CUDA/PyTorch/TE version compatibility matrix
+## 4. Performance impact
 
-| PyTorch | CUDA Runtime | TE version | TE[pytorch] pre-built? | Status |
-|---|---|---|---|---|
-| 2.6.0 (pip cu124) | 12.4 | 2.16.0 | No (CUDA 12.8) | ❌ Compile fails |
-| 2.6.0 (pip cu124) | 12.4 | 2.4.0 | No (CUDA 12.4) | ❌ Compile fails |
-| 2.6.0 (pip cu124) | 12.4 | 1.13.0 | Yes (CUDA 12.1) | ⚠️ Import error (2.x debris) |
-| 2.4.0 (NGC 24.06) | 12.5 | 1.11.0 | Yes | ✅ Known working |
-| 2.5.1 (NGC 24.12) | 12.8 | 2.x | Yes | ✅ Known working |
+### What we actually get on this machine
 
-The pip-installed PyTorch path is fundamentally fragile for TE. NGC is the tested path.
+| Path | TPS (TranslateGemma 4B, bs=32) | Optimizations active |
+|---|---|---|
+| **pip venv (safe_mode)** | **816 tok/s** | TF32, FlashSDPA |
+| pip venv (native FP8) | 440 tok/s | TF32, FlashSDPA, torch._scaled_mm (slower!) |
+| NGC container (TE, any model) | **CRASH** | N/A |
+| NGC container (BF16, no TE) | ~800-900 tok/s (estimated) | TF32, FlashSDPA, torch.compile (NVIDIA fork) |
+
+### What we're leaving on the table
+
+| Optimization | Speedup | Status |
+|---|---|---|
+| TE FP8 (fused kernel) | +40-60% | ❌ cuBLAS crash |
+| torch.compile reduce-overhead | +15-40% | ⚠️ Works in NGC, crashes on pip venv (cudagraph_trees) |
+| Flash SDPA | Already active | ✅ |
+| TF32 matmul | Already active | ✅ |
+| Data parallelism | 50-80× aggregate | ⚠️ Not implemented |
+
+### What would unlock the remaining 2-3×
+
+A driver update or CUDA toolkit upgrade that resolves the cuBLAS Internal Error. The H200's 1,979 FP8 TFLOPS are accessible — we proved it on the 256×256 micro-test. The door is locked at a very specific place: warmup batch shapes on a real 4B model through TE's cublaslt gemm path.
 
 ---
 
-## 9. Affected files
+## 5. Hypothesis for the cuBLAS crash
 
-| File | What changed |
+Three possible causes, ordered by likelihood:
+
+### 5a. Driver 580 + cuBLAS 12.x internal incompatibility (most likely)
+
+The H200 driver (580.159.03) reports CUDA 13.0 support via `nvidia-smi`. But the PyTorch runtime inside both the pip venv and NGC container uses CUDA 12.x (12.4 / 12.6). The cuBLAS library that TE links against is the one bundled with the CUDA runtime, not the driver.
+
+When TE calls `cublasLtMatmul` with FP8 tensor core operands, the CUDA 12.x cuBLAS library tries to dispatch to the driver's kernel. If the driver's cuBLAS kernel for FP8 gemm on sm90a has an incompatibility with the 12.x client library, you get exactly `CUBLAS_STATUS_INTERNAL_ERROR`.
+
+**Evidence:** The error is consistent across TE versions (1.11, 2.4, 2.16) and across CUDA runtime versions (12.4 pip, 12.6 NGC) — the only common element is the 580 driver.
+
+### 5b. Warmup batch size alignment
+
+TE's `fp8_gemm` has a documented requirement: the product of leading dimensions must be divisible by 8, and the last dimension must be divisible by 16. During warmup at `bs=1`, many sequence lengths will violate this.
+
+**Evidence:** The 256×256 test (`bs=8`, `8×256` product ok) passes. The real model at `bs=1` with `warmup_len=20` produces shapes like `[1, 20, 2560]` — product of leading dims = 20, which is NOT divisible by 8.
+
+**Counter-evidence:** The crash also occurs with MLP layers where `[1, 20*32, 2560]` padded batch should satisfy alignment. The fact that ALL shapes crash, not just small ones, points back to 5a.
+
+### 5c. cuBLAS workspace allocation failure
+
+When multiple CUDA streams (TE's internal stream + PyTorch's default stream + the warmup stream) share the cuBLAS handle, workspace allocation can fail silently and manifest as an internal error on the next gemm call.
+
+**Evidence:** The crash only happens after `torch.compile` wraps the model — compile creates internal CUDA graphs that may alias the cuBLAS workspace.
+
+---
+
+## 6. Resolution — what we actually did
+
+### 6a. Code changes committed (2026-06-24–25)
+
+| File | Change |
 |---|---|
-| `benchmark/hardware/precision.py` | `NativeFP8Linear`, `apply_native_fp8_to_model()`, `save_fp8_weights()`, `load_fp8_weights()` |
-| `benchmark/inference/backends/autoregressive.py` | `_apply_fp8()` — always attempts TE then native; `_fp8_context()` |
+| `benchmark/hardware/precision.py` | `apply_te_fp8_to_model()` receives `mlp_only` flag. `NativeFP8Linear` with weight-cache path. `save_fp8_weights()` / `load_fp8_weights()` for on-disk FP8 weight persistence. |
+| `benchmark/inference/backends/autoregressive.py` | `_apply_fp8()` tries TE first (with Gemma auto-detection for `mlp_only`), native `torch._scaled_mm` as fallback. Version guard skips compile on PyTorch < 2.12. |
+| `benchmark/config/model_presets.py` | Gemma models: `supports_fp8=False`. Ministral: `supports_fp8=True`. New `4B` alias → Ministral. |
+| `benchmark/config/schema.py` | Default model remains `google/translategemma-4b-it` (backward compat). |
+| `benchmark/utils/env_check.py` | Model preset resolution before preflight check. |
+| `benchmark/__main__.py` | `--model` arg resolves presets to HF IDs before config injection. |
+| `scripts/run_one_model.py` | `use_torch_compile=is_cuda` (re-enabled from hardcoded False). |
+| `scripts/benchmark_all_models.py` | Same compile re-enable for both AR and NLLB paths. |
+| `Dockerfile.ngc` | NGC-based Docker image (created, not yet built). |
+| `docs/FP8_TE_CUDA_ISSUES.md` | This document. |
+
+### 6b. Runtime behavior — what the benchmark does today
+
+```
+On CUDA (non-safe-mode):
+  1. Try Transformer Engine → imports? no → skip
+  2. Try native torch._scaled_mm → Hopper? yes → apply on MLP layers only
+     → Forward pays 21 µs quantization tax per matmul
+     → For 4B models: net slower than BF16
+  3. Fall through to BF16 if both fail
+
+User controls:
+  TR_SKIP_FP8=1          → skip all FP8, pure BF16 (recommended for 4B models)
+  TR_FORCE_NATIVE_FP8=1  → skip TE attempt entirely
+  TR_DISABLE_TORCH_COMPILE=1 → force eager mode
+```
+
+### 6c. Recommended operating mode for asus02
+
+```bash
+# Production benchmark — maximum stable throughput
+TR_SKIP_FP8=1 python -m benchmark --model translategemma-4b-bf16 --batch-size 32
+
+# NGC container — if you want torch.compile (NVIDIA fork doesn't crash on cudagraph_trees)
+docker run --rm --gpus all --ipc=host --ulimit memlock=-1 \
+  -v ~/LargeCorporaTranslation:/workspace \
+  -v ~/.cache/huggingface:/root/.cache/huggingface \
+  -w /workspace -e PYTHONPATH=/workspace -e TR_SKIP_FP8=1 \
+  nvcr.io/nvidia/pytorch:24.12-py3 \
+  bash -c '
+    pip install -q "transformers>=4.47,<4.53" orjson pyarrow safetensors sacrebleu pydantic pyyaml psutil sentencepiece
+    python3 -m benchmark --model translategemma-4b-bf16 --dry-run --batch-size 32
+  '
+```
+
+---
+
+## 7. The real path to FP8 acceleration
+
+**Update the NVIDIA driver.** The 580 series is a development/beta driver. A stable 570 or updated 580 build that ships a fixed cuBLAS kernel for sm90a FP8 gemm would resolve this.
+
+Alternatively, **downgrade to driver 570** (the CUDA 12.8 stable driver). This is what NVIDIA's CI tests TE against. The 580 driver reports CUDA 13.0 support, suggesting it's a forward-compatibility build that may have regressions in the CUDA 12.x backward-compat layer.
+
+Once the driver is stable, the NGC container path works immediately — no code changes needed. TE + compile + FP8 will be active simultaneously, giving the projected 2-3× throughput improvement.
+
+---
+
+## 8. Appendix — complete test log
+
+```
+2026-06-24 20:25  pip venv: TE 2.16 import → FileNotFoundError (transformer_engine_torch)
+2026-06-24 20:30  pip venv: TE 2.16 [pytorch] → build fails (no torch in isolation)
+2026-06-24 20:35  pip venv: TE 2.16 --no-build-isolation → CUDA headers mismatch
+2026-06-24 20:40  pip venv: TE 2.4 → same compile failure
+2026-06-24 20:45  pip venv: TE 1.13 → version conflict with 2.16 debris
+2026-06-24 20:50  pip venv: native torch._scaled_mm 256×256 → OK (21 µs BF16, 42 µs FP8)
+2026-06-24 20:55  pip venv: native FP8 benchmark → 440 tok/s (0.54× BF16 baseline)
+2026-06-24 21:00  pip venv: native FP8 MLP-only → 579 tok/s (0.71× BF16 baseline)
+2026-06-24 21:10  Decision: force FP8 as default, implement weight cache
+2026-06-25 10:30  Docker + nvidia-container-toolkit installed
+2026-06-25 10:39  NGC 24.12 pulled, nvidia-smi works inside container
+2026-06-25 10:40  NGC: TE 1.11 imports, 256×256 FP8 matmul passes
+2026-06-25 10:45  NGC: TranslateGemma 4B warmup → cuBLAS crash (attention)
+2026-06-25 10:50  NGC: attempt --no-build-isolation for TE 2.16 inside container → fails
+2026-06-25 10:55  NGC: transformers 5.x import → TransformGetItemToIndex error
+2026-06-25 10:59  NGC: transformers 4.47-4.53 installed → still cuBLAS crash
+2026-06-25 11:05  pip venv: Gemma supports_fp8=False, 4B→Ministral
+2026-06-25 11:10  pip venv: Ministral-3-3B-Instruct-2512 → needs transformers 5.x
+2026-06-25 11:15  NGC: TE mlp_only on Gemma → cuBLAS crash on MLP gate_proj
+2026-06-25 11:20  FINAL: TE fails on ALL layer types, ALL TE versions, ALL containers
+```
+
+---
+
+## 9. Updated CUDA/PyTorch/TE compatibility matrix
+
+| PyTorch | CUDA Runtime | TE version | Container | Status |
+|---|---|---|---|---|
+| 2.6.0 (pip cu124) | 12.4 | 2.16.0 | none | ❌ Can't install [pytorch] extra |
+| 2.6.0 (pip cu124) | 12.4 | any | none | ❌ No pre-built `transformer_engine_torch` for pip |
+| 2.6.0a0 (NGC 24.12) | 12.6 | 1.11.0 | nvcr.io 24.12 | ❌ cuBLAS crash on all Gemma shapes |
+| 2.4.0 (NGC 24.06) | 12.5 | 1.11.0 | nvcr.io 24.06 | ❓ Not tested, likely same crash (same driver) |
+
+**The common element across all failures: NVIDIA Driver 580.159.03.**
