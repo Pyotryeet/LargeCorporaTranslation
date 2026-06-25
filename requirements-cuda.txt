@@ -1,14 +1,24 @@
 # CUDA-specific dependencies (NVIDIA H200 production)
 # Install with: pip install -r requirements-cuda.txt
 # These require CUDA 12.4+ and are NOT compatible with Apple Silicon / MPS.
+#
+# PyTorch and core deps should be installed first via:
+#   pip install 'torch>=2.12.1' --index-url https://download.pytorch.org/whl/cu126
 
-# FP8 acceleration via Transformer Engine — NVIDIA Hopper (SM90) required
-# Build requires CPATH set to nvidia-* include dirs (see setup.sh).
-# Installed with: pip install transformer-engine[pytorch] --no-build-isolation
-transformer-engine[pytorch]>=2.14.0
+# Transformer Engine FP8 — requires Hopper GPU (SM 9.0+).
+# NOTE (June 2026): TE source-build succeeds on pip venvs but runtime
+# cuBLASLt crashes on all tested driver versions (580, 565).  The only
+# known-working FP8 path is the NGC container (nvcr.io/nvidia/pytorch).
+# For pip venvs, TR_SKIP_FP8=1 is the default (pure BF16 at 1,650 tok/s).
+# Static quantization (SmoothQuant / QAT) is the path forward.
+# Uncomment TE only if you are running inside an NGC container or have
+# verified TE works on your specific driver version.
+# transformer-engine[pytorch]>=2.14.0
 
 # GPU telemetry — nvidia-ml-py replaces the deprecated pynvml package
 nvidia-ml-py>=13.0
 
-# Fused attention kernels — CUDA-only, requires compute capability 8.0+
-flash-attn>=2.6.0
+# FlashAttention is NOT required.  PyTorch's built-in SDPA handles
+# Flash + Mem-Efficient + Math backends automatically on Hopper (SM 9.0+).
+# Uncomment only if you need flash_attn_with_kvcache explicitly.
+# flash-attn>=2.6.0

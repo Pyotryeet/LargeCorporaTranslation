@@ -648,7 +648,7 @@ esac
 echo -e "  ${B}Model:${N}     ${_model_label}"
 echo -e "  ${B}Backend:${N}   $BACKEND"
 echo -e "  ${B}Platform:${N}  $PLATFORM ($(uname -m))"
-echo -e "  ${B}Precision:${N} FP8 (native H200) if CUDA, else BF16"
+echo -e "  ${B}Precision:${N} BF16 + TF32 + SDPA (FP8 not active on pip venvs; see docs/FP8_TE_CUDA_ISSUES.md)"
 echo -e "  ${B}Config:${N}    $CONFIG_FILE"
 echo ""
 

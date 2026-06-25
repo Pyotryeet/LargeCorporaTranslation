@@ -32,12 +32,13 @@ dependencies = [
 
 [project.optional-dependencies]
 cuda = [
-    # flash-attn is installed separately by setup.sh with --no-build-isolation
-    # because it requires torch at build time and pip's default build isolation
-    # sandbox does not include the already-installed torch.  Do NOT add it here.
-    # https://github.com/Dao-AILab/flash-attention?tab=readme-ov-file#installation-and-features
-    "transformer-engine>=2.0.0",
-    "pynvml>=11.550",
+    # Transformer Engine is NOT included here — it's known broken on pip venvs.
+    # TE source-build compiles but runtime cuBLASLt crashes on all tested drivers
+    # (580, 565).  The only working FP8 path is the NGC container.
+    # See docs/FP8_TE_CUDA_ISSUES.md and setup.sh for details.
+    # Uncomment TE only if running inside nvcr.io/nvidia/pytorch container.
+    # "transformer-engine>=2.0.0",
+    "nvidia-ml-py>=13.0",
     "triton>=2.3.0",
 ]
 tensorrt = [

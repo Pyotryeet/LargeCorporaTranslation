@@ -143,7 +143,7 @@ MODEL_PRESETS: dict[str, ModelPreset] = {
         eos_token_id=1,
         end_of_turn_token_id=106,  # <end_of_turn>
         max_seq_len=2048,
-        supports_fp8=False,     # TE cuBLAS crash on Gemma attention shapes
+        supports_fp8=False,     # TE broken on pip venvs (driver cuBLASLt); only in NGC
         recommended_batch_size=1,
     ),
     "translategemma-4b-int8": ModelPreset(
@@ -160,7 +160,7 @@ MODEL_PRESETS: dict[str, ModelPreset] = {
         eos_token_id=1,
         end_of_turn_token_id=106,
         max_seq_len=2048,
-        supports_fp8=False,     # TE cuBLAS crash on Gemma attention shapes
+        supports_fp8=False,     # TE broken on pip venvs (driver cuBLASLt); only in NGC
         recommended_batch_size=1,
     ),
     "translategemma-4b-int4": ModelPreset(
@@ -177,7 +177,7 @@ MODEL_PRESETS: dict[str, ModelPreset] = {
         eos_token_id=1,
         end_of_turn_token_id=106,
         max_seq_len=2048,
-        supports_fp8=False,     # TE cuBLAS crash on Gemma attention shapes
+        supports_fp8=False,     # TE broken on pip venvs (driver cuBLASLt); only in NGC
         recommended_batch_size=1,
     ),
     # ── Ministral 3B ────────────────────────────────────────────────────────
@@ -195,7 +195,7 @@ MODEL_PRESETS: dict[str, ModelPreset] = {
         eos_token_id=2,      # Mistral uses </s>
         end_of_turn_token_id=-1,
         max_seq_len=4096,    # Ministral supports longer context
-        supports_fp8=True,      # Mistral arch — safe with TE FP8
+        supports_fp8=False,     # TE broken on pip venvs (driver cuBLASLt)
         recommended_batch_size=1,
     ),
     # ── Gemma 4 E2B QAT variants (v3.4) ──────────────────────────────────────
@@ -213,7 +213,7 @@ MODEL_PRESETS: dict[str, ModelPreset] = {
         eos_token_id=1,
         end_of_turn_token_id=106,
         max_seq_len=2048,
-        supports_fp8=False,     # TE cuBLAS crash on Gemma attention shapes
+        supports_fp8=False,     # TE broken on pip venvs (driver cuBLASLt); only in NGC
         recommended_batch_size=1,
     ),
     "gemma4-e2b-qat-int4": ModelPreset(
@@ -230,7 +230,7 @@ MODEL_PRESETS: dict[str, ModelPreset] = {
         eos_token_id=1,
         end_of_turn_token_id=106,
         max_seq_len=2048,
-        supports_fp8=False,     # TE cuBLAS crash on Gemma attention shapes
+        supports_fp8=False,     # TE broken on pip venvs (driver cuBLASLt); only in NGC
         recommended_batch_size=1,
     ),
     # ── Gemma 4 E4B QAT variants (v3.4) ──────────────────────────────────────
@@ -248,7 +248,7 @@ MODEL_PRESETS: dict[str, ModelPreset] = {
         eos_token_id=1,
         end_of_turn_token_id=106,
         max_seq_len=2048,
-        supports_fp8=False,     # TE cuBLAS crash on Gemma attention shapes
+        supports_fp8=False,     # TE broken on pip venvs (driver cuBLASLt); only in NGC
         recommended_batch_size=1,
     ),
     "gemma4-e4b-qat-int4": ModelPreset(
@@ -265,7 +265,7 @@ MODEL_PRESETS: dict[str, ModelPreset] = {
         eos_token_id=1,
         end_of_turn_token_id=106,
         max_seq_len=2048,
-        supports_fp8=False,     # TE cuBLAS crash on Gemma attention shapes
+        supports_fp8=False,     # TE broken on pip venvs (driver cuBLASLt); only in NGC
         recommended_batch_size=1,
     ),
     # ── Gemma 4 E2B Q4_0 quantized (v3.4) ────────────────────────────────────
@@ -283,7 +283,7 @@ MODEL_PRESETS: dict[str, ModelPreset] = {
         eos_token_id=1,
         end_of_turn_token_id=106,
         max_seq_len=2048,
-        supports_fp8=False,     # TE cuBLAS crash on Gemma attention shapes
+        supports_fp8=False,     # TE broken on pip venvs (driver cuBLASLt); only in NGC
         recommended_batch_size=1,
     ),
     # ── Gemma 4 E4B Q4_0 quantized (v3.4) ────────────────────────────────────
@@ -301,7 +301,7 @@ MODEL_PRESETS: dict[str, ModelPreset] = {
         eos_token_id=1,
         end_of_turn_token_id=106,
         max_seq_len=2048,
-        supports_fp8=False,     # TE cuBLAS crash on Gemma attention shapes
+        supports_fp8=False,     # TE broken on pip venvs (driver cuBLASLt); only in NGC
         recommended_batch_size=1,
     ),
     # ── DiffusionGemma 26B-A4B (v3.4) ────────────────────────────────────────
@@ -325,7 +325,7 @@ MODEL_PRESETS: dict[str, ModelPreset] = {
         # sufficient unified memory.
         supports_mps=False,
         supports_cuda=True,
-        supports_fp8=True,      # Diffusion backend — different FP8 path
+        supports_fp8=False,     # TE broken on pip venvs
         recommended_batch_size=1,
     ),
 }

@@ -202,25 +202,20 @@ $PYTHON_BIN -m pip install -r requirements.txt --quiet --no-cache-dir
 ok "Core dependencies installed"
 
 # Platform-specific PyTorch.
-# ⚠️ VERSION PIN: torch 2.6.0+cu124 is the KNOWN-GOOD combination for H200 (SM90).
+# ⚠️ VERSION GUIDE: PyTorch for H200 (SM90) — June 2026
+#   - 2.12.1+cu126 → RECOMMENDED. +27% TPS over 2.6.0 (1,650 vs 1,300 tok/s on 4B).
+#     torch.compile(mode="default") active on 2.12–2.13; mode="reduce-overhead" on 2.14+.
+#   - 2.6.0+cu124  → Works but compile auto-skipped (cudagraph_trees bug).
 #   - 2.11.0+cu130 → SDPA crashes on SM90 (cuDNN frontend has no execution plans)
-#   - 2.12.1+cu126 → flash_attn ABI incompatible (prebuilt .so for torch 2.11)
-#   - 2.6.0+cu124  → SDPA works, torch.compile works, TE builds from source
-# See docs/MEASUREMENT_PLAN.md §B.1 and docs/H200_SETUP.md §Known Issues.
+# See docs/COMPILATION_GUIDE.md, docs/FP8_TE_CUDA_ISSUES.md.
 if [ "$MODE" = "cuda" ]; then
     if [ -n "$FORCE_CUDA_VERSION" ]; then
         CUDA_INDEX="cu${FORCE_CUDA_VERSION//./}"
     else
-        CUDA_INDEX="cu124"
+        CUDA_INDEX="cu126"
     fi
-    info "Installing PyTorch 2.6.0 with CUDA ($CUDA_INDEX)..."
-    # NOTE: pip install without --require-hashes — hash checking is deferred because:
-    # (1) upstream wheels are signed by PyPI and verified via TLS; (2) this project
-    # pins top-level constraints but not transitive hashes; (3) nightly PyTorch/CUDA
-    # wheels change daily, making hash files stale immediately.
-    # When moving to a production Docker build, freeze all deps with:
-    #   pip-compile --generate-hashes -o requirements-torch-cuda.txt requirements-torch-cuda.in
-    $PYTHON_BIN -m pip install 'torch==2.6.0' 'torchvision==0.21.0' --index-url "https://download.pytorch.org/whl/$CUDA_INDEX" --quiet --no-cache-dir
+    info "Installing PyTorch 2.12.1 with CUDA ($CUDA_INDEX)..."
+    $PYTHON_BIN -m pip install 'torch>=2.12.1' 'torchvision>=0.27' --index-url "https://download.pytorch.org/whl/$CUDA_INDEX" --quiet --no-cache-dir
     ok "PyTorch (CUDA) installed"
 elif [ "$MODE" = "mps" ]; then
     info "Installing PyTorch (MPS)..."
@@ -271,72 +266,25 @@ if [ "$MODE" = "cuda" ]; then
     info "Installing CUDA extras..."
     # flash-attn's build system imports torch at wheel-build time, so pip's
     # default build isolation sandbox fails (torch isn't in the sandbox).
-    # Install CUDA deps WITHOUT build isolation and split flash-attn out
-    # so pip can handle it specifically.
-    $PYTHON_BIN -m pip install pynvml triton --quiet --no-cache-dir || true
-    # flash-attn MUST be installed with --no-build-isolation so the build
-    # can see the already-installed torch.  Binary wheels exist for most
-    # CUDA 12.x + Python 3.10-3.12 combos on x86_64, so the build path
-    # is only hit when no pre-built wheel matches.
-    $PYTHON_BIN -m pip install 'flash-attn>=2.6.0' --no-build-isolation --quiet --no-cache-dir 2>/dev/null || \
-        warn "flash-attn build failed — standard attention will be used instead"
+    # ── CUDA extras ─────────────────────────────────────────────────
+    $PYTHON_BIN -m pip install nvidia-ml-py --quiet --no-cache-dir || true
     ok "CUDA extras installed"
 
-    # ── Transformer Engine (FP8 on Hopper) ────────────────────────────
-    # TE compiles C++ CUDA kernels against the installed PyTorch + cuDNN +
-    # NCCL headers.  Three prerequisites must be met:
-    #   1. nvcc is in PATH (checked in Step 2)
-    #   2. nvidia-cudnn-cu12 and nvidia-nccl-cu12 are installed (they ship
-    #      both the shared libraries AND the C++ headers TE needs)
-    #   3. CPATH and LIBRARY_PATH point at the nvidia include/lib dirs
+    # ── Transformer Engine (FP8 on Hopper) ──────────────────────────
+    # NOTE (June 2026): TE source-build succeeds on pip venvs but **runtime
+    # cuBLASLt crashes on all tested drivers (580, 565)**.  TE is COMMENTED
+    # OUT by default to avoid a 2-5 minute compile that produces non-working
+    # FP8.  The only known-working FP8 path is the NGC container
+    # (nvcr.io/nvidia/pytorch:24.12-py3).  See docs/FP8_TE_CUDA_ISSUES.md.
     #
-    # The nvidia-* wheels install into site-packages/nvidia/{cudnn,nccl}/
-    # with include/ and lib/ subdirectories.
-    info "Installing Transformer Engine (FP8 acceleration)..."
-    TE_OK=false
-    if command -v nvcc &>/dev/null; then
-        # Ensure nvidia header packages are present (PyTorch wheels pull them
-        # as transitive deps but may be missing with --index-url installs).
-        $PYTHON_BIN -m pip install \
-            'nvidia-cudnn-cu12>=9.0' \
-            'nvidia-nccl-cu12>=2.21' \
-            --quiet --no-cache-dir 2>/dev/null || true
-
-        # Locate nvidia include dirs via Python — far more reliable than
-        # glob-matching the venv lib/python*/site-packages pattern.
-        NVIDIA_DIRS=$($PYTHON_BIN -c "
-import site, pathlib, sys
-for sp in site.getsitepackages():
-    cudnn_inc = pathlib.Path(sp) / 'nvidia' / 'cudnn' / 'include'
-    nccl_inc = pathlib.Path(sp) / 'nvidia' / 'nccl' / 'include'
-    torch_inc = pathlib.Path(sp) / 'torch' / 'include'
-    cudnn_lib = pathlib.Path(sp) / 'nvidia' / 'cudnn' / 'lib'
-    nccl_lib = pathlib.Path(sp) / 'nvidia' / 'nccl' / 'lib'
-    if cudnn_inc.is_dir() and torch_inc.is_dir():
-        print(f'{cudnn_inc}:{nccl_inc}:{torch_inc}')
-        print(f'{cudnn_lib}:{nccl_lib}')
-        break
-" 2>/dev/null)
-        if [ -n "$NVIDIA_DIRS" ]; then
-            CPATH="$(echo "$NVIDIA_DIRS" | head -1)"
-            LIBRARY_PATH="$(echo "$NVIDIA_DIRS" | tail -1)"
-            export CPATH
-            export LIBRARY_PATH
-            info "  nvidia headers: $CPATH"
-            $PYTHON_BIN -m pip install \
-                'transformer-engine[pytorch]>=2.14.0' \
-                --no-build-isolation --quiet --no-cache-dir 2>/dev/null && TE_OK=true
-        else
-            warn "nvidia-* headers not found in site-packages — install nvidia-cudnn-cu12 and nvidia-nccl-cu12"
-        fi
-    else
-        warn "nvcc not in PATH — TE requires CUDA toolkit"
-    fi
-    if $TE_OK; then
-        ok "Transformer Engine installed (FP8 ready)"
-    else
-        warn "Transformer Engine build failed — FP8 will use BF16"
-    fi
+    # To attempt TE anyway (YMMV — verify with the 256x256 smoking gun test):
+    #   source .venv/bin/activate
+    #   pip install 'transformer-engine[pytorch]>=2.14.0' --no-build-isolation
+    #
+    # Static quantization (SmoothQuant / QAT) via save_fp8_weights() /
+    # load_fp8_weights() is the path forward for pip venvs.
+    info "Skipping Transformer Engine — known broken on pip venvs (see docs/FP8_TE_CUDA_ISSUES.md)"
+    info "  FP8 is available via NGC container (nvcr.io/nvidia/pytorch:24.12-py3)"
 fi
 
 # TensorRT (full profile, CUDA only).
