@@ -1428,28 +1428,33 @@ class AutoregressiveBackend(InferenceBackend):
         logger.info("AR warmup (extreme): %d batches + graph capture...", batches)
 
         device = self.devices[0]
-        ws = time.monotonic()  # start timer before any phase
+        ws = time.monotonic()
+
+        # Dry-run / quick mode: minimal warmup (2 passes each phase).
+        # Full mode: production warmup (5 passes each phase).
+        if batches <= 5:
+            n_short = 2
+            n_long = 2
+            _tag = "minimal"
+        else:
+            n_short = WARMUP_SHORT_BATCHES
+            n_long = WARMUP_LONG_BATCHES
+            _tag = "production"
+
         # Phase 1: short warmup — only useful on CUDA for cuBLAS autotuning.
         # On MPS short sequences create throwaway MPSGraph compilations that
         # waste IOAccelerator memory (3-5 GB) with no benefit.
         if self.backend_name != "mps":
-            # FP8 Transformer Engine requires leading tensor dims to be
-            # multiples of 8.  With batch=1 and a short warmup sentence
-            # (~12-20 tokens), the product 1×12=12 fails the constraint.
-            # Use batch=8 as a minimum so all warmup paths are FP8-compatible.
             warmup_bs_short = 8 if self.backend_name == "cuda" else 1
             logger.info(
-                "AR warmup Phase 1: short sequences (bs=%d) — warming CUDA allocator "
-                "(kernel compilation, memory pool growth, cuBLAS autotuning). "
-                "Forward outputs are discarded; these passes exist only to drive "
-                "the CUDA stack into a steady state before measured work begins.",
-                warmup_bs_short,
+                "AR warmup Phase 1: short sequences (bs=%d, n=%d) — %s",
+                warmup_bs_short, n_short, _tag,
             )
             txt = "This is a warm-up sentence for translation benchmarking."
             ids_single = self.tokenizer.encode(txt, return_tensors="pt").to(device)
             ids = ids_single.repeat(warmup_bs_short, 1)
             mask = torch.ones_like(ids).to(device)
-            for _ in range(max(batches // 2, WARMUP_SHORT_BATCHES)):
+            for _ in range(n_short):
                 with torch.no_grad(), self._fp8_context():
                     self.model(
                         input_ids=ids, attention_mask=mask, use_cache=True,
@@ -1461,15 +1466,11 @@ class AutoregressiveBackend(InferenceBackend):
         warmup_bs = getattr(self, '_configured_batch_size', 1)
         if self.backend_name == "mps":
             warmup_bs = max(warmup_bs, 1)
-            n_iters = 2  # one compile + one verify — more adds no benefit on MPS
         elif self.backend_name == "cuda":
-            # FP8 TE Linear: batch must be divisible by 8.
             if warmup_bs < 8:
                 warmup_bs = 8
-            n_iters = max(batches // 2, WARMUP_LONG_BATCHES)
         else:
             warmup_bs = 1
-            n_iters = max(batches // 2, WARMUP_LONG_BATCHES)
         txt_long = (
             "Machine translation quality assessment requires careful evaluation "
             "across multiple dimensions including fluency, adequacy, and semantic "
@@ -1490,21 +1491,12 @@ class AutoregressiveBackend(InferenceBackend):
                 )
         logger.info("  Phase 2 (long, bs=%d): %.1fs", warmup_bs, time.monotonic() - ws2)
 
-        # Phase 3: CUDA graph capture (EXTREME).
-        # Skip when torch.compile is active — inductor handles graph capture
-        # internally, and nesting custom CUDA graph capture on top causes
-        # "captures_underway.empty()" assertion failures in PyTorch 2.6.
-        if self.backend_name == "cuda" and self._use_cuda_graph and not self.use_torch_compile:
-            bs = getattr(self, '_configured_batch_size', CUDA_GRAPH_DEFAULT_BATCH_SIZE)
-            logger.info("  Phase 3: capturing CUDA graph at batch_size=%d", bs)
-            try:
-                self._capture_decode_graph(
-                    batch_size=bs,
-                    seq_len=self.max_input_tokens,
-                )
-            except Exception as e:
-                logger.warning("CUDA graph capture failed: %s — using eager decode", e)
-                self._graph_decoder = None
+        # Phase 3: SKIPPED — CUDA graph capture is deprecated (captured but
+        # never replayed on the hot path).  _extreme_decode uses standard
+        # model() calls.  Removing this saves ~2-5 seconds per warmup.
+        if False:  # was: self.backend_name == "cuda" and self._use_cuda_graph ...
+            logger.info("  Phase 3: CUDA graph capture SKIPPED (deprecated)")
+
 
         if self.backend_name == "cuda":
             torch.cuda.synchronize()
