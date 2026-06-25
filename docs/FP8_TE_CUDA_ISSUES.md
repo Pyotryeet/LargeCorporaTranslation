@@ -264,3 +264,152 @@ Once the driver is stable, the NGC container path works immediately — no code 
 | 2.4.0 (NGC 24.06) | 12.5 | 1.11.0 | nvcr.io 24.06 | ❓ Not tested, likely same crash (same driver) |
 
 **The common element across all failures: NVIDIA Driver 580.159.03.**
+
+---
+
+## 10. Addendum — 2026-06-25 late session: TE post-driver-downgrade investigation
+
+### 10a. Driver downgrade: 580 → 565
+
+Hypothesis: The 580 driver's cuBLASLt kernel was the root cause. Downgrade to 565 (stable production) should fix it.
+
+```bash
+sudo apt remove --purge -y nvidia-driver-580
+sudo apt install -y nvidia-driver-565
+sudo reboot
+```
+
+**Result:** Driver 565.57.01 installed. `nvidia-smi` reports correctly.
+
+**Smoking gun test (256×256 TE FP8 matmul):** **STILL FAILS.**
+
+```
+cublaslt_gemm.cu:412 in function cublas_gemm:
+cuBLAS Error: an unsupported value or parameter was passed to the function
+```
+
+**Conclusion:** The 565 driver does NOT fix the crash. The problem is NOT the driver version — it's the compile-time vs runtime CUDA library mismatch.
+
+### 10b. PyTorch upgrade: 2.6.0+cu124 → 2.12.1+cu126
+
+```bash
+pip install torch torchvision torchaudio \
+  --index-url https://download.pytorch.org/whl/cu126 \
+  --force-reinstall --no-cache-dir
+```
+
+**Result:** PyTorch 2.12.1 installed. cuBLAS upgraded to 12.6.4.1. TE 2.5.0 needs rebuilding against the new PyTorch.
+
+**No-compile baseline (PyTorch 2.12.1, driver 565): 1,650 tok/s (+27% over 2.6.0 baseline of 1,300 tok/s).**
+
+### 10c. TE rebuild saga: CUDA 12.5 → CUDA 12.6 headers
+
+TE 2.5.0 was originally compiled against CUDA 12.5 headers. After PyTorch upgrade to cu126 (CUDA 12.6), rebuild is needed.
+
+**Attempt 10c-1: Rebuild TE 2.5.0 against PyTorch 2.12.1 (CUDA 12.6 runtime, system CUDA 12.6 toolkit)**
+
+```bash
+sudo apt install -y cuda-toolkit-12-6
+export CUDA_HOME=/usr/local/cuda-12.6
+pip install --no-build-isolation --no-cache-dir \
+  'transformer-engine[pytorch]==2.5.0'
+```
+
+**Error:** `fatal error: cudnn.h: No such file or directory`
+
+CUDA 12.6 toolkit from apt does NOT include cuDNN headers.
+
+**Attempt 10c-2: Copy cuDNN headers from PyTorch's pip package**
+
+```bash
+sudo cp ~/.venv/.../nvidia/cudnn/include/cudnn.h /usr/local/cuda-12.6/include/
+```
+
+**Error:** `fatal error: cudnn_version.h: No such file or directory`
+
+The pip `nvidia-cudnn-cu12` package only ships `cudnn.h`, not the subsidiary headers (`cudnn_version.h`, `cudnn_ops.h`, etc.).
+
+**Attempt 10c-3: Install system cuDNN for CUDA 12**
+
+```bash
+sudo apt install -y cudnn9-cuda-12
+sudo cp /usr/include/x86_64-linux-gnu/cudnn*.h /usr/local/cuda-12.6/include/
+```
+
+**Result:** All cuDNN headers present. Build succeeds!
+
+```
+Successfully installed transformer-engine-2.5.0 transformer_engine_cu12-2.5.0 transformer_engine_torch-2.5.0
+```
+
+**But runtime test:** `cublaslt_gemm.cu:412: cuBLAS Error: an unsupported value or parameter`
+
+Same crash. TE 2.5.0 built against CUDA 12.6 headers + system cuDNN 9.23 headers, but at runtime links against PyTorch's bundled `nvidia-cublas-cu12==12.6.4.1` which has its own cuBLASLt binary. The header/library ABI mismatch persists.
+
+### 10d. Complete error catalog
+
+| Error | Context | Occurrences |
+|---|---|---|
+| `cublaslt_gemm.cu:102: cuBLAS Error: an internal operation failed` | NGC TE 1.11 on Gemma layers at warmup | 4+ |
+| `cublaslt_gemm.cu:412: cuBLAS Error: an unsupported value or parameter` | pip TE 2.5.0 on all matmul shapes | 20+ |
+| `FileNotFoundError: Could not find shared object file for Transformer Engine torch lib` | pip TE 2.16.0 bare install | 1 |
+| `RuntimeError: This package needs Torch to build` | pip TE 2.16.0 [pytorch] with build isolation | 1 |
+| `RuntimeError: Error compiling objects for extension` | pip TE [pytorch] --no-build-isolation, compile failure | 5+ |
+| `AssertionError: TransformerEngine package version mismatch` | TE 1.13 install over 2.16 debris | 1 |
+| `fatal error: cudnn.h: No such file or directory` | TE build — missing cuDNN headers in CUDA toolkit | 4+ |
+| `fatal error: cudnn_version.h: No such file or directory` | TE build — pip nvidia-cudnn lacks subsidiary headers | 2 |
+| `ImportError: cannot import TransformGetItemToIndex` | NGC + transformers 5.x (PyTorch 2.6 fork incompatible) | 1 |
+| `AttributeError: PagedCache has no attribute is_initialized` | CB decode forward — HF 4.45+ Cache protocol | 1 |
+| `RuntimeError: [1072] must match [1056] at dimension 3` | PagedKVCache.read() returned block allocation not seq_len | 3+ |
+| `RuntimeError: [1038] must match [1037] at dimension 3` | PagedLayer off-by-1 after trim fix | 2 |
+| `OSError: 401 Client Error — gated repo` | NGC container missing HF auth token | 2 |
+| `RepositoryNotFoundError: 404 — Ministral-3B-Instruct` | Wrong HF model ID for Ministral (needs -2512 or 3-3B) | 3 |
+| `AttributeError: Gemma3Config has no hidden_size` | Gemma config nests in text_config sub-object | 1 |
+| `AssertionError: Data types must match... bias dtype: float32` | TE Linear bias left in fp32 when weight is bf16 | 1 |
+| `compile mode=default: 1 batch in 95s` | mode=default recompiles on every decode step | 1 |
+| `cudagraph_trees: accessing tensor output overwritten` | compile reduce-overhead on 2.12.1, sliding-window KV | 1 |
+| `LD_PRELOAD ignored` | system CUDA 12.5 libs not intercepting PyTorch's bundled 12.6 | 4 |
+| `NVTE_F8_OPTIMIZE=0: no effect` | env var workaround doesn't bypass cuBLASLt path | 1 |
+| `CUBLAS_WORKSPACE: no effect` | cuBLAS workspace config doesn't fix descriptor mismatch | 1 |
+
+### 10e. Successfully-built TE configurations
+
+| Date | TE ver | CUDA toolkit | cuDNN source | PyTorch | Driver | Result |
+|---|---|---|---|---|---|---|
+| 2026-06-25 | 2.5.0 | 12.5 (apt) | None (compile failed) | 2.6.0+cu124 | 580 | ❌ `cudnn.h` missing |
+| 2026-06-25 | 2.5.0 | 12.5 (apt) | pip nvidia-cudnn-cu12 9.1 headers + PyTorch libs | 2.6.0+cu124 | 580 | ✅ **Compiled**, ❌ runtime cuBLAS |
+| 2026-06-25 | 2.5.0 | 12.6 (apt) | pip nvidia-cudnn-cu12 9.10 + PyTorch libs | 2.12.1+cu126 | 580 | ✅ **Compiled**, ❌ runtime cuBLAS |
+| 2026-06-25 | 2.5.0 | 12.6 (apt) | system cudnn9-cuda-12 9.23 headers | 2.12.1+cu126 | 565 | ✅ **Compiled**, ❌ runtime cuBLAS |
+
+**Pattern:** TE can ALWAYS be built when cuDNN headers are placed in CUDA_HOME/include. It has NEVER passed a runtime FP8 matmul test on this machine — on any driver, any PyTorch, any CUDA version, any TE version. The compile/runtime ABI gap is structural: TE's pip `setup.py` compiles against one set of CUDA/cuDNN headers, but at runtime `import transformer_engine` loads against PyTorch's bundled libraries which may be different minor versions.
+
+### 10f. Throughput timeline across this investigation
+
+| Date | PyTorch | Driver | FP8 | Compile | TPS (4B, bs=32) |
+|---|---|---|---|---|---|
+| 2026-06-24 12:00 | 2.6.0+cu124 | 580 | ❌ TE not installed | ❌ version guard | 816 tok/s |
+| 2026-06-24 12:30 | 2.6.0+cu124 | 580 | ❌ TR_SKIP_FP8=1 | ❌ | 816 tok/s |
+| 2026-06-25 12:20 | 2.6.0+cu124 | 580 | ❌ | ❌ | 1,300 tok/s (+pre-tok) |
+| 2026-06-25 14:53 | 2.12.1+cu126 | 565 | ❌ | ❌ mode=default (broken) | 16 tok/s |
+| 2026-06-25 15:01 | 2.12.1+cu126 | 565 | ❌ | ❌ --no-compile | **1,650 tok/s** |
+
+### 10g. Final state — 2026-06-25 EOD
+
+**The cuBLASLt kernel crash (`cublaslt_gemm.cu:102` / `cublaslt_gemm.cu:412`) is invariant across:**
+- 3 drivers (580, 580-server, 565)
+- 2 PyTorch versions (2.6.0, 2.12.1)
+- 3 CUDA runtimes (12.4, 12.5, 12.6)
+- 4 TE versions (1.11 NGC, 2.4.0, 2.5.0, 2.16.0)
+- 2 architectures (Gemma 3, Mistral/Ministral)
+
+**The only common element is the H200 SM90 hardware.** This is plausibly a Hopper microcode/FW interaction with the cuBLASLt FP8 kernel that crosses driver generations.
+
+**Working path to 1,650 tok/s (measured, stable):**
+```bash
+TR_SKIP_FP8=1 python -m benchmark --model translategemma-4b-bf16 --batch-size 32
+```
+
+**Working path to 11,000 tok/s (NLLB, measured, stable):**
+```bash
+python -m benchmark --nllb --model facebook/nllb-200-distilled-600M --batch-size 64
+```
