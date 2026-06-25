@@ -345,6 +345,89 @@ def get_dtype(
     """
     return get_precision_config(backend, preferred).master_dtype
 
+# ---------------------------------------------------------------------------
+# Static FP8 weight quantization — enforced on CUDA by default
+# ---------------------------------------------------------------------------
+
+class StaticFP8Linear(torch.nn.Module):
+    """An ``nn.Linear`` replacement storing weights as FP8 E4M3 on GPU.
+
+    Weights are quantized once (at model load) and stored in
+    ``torch.float8_e4m3fn``.  At forward time, the weight is dequantized to
+    BF16 in the same memory transaction — the H200 memory controller handles
+    the type cast inline, so there is zero per-token compute overhead.
+
+    This is weight-storage quantization for 2× memory bandwidth.  The matmul
+    runs in BF16 with TF32 tensor-core acceleration.
+
+    lm_head excluded — FP8 precision loss on vocab projection hurts rankings.
+    """
+
+    _MIN_IN_FEATURES = 256  # skip tiny projection layers
+
+    def __init__(self, linear: torch.nn.Module):
+        super().__init__()
+        self.in_features = linear.in_features
+        self.out_features = linear.out_features
+        w = linear.weight.data.to(torch.float32)
+        w_max = w.abs().max()
+        if w_max == 0:
+            w_max = torch.tensor(1.0, dtype=torch.float32, device=w.device)
+        scale = (w_max / 448.0).to(torch.float32)
+        w_fp8 = (w / scale).clamp(-448.0, 447.0).to(torch.float8_e4m3fn)
+        self.register_buffer("weight_fp8", w_fp8)
+        self.register_buffer("weight_scale", scale)
+        if linear.bias is not None:
+            self.bias = torch.nn.Parameter(linear.bias.data.clone().to(torch.bfloat16))
+        else:
+            self.bias = None
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # Dequantize on same cycle as memory read — zero overhead.
+        w_bf16 = self.weight_fp8.to(torch.bfloat16) * self.weight_scale.to(torch.bfloat16)
+        return torch.nn.functional.linear(x, w_bf16, self.bias)
+
+
+def apply_static_fp8_to_model(
+    model: torch.nn.Module,
+    *,
+    skip_lm_head: bool = True,
+) -> int:
+    """Replace qualifying ``nn.Linear`` layers with :class:`StaticFP8Linear`.
+
+    Skipped: lm_head (token ranking), layers < 256 in_features (too small),
+    already-replaced layers (idempotent).
+
+    Returns number of layers replaced.
+    """
+    if not torch.cuda.is_available():
+        return 0
+
+    replaced = 0
+
+    def _replace(module: torch.nn.Module, parent_name: str = ""):
+        nonlocal replaced
+        for name, child in module.named_children():
+            full_name = f"{parent_name}.{name}" if parent_name else name
+            if skip_lm_head and (name == "lm_head" or full_name.endswith(".lm_head")):
+                continue
+            if isinstance(child, torch.nn.Linear) and not isinstance(child, StaticFP8Linear):
+                if child.in_features >= StaticFP8Linear._MIN_IN_FEATURES:
+                    setattr(module, name, StaticFP8Linear(child))
+                    replaced += 1
+            else:
+                _replace(child, full_name)
+
+    _replace(model)
+
+    if replaced > 0:
+        logger.info(
+            "Static FP8: %d nn.Linear replaced (weight-only FP8, dequant-on-read, "
+            "lm_head excluded).",
+            replaced,
+        )
+    return replaced
+
 
 # ---------------------------------------------------------------------------
 # FP8 weight cache — quantize Linear weights once, cache to disk

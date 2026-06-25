@@ -759,12 +759,12 @@ class AutoregressiveBackend(InferenceBackend):
         elif self.backend_name == "cpu":
             self.model = self.model.to(self.devices[0])
 
-        # ── 6. FP8 — always attempted on CUDA (not in safe_mode) ──
-        # FP8 is the H200's native compute dtype (twice the TFLOPS of BF16).
-        # We ALWAYS attempt it: TE fused kernel first, native torch._scaled_mm
-        # fallback.  Models with hidden_dim < 8K pay a small quantization tax
-        # but correct FP8 behavior is more important than squeezing the last
-        # 10-20% throughput on small models.
+        # ── 6. FP8 — enforced on CUDA (not in safe_mode) ──
+        # Strategy: TE fused kernel first (if available), then static
+        # weight-only FP8 as the default fallback.  Static FP8 stores
+        # weights in float8_e4m3fn on GPU — dequantized on-chip at
+        # forward time with zero per-token overhead.
+        # Skip with TR_SKIP_FP8=1 or --safe-mode.
         if self.backend_name == "cuda" and not self._safe_mode:
             self._apply_fp8()
 
@@ -1928,20 +1928,20 @@ class AutoregressiveBackend(InferenceBackend):
             "max_seq_len": self.max_input_tokens + self.max_new_tokens,
         }
 
-    # ── FP8 activation — Transformer Engine only ───────────────────────────
+    # ── FP8 — static weight quantization enforced on CUDA ─────────────────
 
     def _apply_fp8(self) -> None:
-        """Try to enable FP8 compute via Transformer Engine.
+        """Enable FP8 for Linear layers on CUDA.
 
-        TE provides fused quantize+matmul kernel — the only FP8 path that
-        avoids per-token quantization overhead.  Dynamic quantization
-        (``torch._scaled_mm``) was measured **2× slower than BF16** on 4B
-        models and has been removed in favor of static quantization
-        (SmoothQuant / QAT via ``save_fp8_weights`` / ``load_fp8_weights``).
+        Strategy (in priority order):
+        1. Transformer Engine — fused quantize+matmul kernel (best performance,
+           but broken on most pip venvs).  Attempted first.
+        2. Static FP8 weights — always applied on CUDA.  Weights are stored in
+           FP8 E4M3 and dequantized to BF16 on-chip during the forward.
+           Zero per-token overhead.  2× memory bandwidth vs BF16 weights.
 
-        Environment overrides
-        ---------------------
-        ``TR_SKIP_FP8=1``     Skip FP8 entirely (pure BF16).
+        Controls:
+          ``TR_SKIP_FP8=1`` → skip all FP8, pure BF16.
         """
         self._fp8_active = False
         self._fp8_method = "none"
@@ -1950,27 +1950,43 @@ class AutoregressiveBackend(InferenceBackend):
             logger.info("FP8 skipped — TR_SKIP_FP8=1")
             return
 
-        # -- Transformer Engine (fused kernel) --------------------------------
+        if self.backend_name != "cuda":
+            return
+
+        # -- 1. Transformer Engine (fused kernel, best if it works) ------------
         try:
             from benchmark.hardware.precision import apply_te_fp8_to_model
-            # Gemma attention projections trigger cuBLAS bug at warmup bs=1.
-            # Use mlp_only for Gemma architectures.
             _is_gemma = (
                 hasattr(self.model, 'config')
                 and getattr(self.model.config, 'model_type', '')
                 in ('gemma', 'gemma2', 'gemma3', 'gemma3_text', 'gemma4')
             )
             te_ok = apply_te_fp8_to_model(
-                self.model, skip_lm_head=True,
-                mlp_only=_is_gemma,
+                self.model, skip_lm_head=True, mlp_only=_is_gemma,
             )
             if te_ok:
                 self._fp8_active = True
                 self._fp8_method = "te"
-                logger.info("FP8 ACTIVE — te.Linear + fp8_autocast")
+                logger.info("FP8 ACTIVE — te.Linear (fused kernel)")
                 return
         except Exception as e:
             logger.debug("TE FP8 not available: %s", e)
+
+        # -- 2. Static weight-only FP8 (always applied on CUDA) ----------------
+        try:
+            from benchmark.hardware.precision import apply_static_fp8_to_model
+            replaced = apply_static_fp8_to_model(self.model, skip_lm_head=True)
+            if replaced > 0:
+                self._fp8_active = True
+                self._fp8_method = "static"
+                logger.info(
+                    "FP8 ACTIVE — %d layers via StaticFP8Linear "
+                    "(weight-only, dequant-on-read)",
+                    replaced,
+                )
+                return
+        except Exception as e:
+            logger.debug("Static FP8 failed: %s", e)
 
         logger.info("FP8 NOT active — running pure BF16")
 

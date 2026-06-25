@@ -75,7 +75,7 @@ VENV_DIR="${VENV_DIR:-.venv}"
 EXTRA_ARGS=()
 # ── H200 compatibility flags (from run_h200.sh) ──
 FORCE_CHECKPOINT=""            # Custom checkpoint interval
-DISABLE_FP8=false              # Disable FP8, use BF16
+DISABLE_FP8=false              # Skip FP8 entirely (TR_SKIP_FP8=1)
 SINGLE_GPU=false               # Force single-GPU
 TRT_PRECISION="fp16"           # fp16 | fp8 | int8
 TRT_CACHE_DIR=""               # TensorRT engine cache dir

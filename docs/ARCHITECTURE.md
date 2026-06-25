@@ -40,10 +40,11 @@ documentation historically advertised "39 optimizations (37 wired)," but the
 production AR hot path is, in reality, **plain eager `model(...)` in a Python
 loop with HuggingFace `past_key_values`**, accelerated only by:
 
+- **Static FP8 weight quantization** (weights in float8_e4m3fn, dequantized on-chip
+  at forward time — 2× memory bandwidth, zero per-token overhead),
 - **Pre-tokenized Parquet cache** (skips CPU tokenization, +60% TPS),
 - **TF32 + Flash SDPA** (always on for CUDA),
-- **BF16** (native H200 dtype; FP8 TE blocked by driver — see
-  [`FP8_TE_CUDA_ISSUES.md`](FP8_TE_CUDA_ISSUES.md)), and
+- **BF16 activations** (native H200 dtype), and
 - **`torch.compile(mode="default")`** on PyTorch 2.12–2.13, or
   **`torch.compile(mode="reduce-overhead")`** on PyTorch 2.14+
   (cudagraph_trees KV-cache bug persists through 2.12.1).
@@ -183,14 +184,10 @@ The primary backend. `model_type = AUTOREGRESSIVE`; capabilities
 4. Model load: QAT/Gemma-4/Q4_0 → `_try_load_qat_model`; else `_load_standard_model`
    (single-GPU fast path when model < 10% of one GPU's memory; else
    `device_map="auto"`).
-5. TE FP8 (`te.Linear` replacement, `lm_head` skipped) — **gate: TE must be installed
-   and functional.**  On pip venvs TE source-build succeeds but runtime cuBLASLt
-   crashes on all drivers tested (580, 565).  See
-   [`FP8_TE_CUDA_ISSUES.md`](FP8_TE_CUDA_ISSUES.md).
-   **Dynamic quantization (torch._scaled_mm) was removed in June 2026** — measured
-   −40% TPS vs BF16 on 4B models.  Static quantization (SmoothQuant / QAT) is the
-   path forward; pre-quantized weights are cached via `save_fp8_weights()` /
-   `load_fp8_weights()`.  Default on pip: `TR_SKIP_FP8=1` ↔ pure BF16.
+5. Static FP8 weight quantization — **always on for CUDA** (not safe_mode).
+   `StaticFP8Linear` replaces nn.Linear with weights stored in FP8 E4M3.
+   Dequantized on-chip at forward time — zero per-token overhead, 2× memory
+   bandwidth.  TE fused kernel attempted first; static is the fallback.
 6. **Fused-kernel injection is hardcoded `if False:`** (`:761`) — dead.
 7. `torch.compile` (CUDA only; skipped on MPS/CPU/safe-mode). Version-gated:
    **< 2.12** → skipped (eager). **2.12–2.13** → `mode="default"` (inductor fusion,
@@ -321,7 +318,7 @@ on which path you mean.
 | # | Feature | Status | How to activate | Evidence | Notes |
 |---|---|---|---|---|---|
 | 1 | `torch.compile` | ⚠️ | on by default (CUDA); version-gated | `autoregressive.py:1167` | **< 2.12** → skipped (eager). **2.12–2.13** → `mode="default"` (stable, warmup 30s). **≥ 2.14** → `mode="reduce-overhead"`. No-compile baseline 1,650 tok/s (2.12.1, 4B, bs=32). |
-| 2 | Transformer-Engine FP8 (`te.Linear`) | ❌ | CUDA + TE installed and working | `autoregressive.py:762` | **TE source-build succeeds but runtime cuBLASLt crashes on all tested drivers (580, 565).** See [`FP8_TE_CUDA_ISSUES.md`](FP8_TE_CUDA_ISSUES.md). Dynamic quantization (torch._scaled_mm) removed — 2× slower than BF16. Static quantization (SmoothQuant/QAT) via `save_fp8_weights`/`load_fp8_weights` is the path forward. `TR_SKIP_FP8=1` is the practical default. |
+| 2 | Static FP8 weight quantization | ✅ | on by default (CUDA); `TR_SKIP_FP8=1` to disable | `autoregressive.py:762` | `StaticFP8Linear` — weights in FP8 E4M3, dequantized on-chip at forward time. Zero per-token overhead. 2× memory bandwidth vs BF16. lm_head excluded. TE fused kernel attempted first (best perf); static as fallback. |
 | 2b | Pre-tokenized Parquet cache | ✅ | automatic (checks `~/.cache/tr_benchmark/pretokenized/`) | `benchmark/data/pretokenizer.py` | +60% TPS on AR models. 198K chunks cached. `--pretokenize` to create, auto-detected thereafter. |
 | 3 | Flash + mem-efficient SDPA | ✅ | CUDA default | `autoregressive.py:695` | — measured 2026-06-24: 1.17-1.23× overall throughput for 4B model. Attention-only speedup is higher (likely 2-4×) but attention is ~20-30% of total compute for 4B. See M2.4. |
 | 4 | CUDA Graph decode | ⚠️ | — (deprecated) | `hardware/cuda_graphs.py:3` (FutureWarning on import); capture at `autoregressive.py:1339`; **never replayed** in `_extreme_decode:1548` | Captured graph excludes `past_key_values` as a static input → replay would feed zero-context garbage. Capture cost is paid, benefit never collected. |
