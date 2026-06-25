@@ -730,13 +730,23 @@ class BenchmarkHarness:
 
         self._init_translation_infra(device_info)
 
-        # ── PagedAttention pool ──
+        # ── PagedAttention pool — use EXACT model config, not defaults ──
         backend = self.engine.backend
         kv_cfg = backend.kv_cache_config
+        # Fall back to model.config for head_dim to avoid 256 vs 160 mismatch
+        # on Gemma 3 4B (2560 hidden / 16 heads = 160, not 256).
+        _model_cfg = getattr(backend.model, 'config', None) if backend.model else None
+        _head_dim = kv_cfg.get("head_dim")
+        if _head_dim is None and _model_cfg is not None:
+            _num_attn = getattr(_model_cfg, 'num_attention_heads', None) or 1
+            _hidden = getattr(_model_cfg, 'hidden_size', 2560)
+            _head_dim = _hidden // max(_num_attn, 1)
+        if _head_dim is None:
+            _head_dim = 256
         paged_kv = PagedKVCache(
             num_layers=kv_cfg.get("num_layers", 24),
             num_kv_heads=kv_cfg.get("num_kv_heads", 4),
-            head_dim=kv_cfg.get("head_dim", 256),
+            head_dim=_head_dim,
             block_size=16,
             num_blocks=1024,
             dtype=backend.precision_config.master_dtype
