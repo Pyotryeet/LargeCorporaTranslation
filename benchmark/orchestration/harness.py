@@ -725,6 +725,7 @@ class BenchmarkHarness:
             batch_size=1,  # single-sequence batches for dynamic scheduling
             prefetch_workers=self.config.data.prefetch_workers,
             backend=device_info.backend,
+            pretokenized_loader=self._resolve_pretokenized_loader(),
         )
 
         self._init_translation_infra(device_info)
