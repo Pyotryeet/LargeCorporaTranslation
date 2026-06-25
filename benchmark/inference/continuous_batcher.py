@@ -666,6 +666,7 @@ class ContinuousBatcher:
             outputs = self.engine.model(
                 input_ids=batch_input_ids,
                 past_key_values=self._paged_cache,
+                position_ids=batch_positions,
                 use_cache=True,
             )
 
