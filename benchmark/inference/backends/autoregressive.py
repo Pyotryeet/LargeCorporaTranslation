@@ -1884,15 +1884,41 @@ class AutoregressiveBackend(InferenceBackend):
     @property
     def kv_cache_config(self) -> dict[str, Any]:
         cfg = getattr(self.model, "config", None) if self.model is not None else None
+        # Gemma 3/4 models nest config in a ``text_config`` sub-object.
+        tc = getattr(cfg, "text_config", cfg) if cfg is not None else None
+        _resolve = lambda *keys: next((k for k in keys if k is not None), None)
+
+        num_layers = _resolve(
+            getattr(tc, "num_hidden_layers", None),
+            getattr(cfg, "num_hidden_layers", None) if cfg is not None else None,
+            DEFAULT_NUM_LAYERS,
+        )
+        num_kv_heads = _resolve(
+            getattr(tc, "num_key_value_heads", None),
+            getattr(cfg, "num_key_value_heads", None) if cfg is not None else None,
+            getattr(tc, "num_attention_heads", None),
+            getattr(cfg, "num_attention_heads", None) if cfg is not None else None,
+            DEFAULT_NUM_KV_HEADS,
+        )
+        num_attn_heads = _resolve(
+            getattr(tc, "num_attention_heads", None),
+            getattr(cfg, "num_attention_heads", None) if cfg is not None else None,
+        )
+        hidden_size = _resolve(
+            getattr(tc, "hidden_size", None),
+            getattr(cfg, "hidden_size", None) if cfg is not None else None,
+            DEFAULT_HIDDEN_SIZE,
+        )
+        head_dim = _resolve(
+            getattr(tc, "head_dim", None),
+            getattr(cfg, "head_dim", None) if cfg is not None else None,
+            hidden_size // max(num_attn_heads or 1, 1) if num_attn_heads else None,
+            DEFAULT_HEAD_DIM,
+        )
         return {
-            "num_layers": getattr(cfg, "num_hidden_layers", None)
-                          or self.config.extra.get("num_layers", DEFAULT_NUM_LAYERS),
-            "num_kv_heads": getattr(cfg, "num_key_value_heads", None)
-                             or getattr(cfg, "num_attention_heads", None)
-                             or self.config.extra.get("num_kv_heads", DEFAULT_NUM_KV_HEADS),
-            "head_dim": getattr(cfg, "head_dim", None)
-                        or (getattr(cfg, "hidden_size", DEFAULT_HIDDEN_SIZE) // max(getattr(cfg, "num_attention_heads", 1) or 1, 1))
-                        or self.config.extra.get("head_dim", DEFAULT_HEAD_DIM),
+            "num_layers": num_layers,
+            "num_kv_heads": num_kv_heads,
+            "head_dim": head_dim,
             "max_seq_len": self.max_input_tokens + self.max_new_tokens,
         }
 

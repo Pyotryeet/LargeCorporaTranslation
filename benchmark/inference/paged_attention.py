@@ -617,6 +617,15 @@ class PagedCache:
     def crop(self, max_length: int) -> None:
         pass
 
+    # ── Cache protocol extensions (required by HF >= 4.45) ───────────────
+
+    @property
+    def is_initialized(self) -> bool:
+        return True
+
+    def num_layers(self) -> int:
+        return len(self._layers)
+
     @property
     def seq_ids(self) -> list[int]:
         return list(self._seq_ids)
