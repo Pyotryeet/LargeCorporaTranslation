@@ -347,154 +347,12 @@ def get_dtype(
 
 
 # ---------------------------------------------------------------------------
-# Native FP8 — uses torch._scaled_mm (no Transformer Engine dependency)
-# ---------------------------------------------------------------------------
-
-def _is_hopper() -> bool:
-    """Return True if the current CUDA device is Hopper (SM 9.0+)."""
-    try:
-        import torch
-        if not torch.cuda.is_available():
-            return False
-        major, _minor = torch.cuda.get_device_capability()
-        return major >= 9
-    except Exception:
-        return False
-
-
-class NativeFP8Linear(torch.nn.Module):
-    """An nn.Linear replacement that uses ``torch._scaled_mm`` for FP8 inference.
-
-    Weights are quantized to ``torch.float8_e4m3fn`` at construction time
-    with a per-tensor scale.  Inputs are dynamically quantized per forward
-    pass.  This requires a Hopper GPU (SM 9.0+) and PyTorch >= 2.5.
-
-    This module is a **drop-in replacement** for ``nn.Linear`` when the
-    caller wraps the forward pass with ``native_fp8_autocast()`` or sets
-    ``module.use_fp8 = True``.
-    """
-
-    def __init__(self, linear: torch.nn.Module, *, use_fp8: bool = True):
-        super().__init__()
-        self.in_features = linear.in_features
-        self.out_features = linear.out_features
-        self.use_fp8 = use_fp8
-
-        # Quantize weight to FP8 at init time.
-        w = linear.weight.data.to(torch.float32)
-        w_max = w.abs().max()
-        # FP8 E4M3 representable range: ±448 in float32 scale.
-        self.weight_scale = (w_max / 448.0).to(torch.float32)
-        w_fp8 = (w / self.weight_scale).clamp(-448.0, 447.0).to(torch.float8_e4m3fn)
-        self.register_buffer("weight_fp8", w_fp8)
-
-        if linear.bias is not None:
-            self.bias = torch.nn.Parameter(linear.bias.data.clone())
-        else:
-            self.bias = None
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        if not self.use_fp8 or not x.is_cuda:
-            w_bf16 = self.weight_fp8.to(torch.bfloat16) * self.weight_scale.to(torch.bfloat16)
-            return torch.nn.functional.linear(x, w_bf16, self.bias)
-
-        # torch._scaled_mm requires exactly 2-D inputs.  Flatten batch dims.
-        orig_shape = x.shape
-        if x.dim() > 2:
-            x = x.reshape(-1, orig_shape[-1])
-
-        # Quantize activations dynamically.  This is the per-token FP8 tax.
-        # TE avoids it by fusing quantize+matmul in one CUDA kernel.
-        # For models >= 8K hidden dim or bs >= 256, the matmul speedup
-        # outweighs this cost.
-        x_amax = x.abs().max()
-        if x_amax == 0:
-            x_amax = torch.tensor(1.0, device=x.device, dtype=torch.float32)
-        x_scale = (x_amax.to(torch.float32) / 448.0).to(torch.float32)
-        x_fp8 = (x.to(torch.float32) / x_scale).clamp(-448.0, 447.0).to(torch.float8_e4m3fn)
-
-        out = torch._scaled_mm(
-            x_fp8, self.weight_fp8.t(),
-            scale_a=x_scale, scale_b=self.weight_scale,
-            out_dtype=torch.bfloat16,
-        )
-
-        if self.bias is not None:
-            out = out + self.bias
-
-        if len(orig_shape) > 2:
-            out = out.reshape(orig_shape[:-1] + (self.out_features,))
-        return out
-
-
-def apply_native_fp8_to_model(
-    model: torch.nn.Module,
-    *,
-    skip_lm_head: bool = True,
-    mlp_only: bool = True,
-) -> int:
-    """Replace ``nn.Linear`` layers with :class:`NativeFP8Linear` for FP8 inference.
-
-    This is the **Transformer-Engine-free** FP8 path.  It works on Hopper
-    GPUs with PyTorch >= 2.5 using the built-in ``torch._scaled_mm`` kernel.
-    No ``transformer_engine`` dependency is required.
-
-    Parameters
-    ----------
-    model : nn.Module
-        The loaded PyTorch model in BF16/FP16.
-    skip_lm_head : bool
-        If True, keep the lm_head in the original dtype (FP8 precision loss
-        on the vocabulary projection hurts token selection).
-    mlp_only : bool
-        If True (default), only replace MLP layers (gate_proj, up_proj,
-        down_proj).  Attention projections (q_proj, k_proj, v_proj, o_proj)
-        stay in BF16 — their small matmul sizes make dynamic FP8 quantization
-        overhead dominate the compute savings.
-
-    Returns
-    -------
-    int
-        Number of layers replaced.
-    """
-    import torch
-
-    if not _is_hopper():
-        logger.info("Native FP8 skipped — requires Hopper GPU (SM 9.0+).")
-        return 0
-
-    # Attention projection names — small matmuls, skip when mlp_only=True.
-    _ATTN_NAMES = {"q_proj", "k_proj", "v_proj", "o_proj"}
-
-    replaced = 0
-
-    def _replace(module: torch.nn.Module, parent_name: str = ""):
-        nonlocal replaced
-        for name, child in module.named_children():
-            full_name = f"{parent_name}.{name}" if parent_name else name
-            if skip_lm_head and (name == "lm_head" or full_name.endswith(".lm_head")):
-                continue
-            if mlp_only and name in _ATTN_NAMES:
-                continue
-            if isinstance(child, torch.nn.Linear) and not isinstance(child, NativeFP8Linear):
-                setattr(module, name, NativeFP8Linear(child))
-                replaced += 1
-            else:
-                _replace(child, full_name)
-
-    _replace(model)
-
-    if replaced > 0:
-        logger.info(
-            "Native FP8: %d nn.Linear replaced (MLP-only=%s, "
-            "torch._scaled_mm, no TE).",
-            replaced, mlp_only,
-        )
-    return replaced
-
-
-# ---------------------------------------------------------------------------
 # FP8 weight cache — quantize Linear weights once, cache to disk
+#
+# This is STATIC weight-only quantization.  Weights are quantized to FP8
+# E4M3 once and cached to disk, eliminating dynamic per-token activation
+# quantization overhead.  For SmoothQuant or QAT, the pre-quantized
+# weights + scales are loaded from cache and fed directly to the model.
 # ---------------------------------------------------------------------------
 
 def _model_weight_hash(model: torch.nn.Module, model_path: str) -> str:
@@ -536,7 +394,7 @@ def save_fp8_weights(
 
     saved = 0
     for name, mod in model.named_modules():
-        if isinstance(mod, torch.nn.Linear) and not isinstance(mod, NativeFP8Linear):
+        if isinstance(mod, torch.nn.Linear):
             if "lm_head" in name or name == "lm_head":
                 continue
             w = mod.weight.data.to(torch.float32)
@@ -567,9 +425,11 @@ def load_fp8_weights(
 ) -> int:
     """Load pre-quantized FP8 weights from cache and set them on Linear layers.
 
-    Each layer's FP8 weight replaces the BF16/FP32 weight.  The scale is
-    stored on the module as ``_fp8_weight_scale`` for use by a subsequent
-    ``NativeFP8Linear`` wrapper or direct ``torch._scaled_mm`` calls.
+    Each layer's FP8 weight and per-tensor scale are stored as registered
+    buffers (``_fp8_weight``, ``_fp8_weight_scale``) on the module.  These
+    are consumed by **static quantization** paths (SmoothQuant / QAT) —
+    weights are dequantized to BF16 at forward time without any per-token
+    activation quantization overhead.
 
     Returns the number of layers loaded from cache (0 = cache miss).
     """
@@ -588,7 +448,7 @@ def load_fp8_weights(
 
     loaded = 0
     for name, mod in model.named_modules():
-        if isinstance(mod, torch.nn.Linear) and not isinstance(mod, NativeFP8Linear):
+        if isinstance(mod, torch.nn.Linear):
             if "lm_head" in name or name == "lm_head":
                 continue
             fname = name.replace(".", "_")
@@ -597,8 +457,8 @@ def load_fp8_weights(
                 continue
             try:
                 tensors = load_file(path)
-                # Store FP8 weight + scale on the module — NativeFP8Linear
-                # consumes these, or a subsequent wrap pass will.
+                # Store FP8 weight + scale as registered buffers — consumed
+                # by static quantization paths (SmoothQuant / QAT).
                 mod.register_buffer("_fp8_weight", tensors["weight"])
                 mod.register_buffer("_fp8_weight_scale", tensors["scale"])
                 loaded += 1
@@ -610,11 +470,6 @@ def load_fp8_weights(
             "FP8 weight cache hit: %d layers from %s", loaded, cache_dir,
         )
     return loaded
-
-
-def native_fp8_autocast() -> bool:
-    """Return True if native FP8 is available (Hopper + PyTorch >= 2.5)."""
-    return _is_hopper()
 
 
 # ---------------------------------------------------------------------------

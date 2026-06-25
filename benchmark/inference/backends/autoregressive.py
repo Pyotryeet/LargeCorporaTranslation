@@ -1928,22 +1928,20 @@ class AutoregressiveBackend(InferenceBackend):
             "max_seq_len": self.max_input_tokens + self.max_new_tokens,
         }
 
-    # ── FP8 activation — always attempted on CUDA (non-safe-mode) ───────────
+    # ── FP8 activation — Transformer Engine only ───────────────────────────
 
     def _apply_fp8(self) -> None:
-        """Enable FP8 compute for Linear layers.
+        """Try to enable FP8 compute via Transformer Engine.
 
-        Tries Transformer Engine first (fused quantize+matmul kernel, best
-        performance).  Falls back to native torch._scaled_mm (works on any
-        Hopper GPU with PyTorch >= 2.5, no external deps).  Both paths are
-        always attempted — no model-size gating.
-
-        Sets ``self._fp8_active`` and ``self._fp8_method``.
+        TE provides fused quantize+matmul kernel — the only FP8 path that
+        avoids per-token quantization overhead.  Dynamic quantization
+        (``torch._scaled_mm``) was measured **2× slower than BF16** on 4B
+        models and has been removed in favor of static quantization
+        (SmoothQuant / QAT via ``save_fp8_weights`` / ``load_fp8_weights``).
 
         Environment overrides
         ---------------------
         ``TR_SKIP_FP8=1``     Skip FP8 entirely (pure BF16).
-        ``TR_FORCE_NATIVE_FP8=1``  Skip TE, go straight to native.
         """
         self._fp8_active = False
         self._fp8_method = "none"
@@ -1952,60 +1950,35 @@ class AutoregressiveBackend(InferenceBackend):
             logger.info("FP8 skipped — TR_SKIP_FP8=1")
             return
 
-        _force_native = os.environ.get("TR_FORCE_NATIVE_FP8") == "1"
-
-        # -- Path A: Transformer Engine (fused kernel) -----------------------
-        if not _force_native:
-            try:
-                from benchmark.hardware.precision import apply_te_fp8_to_model
-                # Gemma 3/4 attention projections trigger a cuBLAS bug in
-                # TE's cublaslt_gemm path at batch=1 warmup.  Use mlp_only
-                # for Gemma architectures — FP8 on gate/up/down (MLP) still
-                # gives ~50% of the full FP8 benefit without the crash.
-                _is_gemma = (
-                    hasattr(self.model, 'config')
-                    and getattr(self.model.config, 'model_type', '')
-                    in ('gemma', 'gemma2', 'gemma3', 'gemma3_text', 'gemma4')
-                )
-                te_ok = apply_te_fp8_to_model(
-                    self.model, skip_lm_head=True,
-                    mlp_only=_is_gemma,
-                )
-                if te_ok:
-                    self._fp8_active = True
-                    self._fp8_method = "te"
-                    logger.info("FP8 ACTIVE — te.Linear + fp8_autocast")
-                    return
-            except Exception as e:
-                logger.debug("TE FP8 not available: %s", e)
-
-        # -- Path B: Native torch._scaled_mm (always attempted as fallback) --
+        # -- Transformer Engine (fused kernel) --------------------------------
         try:
-            from benchmark.hardware.precision import apply_native_fp8_to_model
-            replaced = apply_native_fp8_to_model(
-                self.model, skip_lm_head=True, mlp_only=True,
+            from benchmark.hardware.precision import apply_te_fp8_to_model
+            # Gemma attention projections trigger cuBLAS bug at warmup bs=1.
+            # Use mlp_only for Gemma architectures.
+            _is_gemma = (
+                hasattr(self.model, 'config')
+                and getattr(self.model.config, 'model_type', '')
+                in ('gemma', 'gemma2', 'gemma3', 'gemma3_text', 'gemma4')
             )
-            if replaced > 0:
+            te_ok = apply_te_fp8_to_model(
+                self.model, skip_lm_head=True,
+                mlp_only=_is_gemma,
+            )
+            if te_ok:
                 self._fp8_active = True
-                self._fp8_method = "native"
-                logger.info(
-                    "FP8 ACTIVE — %d MLP layers via torch._scaled_mm "
-                    "(native, no TE)",
-                    replaced,
-                )
+                self._fp8_method = "te"
+                logger.info("FP8 ACTIVE — te.Linear + fp8_autocast")
                 return
         except Exception as e:
-            logger.debug("Native FP8 not available: %s", e)
+            logger.debug("TE FP8 not available: %s", e)
 
         logger.info("FP8 NOT active — running pure BF16")
 
     def _fp8_context(self):
-        """Wrap forward passes in the appropriate FP8 context.
+        """Wrap forward passes in fp8_autocast when TE is active.
 
-        For TE: returns ``te.fp8_autocast(enabled=True)``.
-        For native FP8: returns ``nullcontext()`` (quantization happens in
-        the module forward, not via an autocast region).
-        For no FP8: returns ``nullcontext()``.
+        Returns ``te.fp8_autocast(enabled=True)`` for TE, or
+        ``contextlib.nullcontext()`` for BF16.
         """
         if not getattr(self, '_fp8_active', False):
             return contextlib.nullcontext()
@@ -2014,7 +1987,6 @@ class AutoregressiveBackend(InferenceBackend):
             from benchmark.hardware.precision import fp8_autocast_context
             return fp8_autocast_context()
 
-        # Native FP8: quantization is in-module, no external context needed.
         return contextlib.nullcontext()
 
     def close(self) -> None:
