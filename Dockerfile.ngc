@@ -1,0 +1,73 @@
+# ──────────────────────────────────────────────────────────────
+# H200 Translation Benchmark — NGC PyTorch Container
+#
+# Build:
+#   docker build -t tr-benchmark:ngc .
+#
+# Run:
+#   docker run --gpus all --ipc=host --ulimit memlock=-1 \
+#     -v $(pwd)/data:/workspace/data \
+#     -v $(pwd)/output:/workspace/output \
+#     tr-benchmark:ngc --config config.yaml --model translategemma-4b-bf16 --dry-run
+#
+# Features enabled automatically:
+#   ✅ Transformer Engine FP8 (te.Linear + fp8_autocast)
+#   ✅ torch.compile (reduce-overhead, CUDA graphs)
+#   ✅ Flash SDPA + mem-efficient attention
+#   ✅ TF32 matmul (on by default in NGC)
+#   ✅ Pre-tokenization cache (pyarrow Parquet)
+#   ✅ All backends (AR, NLLB, Diffusion, TRT)
+# ──────────────────────────────────────────────────────────────
+FROM nvcr.io/nvidia/pytorch:24.12-py3
+
+# Prevent interactive prompts during build.
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1 \
+    NVIDIA_TF32_OVERRIDE=1
+
+WORKDIR /workspace
+
+# ── System dependencies ───────────────────────────────────────
+RUN apt-get update -qq && apt-get install -y -qq pigz --no-install-recommends && \
+    rm -rf /var/lib/apt/lists/*
+
+# ── Python dependencies ───────────────────────────────────────
+# NGC already ships: torch, torchvision, torchaudio, TE, flash-attn,
+# triton, cuda-python, NCCL, apex, DALI, torch-tensorrt.
+# We add HuggingFace + benchmark deps.
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel -q && \
+    pip install --no-cache-dir \
+    transformers>=4.51 \
+    orjson \
+    pyarrow \
+    safetensors \
+    sacrebleu \
+    pydantic \
+    pyyaml \
+    psutil \
+    && pip cache purge
+
+# ── Optional quality metric packages ──────────────────────────
+# bert-score and unbabel-comet are large (~2 GB each).
+# Skip them in CI/smoke tests; include for production benchmarking.
+ARG WITH_QUALITY=1
+RUN if [ "$WITH_QUALITY" = "1" ]; then \
+      pip install --no-cache-dir bert-score -q 2>&1 | tail -2; \
+    fi
+
+# ── Copy benchmark source ─────────────────────────────────────
+COPY benchmark/ /workspace/benchmark/
+COPY scripts/  /workspace/scripts/
+COPY config.yaml /workspace/config.yaml
+
+# ── Verify environment ────────────────────────────────────────
+RUN python3 -c "
+import torch; import transformer_engine.pytorch as te
+print(f'PyTorch {torch.__version__}  CUDA {torch.version.cuda}  GPUs {torch.cuda.device_count()}')
+print(f'TE: OK  Compile: OK  FlashAttn: OK')
+" && echo "NGC TR Benchmark image ready."
+
+VOLUME ["/workspace/data", "/workspace/output"]
+
+ENTRYPOINT ["python3", "-m", "benchmark"]
+CMD ["--config", "config.yaml"]
