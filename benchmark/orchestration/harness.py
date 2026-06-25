@@ -806,8 +806,8 @@ class BenchmarkHarness:
                     batcher.submit(batch.input_ids[i:i + 1], raw)
                 self.pipeline.release_batch(batch)
 
-                # Run decode steps while batch is full enough.
-                while batcher.running_count() > 0:
+                # Run decode steps while there are active or waiting sequences.
+                while batcher.running_count() > 0 or batcher.waiting_count() > 0:
                     try:
                         completed = batcher.step()
                     except torch.cuda.OutOfMemoryError as exc:
