@@ -688,9 +688,6 @@ def apply_te_fp8_to_model(
             "FP8: %d te.Linear replaced (mlp_only=%s, lm_head excluded).",
             replaced, mlp_only,
         )
-            "Forward passes must be wrapped in te.fp8_autocast().",
-            replaced,
-        )
     else:
         logger.info("FP8: no nn.Linear layers found to replace.")
 
