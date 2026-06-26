@@ -79,8 +79,6 @@ from benchmark.inference.backends.protocol import (
 # ── Lazy imports for GPU-only dependencies (guarded so tests don't crash on CPU) ──
 bnb = None
 precompile_all_kernels = None
-KVQuantConfig = None
-QuantizedKVCache = None
 PagedKVCache = None
 
 try:
@@ -90,11 +88,6 @@ except (ImportError, RuntimeError):
 
 try:
     from benchmark.hardware.jit_compiler import precompile_all_kernels  # noqa: E402
-except (ImportError, RuntimeError):
-    pass
-
-try:
-    from benchmark.hardware.kv_cache_quant import KVQuantConfig, QuantizedKVCache  # noqa: E402
 except (ImportError, RuntimeError):
     pass
 
@@ -785,11 +778,7 @@ class AutoregressiveBackend(InferenceBackend):
                 "once model forward hooks are in place."
             )
 
-        # ── 10. INT8 KV-cache quantization ──
-        if self._use_int8_kv_cache:
-            self._init_kv_cache_quantization()
-
-        # ── 11. Speculative decoder (v3.4) ──
+        # ── 10. Speculative decoder (v3.4) ──
         if self._use_speculative:
             from benchmark.inference.speculative import create_speculative_decoder
 
@@ -861,21 +850,6 @@ class AutoregressiveBackend(InferenceBackend):
 
         # ── Hot-path decode ──
         reg.register(CapabilityEntry(
-            feature_id="cuda_graph_replay", display_name="CUDA Graph Replay",
-            state=ActivationState.INERT,
-            reason="Captured graph omits past_key_values as static input; "
-                   "_extreme_decode uses standard model() forwards. "
-                   "FutureWarning emitted on import.",
-            phase="hot_path",
-        ))
-        reg.register(CapabilityEntry(
-            feature_id="fused_triton_kernels", display_name="Fused Triton Kernels",
-            state=ActivationState.INERT,
-            reason="Injection hardcoded if False: (autoregressive.py:766) — "
-                   "Triton ops require torch.compile inductor graph",
-            phase="hot_path",
-        ))
-        reg.register(CapabilityEntry(
             feature_id="jit_cuda_kernels", display_name="JIT CUDA C++ Kernels",
             state=ActivationState.BROKEN,
             reason="Sources set to None (architecturally broken). Disabled 2026-06-23.",
@@ -902,13 +876,6 @@ class AutoregressiveBackend(InferenceBackend):
             state=ActivationState.INERT,
             reason="_use_paged_attention hardcoded False (autoregressive.py:596). "
                    "Real paged KV only via CB path.",
-            phase="hot_path",
-        ))
-        reg.register(CapabilityEntry(
-            feature_id="int8_kv_quant", display_name="INT8 KV-Cache Quant",
-            state=ActivationState.INERT,
-            reason="Object constructed but never update()/get()-ed (autoregressive.py:1184). "
-                   "HF past_key_values used instead.",
             phase="hot_path",
         ))
         reg.register(CapabilityEntry(
@@ -1212,28 +1179,6 @@ class AutoregressiveBackend(InferenceBackend):
             logger.warning("PagedAttention init failed — using HF default KV-cache: %s", e)
             self._paged_kv = None
 
-    def _init_kv_cache_quantization(self) -> None:
-        """Initialize INT8 KV-cache quantization (~1.5-2× cache savings — literature claim; not measured on 4B H200)."""
-        try:
-            self._kv_quant_config = KVQuantConfig(bits=8, group_size=128, symmetric=True)
-            self._kv_quant_cache = QuantizedKVCache(
-                self._kv_quant_config,
-                num_layers=self.kv_cache_config.get("num_layers", DEFAULT_NUM_LAYERS),
-            )
-            logger.info(
-                "INT8 KV-cache quantization: %.1f× compression",
-                self._kv_quant_config.compression_ratio(),
-            )
-            logger.warning(
-                "INT8 KV-cache quantization object created but NOT WIRED into the decode loop. "
-                "HF past_key_values are used instead — no quantization benefit. "
-                "See ARCHITECTURE.md §8 #9."
-            )
-        except Exception as e:
-            logger.warning("KV-cache quant init failed: %s", e)
-            self._kv_quant_cache = None
-
-    # ═════════════════════════════════════════════════════════════════════
     def warmup(self, batches: int = 20) -> None:
         if not self._loaded:
             raise RuntimeError("Model not loaded")

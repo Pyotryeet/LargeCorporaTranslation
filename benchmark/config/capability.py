@@ -218,8 +218,6 @@ FEATURE_IDS = {
     "torch_compile":         "torch.compile(reduce-overhead)",
     "te_fp8":                "Transformer-Engine FP8",
     # Hot-path decode
-    "cuda_graph_replay":     "CUDA Graph Decode Replay",
-    "fused_triton_kernels":  "Fused Triton Kernels (RMSNorm, SwiGLU)",
     "jit_cuda_kernels":      "JIT CUDA C++ Kernels (QKV+RoPE, SwiGLU)",
     "jit_metal_kernels":     "JIT Metal Kernels (RMSNorm+Residual)",
     "cuda_malloc_async":     "cudaMallocAsync Allocator",
@@ -227,7 +225,6 @@ FEATURE_IDS = {
     # Memory / KV
     "paged_kv_cache_ar":     "PagedAttention KV-Cache (AR path)",
     "paged_kv_cache_cb":     "PagedAttention KV-Cache (CB path)",
-    "int8_kv_quant":         "INT8 KV-Cache Quantization",
     "continuous_batching":   "Continuous Batching",
     "pinned_memory":         "Pinned Memory Pipeline",
     "weight_quantization":   "Weight Quantization (INT4/INT8)",
