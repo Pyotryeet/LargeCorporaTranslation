@@ -1,9 +1,10 @@
 # =============================================================================
-# Turkish Corpus Translation Benchmark — MPS / Local Development Configuration
+# Turkish Corpus Translation Benchmark — H200 / CUDA Production Configuration
 # =============================================================================
-# TranslateGemma 4B or Ministral 3B on Apple Silicon (MPS) or CUDA.
+# TranslateGemma 4B or Ministral 3B on NVIDIA H200 (CUDA).
 #
 # The codebase handles model dispatch automatically:
+#   - CUDA: Static FP8 weights, TF32, Flash SDPA (see docs/ARCHITECTURE.md §8)
 #   - MPS: BF16 native, direct-to-Metal weight loading via safetensors
 #   - CUDA: FP8 via Transformer Engine (default); falls back to BF16
 #   - Quantization: use the "quantization" field (bf16 | int8 | int4)

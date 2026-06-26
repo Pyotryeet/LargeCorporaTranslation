@@ -78,16 +78,10 @@ from benchmark.inference.backends.protocol import (
 
 # ── Lazy imports for GPU-only dependencies (guarded so tests don't crash on CPU) ──
 bnb = None
-precompile_all_kernels = None
 PagedKVCache = None
 
 try:
     import bitsandbytes as bnb  # noqa: E402
-except (ImportError, RuntimeError):
-    pass
-
-try:
-    from benchmark.hardware.jit_compiler import precompile_all_kernels  # noqa: E402
 except (ImportError, RuntimeError):
     pass
 
@@ -747,21 +741,6 @@ class AutoregressiveBackend(InferenceBackend):
         # uses CUDA graphs internally, defeating the purpose of safe mode.
         if self.use_torch_compile and self.backend_name != "cpu" and not self._safe_mode:
             self._apply_extreme_compile()
-
-        # ── 8b. JIT-compiled CUDA C++ kernels (EXTREME) ──
-        if self.backend_name == "cuda":
-            try:
-                n_jit = precompile_all_kernels()
-                if n_jit > 0:
-                    self._jit_kernels_active = True
-                    logger.info("JIT-compiled %d CUDA kernels (cached)", n_jit)
-                else:
-                    self._jit_kernels_active = False
-            except Exception as e:
-                logger.debug("JIT kernels unavailable (nvcc/Triton not found): %s", e)
-                self._jit_kernels_active = False
-        else:
-            self._jit_kernels_active = False
 
         # ── 9. PagedAttention pool (EXTREME) ──
         if self._use_paged_attention and self.backend_name == "cuda":

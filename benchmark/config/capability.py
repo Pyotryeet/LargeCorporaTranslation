@@ -218,8 +218,6 @@ FEATURE_IDS = {
     "torch_compile":         "torch.compile(reduce-overhead)",
     "te_fp8":                "Transformer-Engine FP8",
     # Hot-path decode
-    "jit_cuda_kernels":      "JIT CUDA C++ Kernels (QKV+RoPE, SwiGLU)",
-    "jit_metal_kernels":     "JIT Metal Kernels (RMSNorm+Residual)",
     "cuda_malloc_async":     "cudaMallocAsync Allocator",
     "speculative_decode":    "Speculative Decoding",
     # Memory / KV
