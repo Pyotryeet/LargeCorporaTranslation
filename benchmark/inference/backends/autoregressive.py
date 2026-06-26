@@ -78,28 +78,13 @@ from benchmark.inference.backends.protocol import (
 
 # ── Lazy imports for GPU-only dependencies (guarded so tests don't crash on CPU) ──
 bnb = None
-triton = None
-CUDAGraphDecoder = None
-CUDAGraphPool = None
 precompile_all_kernels = None
 KVQuantConfig = None
 QuantizedKVCache = None
-_fused_rms_norm_fn = None
-_fused_swiglu_fn = None
 PagedKVCache = None
 
 try:
     import bitsandbytes as bnb  # noqa: E402
-except (ImportError, RuntimeError):
-    pass
-
-try:
-    import triton  # noqa: E402
-except (ImportError, RuntimeError):
-    pass
-
-try:
-    from benchmark.hardware.cuda_graphs import CUDAGraphDecoder, CUDAGraphPool  # noqa: E402
 except (ImportError, RuntimeError):
     pass
 
@@ -114,13 +99,6 @@ except (ImportError, RuntimeError):
     pass
 
 try:
-    from benchmark.hardware.fused_ops import fused_rms_norm_residual, fused_swiglu_gate_up  # noqa: E402
-    _fused_rms_norm_fn = fused_rms_norm_residual
-    _fused_swiglu_fn = fused_swiglu_gate_up
-except (ImportError, RuntimeError):
-    pass
-
-try:
     from benchmark.inference.paged_attention import PagedKVCache  # noqa: E402
 except (ImportError, RuntimeError):
     pass
@@ -129,7 +107,6 @@ logger = logging.getLogger(__name__)
 
 # ── Central constants (single source of truth) ────────────────────────────────
 from benchmark.config.constants import (  # noqa: E402
-    CUDA_GRAPH_DEFAULT_BATCH_SIZE,
     DEFAULT_HEAD_DIM,
     DEFAULT_HIDDEN_SIZE,
     DEFAULT_NUM_KV_HEADS,
@@ -591,7 +568,6 @@ class AutoregressiveBackend(InferenceBackend):
         # CUDA graph capture disabled — the captured graph omits past_key_values
         # as a static input, so replay would produce garbage. _extreme_decode
         # uses standard model() forwards instead. See cuda_graphs.py deprecation.
-        self._use_cuda_graph: bool = False
         # PagedAttention is unconditionally disabled because no model in the
         # inference hot path has been modified to consume paged KV blocks.
         # PagedKVCache blocks can be written but the model's attention layers
@@ -605,7 +581,6 @@ class AutoregressiveBackend(InferenceBackend):
         self._use_paged_attention: bool = False
         self._use_quantized_weights: bool = extra.get("use_quantized_weights", False)
         self._use_int8_kv_cache: bool = extra.get("use_int8_kv_cache", False)
-        self._use_fused_kernels: bool = extra.get("use_fused_kernels", True)
 
         # ── Speculative decoding (v3.4) ──
         self._use_speculative: bool = extra.get("use_speculative", False)
@@ -618,11 +593,9 @@ class AutoregressiveBackend(InferenceBackend):
         # ── Safe mode: disable all experimental/risky optimizations ──
         self._safe_mode: bool = extra.get("safe_mode", False)
         if self._safe_mode:
-            self._use_cuda_graph = False
             self._use_paged_attention = False
             self._use_quantized_weights = False
             self._use_int8_kv_cache = False
-            self._use_fused_kernels = False
             self._use_speculative = False
             logger.info(
                 "SAFE MODE active — CUDA graphs, paged attention, "
@@ -631,20 +604,15 @@ class AutoregressiveBackend(InferenceBackend):
                 "Using standard HF generate path only."
             )
 
-        # Configured batch size (set by harness after tuning); used for
-        # CUDA graph capture at the actual production batch size.
-        self._configured_batch_size: int = extra.get("batch_size", CUDA_GRAPH_DEFAULT_BATCH_SIZE)
+        # Configured batch size (set by harness after tuning).
+        self._configured_batch_size: int = extra.get("batch_size", 4)
 
-        # CUDA Graph pool (captured after warmup).
-        self._graph_decoder: Optional["CUDAGraphDecoder"] = None
-        self._graph_pool: Optional["CUDAGraphPool"] = None
+        # PagedAttention cache (optional, replaces HF KV-cache).
 
         # PagedAttention cache (optional, replaces HF KV-cache).
         self._paged_kv: Any = None
 
         # Fused kernel availability.
-        self._fused_rms_norm: Any = None
-        self._fused_swiglu: Any = None
 
         # Capability registry (populated at end of load()).
         self._capability_registry: Any = None
@@ -780,8 +748,6 @@ class AutoregressiveBackend(InferenceBackend):
         # "Pointer argument cannot be accessed from Triton (cpu tensor?)".
         # Since compile is disabled (PyTorch 2.11 cudagraph_trees regression),
         # fused kernel injection is also disabled — eager PyTorch ops are used.
-        if False:  # was: self._use_fused_kernels and backend=="cuda" and not compile
-            self._inject_fused_kernels()
 
         # ── 8. torch.compile + max-autotune (EXTREME) ──
         # safe_mode skips compile — torch.compile's cudagraphs_trees backend
@@ -1209,97 +1175,6 @@ class AutoregressiveBackend(InferenceBackend):
             )
             self.use_torch_compile = False
 
-    def _inject_fused_kernels(self) -> None:
-        """Replace stock PyTorch ops with Triton fused kernels at runtime.
-
-        Patches RMSNorm layers to use fused_rms_norm_residual and SwiGLU MLP
-        layers to use fused_swiglu_gate_up from benchmark.hardware.fused_ops.
-        Original modules are stored for fallback.
-        """
-        if not self._use_fused_kernels or self.model is None:
-            return
-
-        self._triton_available = triton is not None
-
-        if _fused_rms_norm_fn is None or _fused_swiglu_fn is None:
-            logger.debug(
-                "Fused kernels not available — skipping injection "
-                "(fused_rms_norm_residual=%s, fused_swiglu_gate_up=%s)",
-                _fused_rms_norm_fn is not None,
-                _fused_swiglu_fn is not None,
-            )
-            return
-
-        injected_rms = 0
-        injected_swiglu = 0
-
-        for name, module in self.model.named_modules():
-            class_name = module.__class__.__name__
-
-            # ── Replace RMSNorm with fused RMSNorm+residual ──
-            if "RMSNorm" in class_name and hasattr(module, "weight"):
-                original = module
-                eps = getattr(original, "eps", getattr(original, "variance_epsilon", 1e-6))
-                weight = original.weight.data.clone()
-
-                # Create a wrapper module that calls the fused op.
-                class FusedRMSNorm(nn.Module):
-                    def __init__(self, weight, eps):
-                        super().__init__()
-                        self.weight = nn.Parameter(weight)
-                        self.eps = eps
-
-                    def forward(self, x):
-                        return _fused_rms_norm_fn(x, x, self.weight, self.eps)[0]
-
-                parent_name, _, child_name = name.rpartition(".")
-                parent = self.model.get_submodule(parent_name) if parent_name else self.model
-                replacement = FusedRMSNorm(weight, eps)
-                try:
-                    torch.nn.utils.parametrize.remove_parametrizations(original, tensor_name="weight", leave_parametrized=False)
-                except ValueError:
-                    pass
-                setattr(parent, child_name, replacement)
-                # NOTE: we intentionally do NOT keep a reference to the original
-                # module.  There is no fallback code path, and retaining it doubles
-                # resident memory for every replaced layer.
-                injected_rms += 1
-
-            # ── Replace SwiGLU Gated-MLP with fused SiLU gate×up ──
-            if "SwiGLU" in class_name or "GemmaMLP" in class_name:
-                if hasattr(module, "gate_proj") and hasattr(module, "up_proj"):
-                    original = module
-                    gate_w = original.gate_proj.weight.data.clone()
-                    up_w = original.up_proj.weight.data.clone()
-                    bias = original.gate_proj.bias.data.clone() if original.gate_proj.bias is not None else None
-
-                    class FusedSwiGLU(nn.Module):
-                        def __init__(self, gate_weight, up_weight, bias):
-                            super().__init__()
-                            self.gate_weight = nn.Parameter(gate_weight)
-                            self.up_weight = nn.Parameter(up_weight)
-                            self.bias = bias
-
-                        def forward(self, hidden):
-                            return _fused_swiglu_fn(hidden, self.gate_weight, self.up_weight)
-
-                    parent_name, _, child_name = name.rpartition(".")
-                    parent = self.model.get_submodule(parent_name) if parent_name else self.model
-                    replacement = FusedSwiGLU(gate_w, up_w, bias)
-                    setattr(parent, child_name, replacement)
-                    # NOTE: we intentionally do NOT keep a reference to the original
-                    # module.  There is no fallback code path, and retaining it doubles
-                    # resident memory for every replaced layer.
-                    injected_swiglu += 1
-
-        if injected_rms > 0 or injected_swiglu > 0:
-            logger.info(
-                "Fused kernel injection: %d RMSNorm, %d SwiGLU modules replaced",
-                injected_rms, injected_swiglu,
-            )
-        else:
-            logger.info("Fused kernel injection: no compatible modules found")
-
     def _init_paged_attention(self) -> None:
         """Initialize PagedAttention KV-cache pool (EXTREME memory).
 
@@ -1359,69 +1234,6 @@ class AutoregressiveBackend(InferenceBackend):
             self._kv_quant_cache = None
 
     # ═════════════════════════════════════════════════════════════════════
-    # CUDA GRAPH CAPTURE
-    # ═════════════════════════════════════════════════════════════════════
-
-    def _capture_decode_graph(self, batch_size: int, seq_len: int) -> bool:
-        """Capture the per-token decode step as a CUDA graph.
-
-        This replaces hundreds of individual kernel launches with a single
-        ``graph.replay()`` call per token.  The graph is captured once
-        after warmup and replayed for every decode step across all batches.
-        """
-        if self.backend_name != "cuda" or not self._use_cuda_graph:
-            return False
-        if self.model is None:
-            return False
-
-        try:
-
-            self._graph_pool = CUDAGraphPool(
-                self.model,
-                batch_sizes=[batch_size],
-                max_seq_len=seq_len + self.max_new_tokens,
-                hidden_size=getattr(self.model.config, 'hidden_size', DEFAULT_HIDDEN_SIZE),
-                num_kv_heads=getattr(self.model.config, 'num_key_value_heads', DEFAULT_NUM_KV_HEADS),
-                head_dim=getattr(self.model.config, 'head_dim', DEFAULT_HEAD_DIM),
-                dtype=self.precision_config.master_dtype,
-            )
-
-            graph = self._graph_pool.get_or_capture(
-                batch_size, seq_len, self.devices[0],
-            )
-            self._graph_decoder = graph
-            logger.info(
-                "CUDA graph captured: bs=%d, seq=%d → 1 replay() per decode token",
-                batch_size, seq_len,
-            )
-            return True
-        except Exception as e:
-            logger.warning("CUDA graph capture failed: %s — using eager decode", e)
-            self._graph_decoder = None
-            return False
-
-    # ═════════════════════════════════════════════════════════════════════
-    # WARMUP — three-phase warmup drives the CUDA stack into a steady state
-    # before any measured work begins.  Three distinct phases are required:
-    #
-    #   Phase 1 (short sequences):  warms the CUDA allocator — triggers lazy
-    #       kernel compilation (JIT/cubin caching), grows the memory pool to
-    #       its working set, and lets cuBLAS autotuning settle.  Short tensors
-    #       touch a different set of tile sizes than long ones, so this phase
-    #       cannot be folded into Phase 2.
-    #
-    #   Phase 2 (long / production-length sequences):  exercises KV-cache
-    #       allocation and the full matrix-multiply shapes the decoder will
-    #       see during actual translation.  Without this dedicated phase the
-    #       first real decode step would pay the KV-cache resize cost and
-    #       trigger a fresh round of autotuning.
-    #
-    #   Phase 3 (CUDA graph capture):  records a decode-step graph so every
-    #       subsequent decode iteration replays the captured graph instead of
-    #       launching individual kernels.  Capture must happen AFTER Phases 1
-    #       and 2 because the graph references pre-warmed allocator state.
-    # ═════════════════════════════════════════════════════════════════════
-
     def warmup(self, batches: int = 20) -> None:
         if not self._loaded:
             raise RuntimeError("Model not loaded")
@@ -1501,21 +1313,6 @@ class AutoregressiveBackend(InferenceBackend):
                 )
         logger.info("  Phase 2 (long, bs=%d): %.1fs", warmup_bs, time.monotonic() - ws2)
 
-        # Phase 3: CUDA graph capture (EXTREME).
-        # Skip when torch.compile is active — inductor handles graph capture
-        # internally, and nesting custom CUDA graph capture on top causes
-        # "captures_underway.empty()" assertion failures in PyTorch 2.6.
-        if self.backend_name == "cuda" and self._use_cuda_graph and not self.use_torch_compile:
-            bs = getattr(self, '_configured_batch_size', CUDA_GRAPH_DEFAULT_BATCH_SIZE)
-            logger.info("  Phase 3: capturing CUDA graph at batch_size=%d", bs)
-            try:
-                self._capture_decode_graph(
-                    batch_size=bs,
-                    seq_len=self.max_input_tokens,
-                )
-            except Exception as e:
-                logger.warning("CUDA graph capture failed: %s — using eager decode", e)
-                self._graph_decoder = None
 
         if self.backend_name == "cuda":
             torch.cuda.synchronize()
@@ -2055,15 +1852,7 @@ class AutoregressiveBackend(InferenceBackend):
         """
         _already_freed = True
 
-        # ── 1. Release CUDA graph static buffers ──
-        if self._graph_decoder is not None:
-            self._graph_decoder = None
-            _already_freed = False
-        if self._graph_pool is not None:
-            self._graph_pool = None
-            _already_freed = False
-
-        # ── 2. Free PagedKVCache blocks ──
+        # ── 1. Free PagedKVCache blocks ──
         if self._paged_kv is not None:
             try:
                 # Call free() on every allocated block then release the cache.
@@ -2105,8 +1894,7 @@ class AutoregressiveBackend(InferenceBackend):
         try:
             # Detect whether GPU memory was already released.
             gpu_still_allocated = (
-                self._graph_decoder is not None
-                or self._paged_kv is not None
+                self._paged_kv is not None
             )
             if gpu_still_allocated:
                 logger.debug(
