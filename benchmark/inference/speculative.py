@@ -24,15 +24,17 @@ the verify phase falls back to a full-model re-forward on the accepted
 tokens only.  This re-forward erases most of the speculative speedup for
 that step because it runs the full L layers instead of just the verify
 layers (L-D).  The fallback is correctness-preserving but a performance
-pessimisation.  Set ``TR_ENABLE_EXPERIMENTAL_SPECULATIVE=1`` to enable
-tree-attention verify that avoids this codepath entirely.
+pessimisation.
 
 Activation gate
 ---------------
-Speculative decoding is gated behind the environment variable
-``TR_ENABLE_EXPERIMENTAL_SPECULATIVE``.  It must be set to ``"1"``
-for the speculative path to activate.  Without it, the factory returns
-``None`` and the backend falls through to standard autoregressive decode.
+Speculative decoding is activated via the ``use_speculative=True`` config
+flag (set by ``--speculative`` on the CLI, or directly in config YAML).
+No environment variable is required.  The backend reads
+``extra.get("use_speculative", False)`` in ``load()`` and creates the
+appropriate ``SpeculativeDecoder``.  When the flag is absent or False,
+the factory returns ``None`` and the backend falls through to standard
+autoregressive decode.
 
 Decoders
 --------
@@ -352,10 +354,13 @@ def _safe_crop_kv(past_kv, target_length: int):
     # Tuple-of-tuples: ((k0,v0), (k1,v1), ...) — older transformers or
     # tiny test models.  Manually slice each (k,v) to [..., :target_length, :].
     if isinstance(past_kv, tuple) and len(past_kv) > 0 and isinstance(past_kv[0], tuple):
-        cropped = tuple(
-            (k[..., :target_length, :], v[..., :target_length, :])
-            for k, v in past_kv
-        )
+        def _slice_entry(entry):
+            if len(entry) == 2:
+                return (entry[0][..., :target_length, :],
+                        entry[1][..., :target_length, :])
+            # Single-element cache entry (tiny test models use (hidden_state,))
+            return (entry[0][..., :target_length, :],)
+        cropped = tuple(_slice_entry(e) for e in past_kv)
         return cropped
 
     # EncoderDecoderCache — crop only the self-attention cache, leaving
@@ -405,6 +410,34 @@ class SelfSpeculativeDecoder(SpeculativeDecoder):
     """
 
     def __init__(self, backend: Any, config: SpeculativeConfig | None = None):
+        """Initialize the self-speculative decoder.
+
+        Locates model components (layers, embedding, final norm, lm_head),
+        rotary embedding, and determines whether the model uses single or
+        dual RoPE. Sets draft layer count either from config or automatically
+        (total_layers // 4, minimum 1).
+
+        Parameters
+        ----------
+        backend : AutoregressiveBackend
+            The backend providing ``model``, ``devices``, etc. The model
+            may be ``torch.compile``-wrapped -- this unwraps ``_orig_mod``
+            to access internal attributes.
+        config : SpeculativeConfig, optional
+            Speculative decoding hyperparameters. Defaults to
+            ``SpeculativeConfig()``.
+
+        Side effects
+        ------------
+        Sets ``self.total_drafted``, ``self.total_accepted``,
+        ``self.total_draft_ms``, ``self.total_verify_ms`` to 0.
+
+        Raises
+        ------
+        AttributeError
+            If model components (layers, embedding, norm, lm_head) cannot
+            be located by the introspection helpers.
+        """
         cfg = config or SpeculativeConfig()
         self.K = max(cfg.num_speculative_tokens, 1)
         self._loaded = False
@@ -533,10 +566,25 @@ class SelfSpeculativeDecoder(SpeculativeDecoder):
 
     @property
     def is_loaded(self) -> bool:
+        """Return ``True`` if the decoder is ready for translation.
+
+        Returns
+        -------
+        bool
+            ``True`` after ``load()`` completes, ``False`` otherwise.
+        """
         return self._loaded
 
     @property
     def acceptance_rate(self) -> float:
+        """Compute the cumulative token acceptance rate.
+
+        Returns
+        -------
+        float
+            ``total_accepted / total_drafted``, or 0.0 if no tokens have
+            been drafted yet.
+        """
         if self.total_drafted == 0:
             return 0.0
         return self.total_accepted / self.total_drafted
@@ -560,9 +608,9 @@ class SelfSpeculativeDecoder(SpeculativeDecoder):
     def translate_batch(self, batch: Any, backend: Any) -> "BatchGenerationOutput":
         """Translate a batch using self-speculative decoding.
 
-        Each sequence in the batch is processed independently (no tree
-        attention).  The per-sequence loop is amortized by the K:1
-        forward-pass ratio during the verify step.
+        Each sequence is processed independently.  The per-sequence verify
+        phase runs only layers[D:L] + norm + lm_head (not the full model),
+        giving ~(D/L) × K compute savings per speculative step.
         """
         from benchmark.inference.backends.protocol import (
             BatchGenerationOutput, GenerationOutput,
@@ -589,123 +637,113 @@ class SelfSpeculativeDecoder(SpeculativeDecoder):
         with torch.no_grad():
             for seq_idx in range(B):
                 seq_start = time.monotonic()
-                seq_ids = input_ids[seq_idx:seq_idx + 1]       # [1, S]
-                seq_mask = attention_mask[seq_idx:seq_idx + 1]  # [1, S]
+                seq_ids = input_ids[seq_idx:seq_idx + 1]
+                seq_mask = attention_mask[seq_idx:seq_idx + 1]
 
-                # ── Prefill: full model forward to populate KV-cache ──
+                # ── Prefill ──
                 prefill_out = backend.model(
                     input_ids=seq_ids,
                     attention_mask=seq_mask,
                     use_cache=True,
                 )
-                past_kv = prefill_out.past_key_values   # tuple of (k, v) per layer
+                past_kv = prefill_out.past_key_values
                 generated_ids: list[int] = []
                 seq_draft_ms = 0.0
                 seq_verify_ms = 0.0
 
-                # ── Decode loop ──
                 seq_tokens_generated = 0
-                next_token = seq_ids[:, -1:]  # last prompt token [1, 1]
-                prefill_len = seq_ids.shape[1]  # number of prompt tokens
+                next_token = seq_ids[:, -1:]
+                prefill_len = seq_ids.shape[1]
+
+                # Pre-allocate separate buffers — one for position IDs,
+                # one for token inputs. These MUST NOT alias or the draft
+                # loop will embed position numbers as token IDs.
+                _pos_buf = torch.empty(1, 1, dtype=torch.long, device=device)
+                _tok_buf = torch.empty(1, 1, dtype=torch.long, device=device)
 
                 while seq_tokens_generated < max_new:
-                    # ═════════════════════════════════════════════════════
-                    # DRAFT PHASE: run early layers autoregressively for K steps
-                    # ═════════════════════════════════════════════════════
+                    # ── DRAFT: layers[0:D], K steps ──
                     draft_start = time.monotonic()
                     draft_hidden_states: list[torch.Tensor] = []
                     draft_tokens: list[int] = []
 
-                    current_input = next_token  # [1, 1]
+                    current_input = next_token
                     current_kv = past_kv
 
                     for _k in range(K):
                         cur_pos = prefill_len + seq_tokens_generated + _k
-                        pos_ids = torch.tensor(
-                            [[cur_pos]], device=device, dtype=torch.long,
-                        )
+                        _pos_buf[0, 0] = cur_pos
+                        pos_ids = _pos_buf
 
-                        # Embed
-                        hidden = self._embed(current_input)  # [1, 1, hidden]
-
-                        # Run draft layers only — pass a full DynamicCache
-                        # so each layer updates its own slot via self.layer_idx.
+                        hidden = self._embed(current_input)
                         draft_cache = self._full_cache_from_past(current_kv)
                         for layer_idx in range(self._num_draft_layers):
-                            layer = self._layers[layer_idx]
-                            lkwargs = self._layer_kwargs(
-                                hidden, pos_ids,
-                                layer_kv=draft_cache,
-                            )
-                            layer_out = layer(hidden, **lkwargs)
+                            lkwargs = self._layer_kwargs(hidden, pos_ids, layer_kv=draft_cache)
+                            layer_out = self._layers[layer_idx](hidden, **lkwargs)
                             hidden = layer_out[0]
-                            # Transformers 4.x squeezes the seq dim when
-                            # seq_len=1.  Restore it for the next layer.
                             if hidden.dim() == 2:
                                 hidden = hidden.unsqueeze(1)
 
-                        # Project to vocabulary to get next draft token
-                        # argmax is invariant to scaling, so we skip final_norm here
+                        # Propagate the accumulated KV to the next draft step.
+                        # Without this, every step clones from the prefill KV
+                        # independently — the draft becomes K single-token
+                        # predictions instead of a K-step autoregressive chain,
+                        # destroying speculative acceptance rate.
+                        current_kv = draft_cache
+
                         draft_logits = self._lm_head(self._final_norm(hidden))
                         next_tok = draft_logits[:, -1, :].argmax(dim=-1).item()
-
-                        draft_hidden_states.append(hidden[:, -1, :])  # [1, hidden]
+                        draft_hidden_states.append(hidden[:, -1, :])
                         draft_tokens.append(next_tok)
-                        current_input = torch.tensor(
-                            [[next_tok]], device=device, dtype=torch.long,
-                        )
+                        _tok_buf[0, 0] = next_tok
+                        current_input = _tok_buf
 
                     draft_end = time.monotonic()
                     draft_step_ms = (draft_end - draft_start) * 1000.0
                     seq_draft_ms += draft_step_ms
 
-                    # ═════════════════════════════════════════════════════
-                    # VERIFY PHASE: run the full model on all K draft tokens
-                    # as one sequence [1, K] in a single forward pass.
-                    # This is the standard speculative verify step: the
-                    # model's forward handles KV-cache, RoPE, and attention
-                    # correctly with zero manual layer management.
-                    # ═════════════════════════════════════════════════════
+                    # ── VERIFY: layers[D:L] + norm + lm_head ──
                     verify_start = time.monotonic()
 
-                    candidates = torch.tensor(
-                        [draft_tokens], device=device, dtype=torch.long,
-                    )  # [1, K]
-
-                    # Clone past_kv before verify to prevent mutation.
-                    # DynamicCache.update() modifies the cache in-place even
-                    # when use_cache=False in some HF versions.
                     verify_kv = self._full_cache_from_past(past_kv)
+                    draft_hidden = torch.stack(draft_hidden_states, dim=1)
+                    base_pos = prefill_len + seq_tokens_generated
+                    verify_pos_ids = torch.arange(
+                        base_pos, base_pos + K, device=device, dtype=torch.long,
+                    ).unsqueeze(0)
 
-                    full_model_out = backend.model(
-                        input_ids=candidates,
-                        past_key_values=verify_kv,
-                        use_cache=True,
-                    )
-                    verify_logits = full_model_out.logits  # [1, K, vocab]
-                    verify_logits = verify_logits.squeeze(0)  # [K, vocab]
+                    for global_idx in range(self._num_draft_layers, self._total_layers):
+                        layer = self._layers[global_idx]
+                        lkwargs = self._layer_kwargs(draft_hidden, verify_pos_ids, layer_kv=verify_kv)
+                        layer_out = layer(draft_hidden, **lkwargs)
+                        draft_hidden = layer_out[0]
+                        if draft_hidden.dim() == 2:
+                            draft_hidden = draft_hidden.unsqueeze(1)
+
+                    verify_logits = self._lm_head(self._final_norm(draft_hidden))
+                    verify_logits = verify_logits.squeeze(0)
 
                     verify_end = time.monotonic()
                     verify_step_ms = (verify_end - verify_start) * 1000.0
                     seq_verify_ms += verify_step_ms
 
-                    # ═════════════════════════════════════════════════════
-                    # ACCEPT PHASE: compare draft tokens with verify predictions
-                    # ═════════════════════════════════════════════════════
+                    # ── ACCEPT (GPU-side comparison — no per-token .item() syncs) ──
                     main_preds = verify_logits.argmax(dim=-1)  # [K]
+
+                    # Build draft tensor on GPU for vectorized comparison.
+                    draft_t = torch.tensor(draft_tokens, device=device, dtype=torch.long)
+                    matches = main_preds == draft_t  # [K] bool — single GPU op
 
                     n_accepted_this_round = 0
                     for k in range(K):
                         gen_id = draft_tokens[k]
-                        if main_preds[k].item() == gen_id:
-                            # Draft token matches main model
+                        if matches[k].item():  # bool .item() is cheap (single byte D2H)
                             generated_ids.append(gen_id)
                             n_accepted_this_round += 1
                             seq_tokens_generated += 1
-                            if gen_id == eos_id:
+                            if gen_id == eos_id or seq_tokens_generated >= max_new:
                                 break
                         else:
-                            # Mismatch — accept the main model's token instead
                             generated_ids.append(main_preds[k].item())
                             n_accepted_this_round += 1
                             seq_tokens_generated += 1
@@ -714,15 +752,7 @@ class SelfSpeculativeDecoder(SpeculativeDecoder):
                     self.total_drafted += K
                     self.total_accepted += n_accepted_this_round
 
-                    # ── Update past_kv for next iteration ──
-                    # The verify forward ran on a CLONED cache, so the main
-                    # past_kv is unpolluted.  Crop verify_kv to only the
-                    # accepted tokens and use it as the new past_kv.  This
-                    # avoids a wasteful full-model re-forward.
                     if n_accepted_this_round > 0:
-                        # Crop verify_kv to only the accepted tokens — avoids
-                        # a wasteful full-model re-forward.  Falls back to
-                        # manual tensor slicing when .crop() is unavailable.
                         new_len = prefill_len + len(generated_ids)
                         past_kv = _safe_crop_kv(verify_kv, new_len)
 
@@ -731,60 +761,34 @@ class SelfSpeculativeDecoder(SpeculativeDecoder):
                     if seq_tokens_generated >= max_new:
                         break
                     if n_accepted_this_round == 0:
-                        break  # safety: prevent infinite loop
+                        break
 
-                    # Next token for draft phase
-                    next_token = torch.tensor(
-                        [[generated_ids[-1]]], device=device, dtype=torch.long,
-                    )
+                    _tok_buf[0, 0] = generated_ids[-1]
+                    next_token = _tok_buf
 
                 # ── Decode ──
                 seq_end = time.monotonic()
                 translated_text = ""
                 if generated_ids:
-                    translated_text = tokenizer.decode(
-                        generated_ids, skip_special_tokens=True,
-                    ).strip()
-
-                # Strip "model" prefix if present.
-                # NOTE: This is a heuristic — some models emit 'model' as the
-                # first token of turn-taking.  We check the decoded text prefix
-                # rather than the first token to avoid tokenizer-specific
-                # decode artifacts.  Future: track prompt length instead.
-                if translated_text.startswith("model"):
-                    translated_text = translated_text[len("model"):].strip()
+                    translated_text = tokenizer.decode(generated_ids, skip_special_tokens=True).strip()
 
                 seq_latency_ms = (seq_end - seq_start) * 1000.0
                 total_draft_ms += seq_draft_ms
                 total_verify_ms += seq_verify_ms
 
-                src = (
-                    batch.raw_texts[seq_idx]
-                    if hasattr(batch, 'raw_texts') and seq_idx < len(batch.raw_texts)
-                    else ""
-                )
-                in_tok = (
-                    len(batch.input_ids[seq_idx])
-                    if hasattr(batch, 'input_ids') and seq_idx < len(batch.input_ids)
-                    else 0
-                )
+                src = batch.raw_texts[seq_idx] if hasattr(batch, 'raw_texts') and seq_idx < len(batch.raw_texts) else ""
+                in_tok = len(batch.input_ids[seq_idx]) if hasattr(batch, 'input_ids') and seq_idx < len(batch.input_ids) else 0
 
                 generations.append(GenerationOutput(
-                    input_text=src,
-                    translated_text=translated_text,
-                    input_tokens=in_tok,
-                    output_tokens=len(generated_ids),
+                    input_text=src, translated_text=translated_text,
+                    input_tokens=in_tok, output_tokens=len(generated_ids),
                     total_latency_ms=seq_latency_ms,
                     phase_timings={
                         "draft_ms": round(seq_draft_ms, 2),
                         "verify_ms": round(seq_verify_ms, 2),
-                        "acceptance_rate": round(
-                            self.total_accepted / max(self.total_drafted, 1), 4,
-                        ),
+                        "acceptance_rate": round(self.total_accepted / max(self.total_drafted, 1), 4),
                     },
-                    timestamp_utc=datetime.now(timezone.utc).strftime(
-                        "%Y-%m-%dT%H:%M:%SZ"
-                    ),
+                    timestamp_utc=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                 ))
 
         wall_end = time.monotonic()
@@ -798,16 +802,14 @@ class SelfSpeculativeDecoder(SpeculativeDecoder):
 
         return BatchGenerationOutput(
             batch_id=batch.batch_id if hasattr(batch, 'batch_id') else 0,
-            generations=generations,
-            batch_size=B,
-            input_tokens_total=total_in,
-            output_tokens_total=total_out,
+            generations=generations, batch_size=B,
+            input_tokens_total=total_in, output_tokens_total=total_out,
             total_latency_ms=round(total_wall_ms, 2),
             phase_timings={
                 "draft_ms": round(total_draft_ms, 2),
                 "verify_ms": round(total_verify_ms, 2),
                 "acceptance_rate": round(self.acceptance_rate, 4),
-                "method": "self_speculative",
+                "method": "self_speculative_layers_d_to_l",
             },
         )
 
@@ -840,6 +842,30 @@ class DraftModelSpeculativeDecoder(SpeculativeDecoder):
     """
 
     def __init__(self, backend: Any, config: SpeculativeConfig | None = None):
+        """Initialize the draft-model speculative decoder.
+
+        Validates that ``draft_model_name`` is set in config and initializes
+        statistics counters.
+
+        Parameters
+        ----------
+        backend : AutoregressiveBackend
+            The backend providing the main model, tokenizer, and device.
+        config : SpeculativeConfig, optional
+            Speculative decoding hyperparameters. Must have
+            ``draft_model_name`` set to a valid HuggingFace model ID.
+
+        Raises
+        ------
+        ValueError
+            If ``config.draft_model_name`` is empty -- a draft model name
+            is required for draft_model mode.
+
+        Side effects
+        ------------
+        Sets ``self.total_drafted``, ``self.total_accepted``,
+        ``self.total_draft_ms``, ``self.total_verify_ms`` to 0.
+        """
         cfg = config or SpeculativeConfig()
         self.backend = backend
         self.config = cfg
@@ -884,13 +910,12 @@ class DraftModelSpeculativeDecoder(SpeculativeDecoder):
         if main_vocab.keys() != draft_vocab.keys():
             n_shared = len(set(main_vocab.keys()) & set(draft_vocab.keys()))
             n_main = len(main_vocab)
-            logger.warning(
-                "Draft model tokenizer differs from main model tokenizer: "
-                "%d/%d tokens overlap (%.1f%%). "
-                "Token-ID comparison during verification will produce "
-                "incorrect results.",
-                n_shared, n_main,
-                100 * n_shared / max(n_main, 1),
+            raise ValueError(
+                f"Draft model tokenizer incompatible with main model: "
+                f"{n_shared}/{n_main} tokens overlap "
+                f"({100 * n_shared / max(n_main, 1):.1f}%). "
+                f"Speculative decoding with draft_model requires "
+                f"identical vocabularies."
             )
         else:
             logger.info("Draft tokenizer verified: vocabulary matches main model.")
@@ -913,10 +938,26 @@ class DraftModelSpeculativeDecoder(SpeculativeDecoder):
 
     @property
     def is_loaded(self) -> bool:
+        """Return ``True`` if the draft model has been loaded.
+
+        Returns
+        -------
+        bool
+            ``True`` after ``load()`` completes successfully,
+            ``False`` otherwise.
+        """
         return self._loaded
 
     @property
     def acceptance_rate(self) -> float:
+        """Compute the cumulative token acceptance rate.
+
+        Returns
+        -------
+        float
+            ``total_accepted / total_drafted``, or 0.0 if no tokens have
+            been drafted yet.
+        """
         if self.total_drafted == 0:
             return 0.0
         return self.total_accepted / self.total_drafted
@@ -978,6 +1019,7 @@ class DraftModelSpeculativeDecoder(SpeculativeDecoder):
                 generated_ids: list[int] = []
 
                 seq_tokens_generated = 0
+                _tok_buf = torch.empty(1, 1, dtype=torch.long, device=device)
                 while seq_tokens_generated < max_new:
                     # ── Draft phase ──
                     draft_start = time.monotonic()
@@ -992,9 +1034,8 @@ class DraftModelSpeculativeDecoder(SpeculativeDecoder):
                         draft_logits = draft_out.logits[:, -1, :]
                         next_tok = draft_logits.argmax(dim=-1).item()
                         draft_tokens_list.append(next_tok)
-                        draft_input = torch.tensor(
-                            [[next_tok]], device=device, dtype=torch.long,
-                        )
+                        _tok_buf[0, 0] = next_tok
+                        draft_input = _tok_buf
 
                     draft_end = time.monotonic()
                     draft_step_ms = (draft_end - draft_start) * 1000.0
@@ -1022,16 +1063,18 @@ class DraftModelSpeculativeDecoder(SpeculativeDecoder):
                     verify_step_ms = (verify_end - verify_start) * 1000.0
                     seq_verify_ms += verify_step_ms
 
-                    # ── Accept phase ──
+                    # ── Accept phase (GPU-side comparison) ──
                     main_preds = verify_logits[0, :K, :].argmax(dim=-1)  # [K]
+                    draft_t = torch.tensor(draft_tokens_list, device=device, dtype=torch.long)
+                    matches = main_preds == draft_t  # [K] — single GPU op
 
                     n_accepted_this_round = 0
                     for k in range(K):
-                        if main_preds[k].item() == draft_tokens_list[k]:
+                        if matches[k].item():  # bool .item() — single byte
                             generated_ids.append(draft_tokens_list[k])
                             n_accepted_this_round += 1
                             seq_tokens_generated += 1
-                            if draft_tokens_list[k] == eos_id:
+                            if draft_tokens_list[k] == eos_id or seq_tokens_generated >= max_new:
                                 break
                         else:
                             generated_ids.append(main_preds[k].item())
@@ -1062,13 +1105,6 @@ class DraftModelSpeculativeDecoder(SpeculativeDecoder):
                     translated_text = tokenizer.decode(
                         generated_ids, skip_special_tokens=True,
                     ).strip()
-
-                if generated_ids and len(generated_ids) > 0:
-                    first_tok = tokenizer.decode(
-                        [generated_ids[0]], skip_special_tokens=False,
-                    )
-                    if first_tok.strip() == "model":
-                        translated_text = translated_text[len("model"):].strip()
 
                 seq_latency_ms = (seq_end - seq_start) * 1000.0
                 total_draft_ms += seq_draft_ms
@@ -1157,21 +1193,10 @@ def create_speculative_decoder(
     Returns
     -------
     SpeculativeDecoder or None
-        Returns ``None`` when ``TR_ENABLE_EXPERIMENTAL_SPECULATIVE`` is not
-        set to ``"1"`` — the caller MUST fall back to standard autoregressive
-        decode in that case.
+        Returns the decoder instance.  When speculative mode is not applicable
+        (e.g., non-CUDA backend), returns ``None``.
     """
     import os
-
-    # Gate: speculative decoding is experimental.  Without this env var,
-    # return None so the caller falls through to standard AR decode.
-    if os.environ.get("TR_ENABLE_EXPERIMENTAL_SPECULATIVE") != "1":
-        logger.warning(
-            "Speculative decoding requested but TR_ENABLE_EXPERIMENTAL_SPECULATIVE "
-            "is not set to '1'.  Falling back to standard autoregressive decode.  "
-            "Set the env var to opt into the experimental speculative path."
-        )
-        return None
 
     config = SpeculativeConfig(
         mode=mode,

@@ -1,4 +1,10 @@
-"""Pre-flight environment checks — validates hardware and disk space."""
+"""Pre-flight environment checks for benchmark runs.
+
+Validates GPU count/memory, disk space, model-path existence, and reference-set
+availability before a benchmark harness starts.  The single public entry point is
+:func:`run_preflight_checks`, which raises :class:`RuntimeError` when any
+hard-blocker check fails; soft warnings are logged for non-fatal conditions.
+"""
 
 import logging
 import shutil
@@ -8,7 +14,33 @@ logger = logging.getLogger(__name__)
 
 
 def _is_huggingface_hub_id(model_path: str) -> bool:
-    """Check if model_path looks like a HuggingFace Hub ID (e.g. 'org/model')."""
+    """Check whether *model_path* is a remote HuggingFace Hub ID or model-preset name.
+
+    Returns True when the path either (a) contains a ``/`` separator and does NOT
+    exist on the local filesystem, or (b) matches a registered model preset from
+    the ``benchmark.config.model_presets`` registry.
+
+    Parameters
+    ----------
+    model_path : str
+        A model specifier that may be a local path, a HuggingFace Hub ID (e.g.
+        ``"facebook/nllb-200-distilled-600M"``), or a preset name (e.g.
+        ``"translategemma-4b-bf16"``).
+
+    Returns
+    -------
+    bool
+        True if *model_path* should be treated as a remote/registered identifier
+        rather than a local filesystem path.
+
+    Notes
+    -----
+    - This function performs a guarded dynamic import of
+      ``benchmark.config.model_presets.get_preset_by_name``; import errors are
+      silently swallowed and treated as "not a preset".
+    - Callers use this to decide whether to skip local-filesystem existence checks
+      for models that will be fetched from the Hub at load time.
+    """
     if "/" in model_path and not Path(model_path).exists():
         return True
     # Also accept registered model preset names (e.g. 'translategemma-4b-bf16').
@@ -22,6 +54,48 @@ def _is_huggingface_hub_id(model_path: str) -> bool:
 
 
 def run_preflight_checks(config, device_info, dry_run: bool = False) -> None:
+    """Run a battery of environment checks before starting a benchmark run.
+
+    Checks performed (warnings are logged, hard failures raise RuntimeError):
+
+    * **GPU count** — CUDA only: warns if fewer than 2 GPUs are detected (single-GPU
+      runs are supported for dev/test but >1 is recommended for production).
+    * **GPU memory per device** — CUDA only: warns when the per-GPU total is below 80 GB
+      (the H200 minimum).
+    * **Unified memory** — MPS only: warns when total unified memory is below 16 GB.
+    * **Disk space** — checks free space on the configured output directory; the
+      required amount is 10 GB for MPS/CPU, 20 GB for CUDA, or 10 GB in dry-run mode.
+      Falls back to the CWD if the output directory does not exist yet.
+    * **Model-path existence** — raises RuntimeError if the path does not exist on
+      disk and does not look like a HuggingFace Hub ID or a registered model-preset
+      name.
+    * **Reference-set existence** — warns (does not fail) if the reference-set file
+      is missing; the quality benchmark step will be skipped.
+
+    Parameters
+    ----------
+    config : BenchmarkConfig
+        The fully-resolved benchmark configuration object. Must have ``model.model_path``,
+        ``data.output_dir``, and ``data.reference_set_path`` attributes.
+    device_info : DeviceInfo
+        A named-tuple or object with ``backend`` (str, one of ``"cuda"``, ``"mps"``,
+        ``"cpu"``), ``total_memory_gb`` (float), and ``num_devices`` (int) attributes.
+    dry_run : bool, default False
+        If True, the disk-space threshold is relaxed to 10 GB regardless of backend.
+
+    Raises
+    ------
+    RuntimeError
+        If any hard-blocker check fails (disk space below minimum, model path not
+        found). The message includes all failed checks separated by semicolons.
+
+    Notes
+    -----
+    - The MPS and CUDA memory checks are **warnings only** — they do not prevent the
+      run from starting because some models (e.g. NLLB-600M) can run on smaller GPUs.
+    - The disk-space check catches OSError and falls back to a logged warning rather
+      than crashing, since disk-usage queries can fail on some filesystems.
+    """
     issues = []
     total_mem = device_info.total_memory_gb
     if device_info.backend == "cuda":

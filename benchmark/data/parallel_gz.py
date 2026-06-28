@@ -67,13 +67,35 @@ def decompress_lines(file_path: Path | str) -> Iterator[str]:
 
 
 def _pigz_decompress(path: Path) -> Iterator[str]:
-    """Decompress using pigz subprocess.
+    """Decompress a .gz file using the pigz subprocess.
 
-    pigz writes decompressed data to stdout; we read it line by line
-    through a pipe.  This avoids the Python GIL bottleneck on zlib.
+    Spawns ``pigz -dc`` which writes decompressed data to stdout.  Lines are
+    read through a pipe, stripped, and yielded one at a time.  Blank lines are
+    skipped because they are typically framing artefacts in JSONL datasets,
+    not actual data rows.
 
-    Note: Blank lines are stripped from the output.  This is intentional
-    for JSONL datasets where blank lines are framing artifacts, not data.
+    Parameters
+    ----------
+    path : Path
+        Path to a gzip-compressed file.
+
+    Yields
+    ------
+    str
+        One non-blank, stripped line per iteration.
+
+    Side effects
+    ------------
+    Spawns a subprocess that runs until the iterator is exhausted (or the
+    caller stops iterating).  Logs a warning on non-zero pigz exit and an
+    error on timeout or unexpected exception.  The subprocess is killed and
+    waited on in the ``finally`` block regardless of iteration outcome.
+
+    Notes
+    -----
+    Exceptions during decompression are caught and logged; they are not
+    re-raised.  An early break by the caller is safe — the ``finally`` block
+    ensures the subprocess is terminated and waited on.
     """
     proc = subprocess.Popen(
         ["pigz", "-dc", str(path)],
@@ -114,9 +136,30 @@ def _pigz_decompress(path: Path) -> Iterator[str]:
 
 
 def decompress_file(file_path: Path | str) -> bytes:
-    """Decompress a full .gz file into memory (for small files).
+    """Decompress a small .gz file and return its contents as bytes.
 
-    For large files, use ``decompress_lines()`` instead to stream.
+    Uses pigz for parallel decompression when available; otherwise falls back
+    to Python's ``gzip.decompress``.  For large files, prefer
+    ``decompress_lines()`` which streams lines without loading the entire
+    decompressed payload into memory.
+
+    Parameters
+    ----------
+    file_path : Path or str
+        Path to a .gz file.  If the file does not end with ``.gz``, it is
+        read directly without decompression.
+
+    Returns
+    -------
+    bytes
+        The fully decompressed file content as raw bytes.
+
+    Raises
+    ------
+    RuntimeError
+        If pigz exits with a non-zero return code.
+    subprocess.TimeoutExpired
+        If pigz does not finish within 300 seconds.
     """
     path = Path(file_path)
     if not path.suffix == ".gz":
@@ -137,9 +180,29 @@ def decompress_file(file_path: Path | str) -> bytes:
 
 
 def count_lines_gz(file_path: Path | str) -> int:
-    """Count lines in a gzip file without full decompression into memory.
+    """Count the number of lines in a .gz file without fully decompressing into memory.
 
-    Uses pigz -dc | wc -l for maximum speed when available.
+    Uses ``pigz -dc`` piped to ``wc -l`` when pigz is available for maximum
+    speed.  Falls back to Python's ``gzip.open`` and a generator-based count
+    when pigz is not installed.  If the file does not end with ``.gz``, it is
+    read as plain text.
+
+    Parameters
+    ----------
+    file_path : Path or str
+        Path to a .gz (or plain-text) file.
+
+    Returns
+    -------
+    int
+        Number of lines in the file.  Returns 0 if the decompressed output
+        is empty.  The last line is counted even when the file does not end
+        with a trailing newline.
+
+    Raises
+    ------
+    subprocess.TimeoutExpired
+        If pigz does not finish within 30 seconds.
     """
     path = Path(file_path)
     if not path.suffix == ".gz":

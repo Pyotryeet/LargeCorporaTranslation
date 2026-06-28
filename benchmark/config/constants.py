@@ -9,6 +9,11 @@ changes, update these constants in one place.
 # head_dim=256 and vocab_size=262_144 are shared across all Gemma 3/4 family sizes.
 # Reference for 12B Gemma 3 variant (not used as default):
 #   num_layers=48, hidden_size=3840, num_kv_heads=8
+#
+# WARNING: These constants are LAST-RESORT FALLBACKS used only when the model
+# config cannot be read from HuggingFace or from a model preset. Using wrong
+# values will silently corrupt KV-cache dimensions. Callers MUST log a warning
+# whenever a fallback value is used.
 DEFAULT_NUM_LAYERS = 36
 DEFAULT_NUM_KV_HEADS = 4
 DEFAULT_HEAD_DIM = 256
@@ -22,16 +27,13 @@ DEFAULT_VOCAB_SIZE = 262_144  # shared across all Gemma variants
 
 # ── PagedAttention ──
 PAGED_BLOCK_SIZE = 16
-PAGED_NUM_BLOCKS_LARGE_GPU = 1024   # >80 GB VRAM
+PAGED_NUM_BLOCKS_LARGE_GPU = 32768   # >80 GB VRAM (H200: 141 GB — 32768 blocks = ~4.8 GB for 4B model)
 PAGED_NUM_BLOCKS_SMALL_GPU = 512    # ≤80 GB VRAM
 PAGED_LARGE_GPU_THRESHOLD_GB = 80
 
-# ── CUDA Graph ──
-CUDA_GRAPH_DEFAULT_BATCH_SIZE = 4
-
 # ── Memory budget ──
-GPU_MEMORY_BUDGET_FRACTION = 0.95  # measured 2026-06-24 at 0.939 for 4B model on H200. 0.95 is the safe rounded value. See M1.1.
-GPU_MEMORY_RESERVE_BYTES = 1 * 1024**3  # 1 GiB — measured 2026-06-24 on H200: CUDA context overhead ~2 MB after torch.cuda.init(). 4 GiB was ~2000× too large. See M1.1.
+GPU_MEMORY_BUDGET_FRACTION = 0.90  # Conservative for H200 — 141 GB → 127 GB usable
+GPU_MEMORY_RESERVE_BYTES = 2 * 1024**3  # 2 GiB reserve for CUDA context + overhead
 
 # ── Pipeline timeouts (seconds) ──
 LOADER_JOIN_TIMEOUT = 30
@@ -53,7 +55,10 @@ QUALITY_BATCH_SIZE = 32
 QUALITY_BLEU_TARGET = 25
 QUALITY_CHRF_TARGET = 54
 QUALITY_COMET_TARGET = 0.72
+QUALITY_COMET_KIWI_TARGET = 0.60  # reference-free estimate, calibrated lower
+QUALITY_XCOMET_TARGET = 0.72      # xCOMET-lite reference-free neural QE
 QUALITY_BERTSORE_TARGET = 0.55
+QUALITY_METRICX_TARGET = 1.5  # MQM error rating: lower is better (0.0 = perfect)
 
 # ── Corpus ──
 # Total clearnet non-translated tokens for the 6.23T token target corpus.

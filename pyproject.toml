@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tr-corpus-benchmark"
-version = "3.6"
-description = "Turkish Corpus Translation Benchmark Harness — TranslateGemma 12B Feasibility Study"
+version = "3.9"
+description = "Turkish Corpus Translation Benchmark Harness — EN→TR Translation Throughput Benchmark"
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.11"
@@ -15,7 +15,7 @@ authors = [{ name = "Benchmark Team" }]
 # For production reproducibility, replace >= pins with == pins
 # and use a lockfile (e.g., pip freeze > requirements.txt).
 dependencies = [
-    "torch>=2.4.0",
+    "torch>=2.12.1",
     "transformers>=4.47.0",
     "psutil>=5.9.0",
     "pydantic>=2.7.0",
@@ -32,20 +32,12 @@ dependencies = [
 
 [project.optional-dependencies]
 cuda = [
-    # Transformer Engine is NOT included here — it's known broken on pip venvs.
-    # TE source-build compiles but runtime cuBLASLt crashes on all tested drivers
-    # (580, 565).  The only working FP8 path is the NGC container.
-    # See docs/FP8_TE_CUDA_ISSUES.md and setup.sh for details.
+    # Transformer Engine is NOT included here — TE is known broken on pip venvs.
+    # Static FP8 weight quantization (dequant-on-read) is used instead.
     # Uncomment TE only if running inside nvcr.io/nvidia/pytorch container.
     # "transformer-engine>=2.0.0",
     "nvidia-ml-py>=13.0",
     "triton>=2.3.0",
-]
-tensorrt = [
-    "tensorrt>=10.0.0",
-    "tensorrt-cu12>=10.0.0",
-    "onnx>=1.16.0",
-    "onnxruntime>=1.18.0",
 ]
 mps = [
     "mlx>=0.18.0",

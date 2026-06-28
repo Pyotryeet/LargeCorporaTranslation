@@ -273,6 +273,7 @@ def run_via_llama(model_def, device_info, env_snapshot, run_idx, run_dir):
             # Only whitelist vars needed by llama.cpp (Metal, MPS, DYLD, PATH).
             _env = {}
             for _k in ("PATH", "HOME", "USER", "SHELL", "TMPDIR", "TMP",
+                       "CUDA_HOME", "CUDA_VISIBLE_DEVICES", "LD_LIBRARY_PATH",
                        "GGML_METAL_PATH_RESOURCES",
                        "DYLD_LIBRARY_PATH", "DYLD_FALLBACK_LIBRARY_PATH",
                        "METAL_DEVICE_WRAPPER_TYPE", "MTL_DEBUG_LAYER",
@@ -282,9 +283,10 @@ def run_via_llama(model_def, device_info, env_snapshot, run_idx, run_dir):
                 if _k in os.environ:
                     _env[_k] = os.environ[_k]
             _env["GGML_METAL_PATH_RESOURCES"] = str(LLAMA_BUILD / "bin")
+            remaining = max(10, int(RUN_DURATION - (time.monotonic() - wall_start)))
             result = subprocess.run(
                 cmd, capture_output=True, text=True,
-                timeout=120, cwd=str(LLAMA_BUILD.parent),  # 2-min per-prompt cap
+                timeout=remaining, cwd=str(LLAMA_BUILD.parent),
                 env=_env,
             )
             output = result.stdout.strip()
@@ -497,8 +499,10 @@ def main():
         # ── Cleanup ──
         gc.collect()
         if torch.backends.mps.is_available():
-            try: torch.mps.empty_cache()
-            except: pass
+            try:
+                torch.mps.empty_cache()
+            except (RuntimeError, AttributeError):
+                pass  # MPS empty_cache is best-effort
         time.sleep(1)
 
     total_elapsed = time.monotonic() - total_start

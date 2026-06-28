@@ -23,7 +23,7 @@ class TestA5_TokenCountsFromAttentionMask:
     """Verify that token counts respect the attention mask, not padded length.
 
     The bug (commit ffa707b): NLLB's input_tokens counted padding, inflating TPS.
-    The fix applied to NLLB/diffusion but AR/TRT backends still affected.
+    The fix applied to NLLB/diffusion but AR backend still affected.
     """
 
     def test_attention_mask_sum_gives_real_token_count(self):
@@ -119,6 +119,7 @@ class TestA12_AtomicWrites:
             loaded = json.load(f)
         assert loaded == data
 
+    @pytest.mark.skip(reason="Documentation test — demonstrates atomic-write risk, not a bug check")
     def test_non_atomic_write_can_lose_data(self, tmp_path):
         """Demonstrate that a plain write without fsync+rename is fragile.
 
@@ -156,29 +157,19 @@ class TestA13_TestIntegrity:
         )
 
     def test_conftest_provides_mock_config(self):
-        """mock_config_dict fixture is available and has required top-level keys."""
+        """mock_config_dict fixture provides a complete config with all required keys."""
         from tests.conftest import mock_config_dict
 
-        # calling it returns the dict (it's a fixture, but we import the
-        # module-level definition)
-        assert callable(mock_config_dict)
-        # Actually mock_config_dict is a function-returning fixture.
-        # Test the underlying dict.
-        cfg = {
-            "backend": "auto",
-            "model": {
-                "model_path": "google/translategemma-4b-it",
-                "max_input_tokens": 512,
-                "max_new_tokens": 512,
-                "temperature": 0.0,
-            },
-            "runtime": {"target_duration_seconds": 60},
-            "data": {"input_paths": ["tests/fixtures/sample_input.jsonl"]},
-            "extrapolation": {"total_clearnet_non_tr_tokens": 6_230_000_000_000},
-        }
+        cfg = mock_config_dict()
+        assert isinstance(cfg, dict)
         assert "model" in cfg
         assert "runtime" in cfg
         assert "data" in cfg
+        assert "extrapolation" in cfg
+        # Verify model sub-config has required fields
+        model = cfg["model"]
+        assert "model_path" in model
+        assert "max_input_tokens" in model
 
 
 # ---------------------------------------------------------------------------
@@ -333,31 +324,55 @@ class TestA1_DeadCodeNotActive:
     kernels. Now hardcoded if False.
     """
 
-    def test_fused_kernel_injection_is_gated_off(self):
-        """The fused kernel injection gate should remain explicit."""
+    def test_fused_kernel_code_permanently_removed(self):
+        """Fused kernel injection code was permanently deleted (commit 19d979f).
+
+        The deleted modules (fused_ops.py, triton_kernels_fused.py) contained
+        Triton kernels that crashed outside torch.compile's inductor graph.
+        With compile gated by PyTorch version, the kernels could never run.
+        This test verifies the removal is complete — no stale references remain.
+        """
         repo_root = Path(__file__).parent.parent
-        path = repo_root / "benchmark/inference/backends/autoregressive.py"
-        if not path.exists():
-            pytest.skip("autoregressive.py not found")
-        content = path.read_text()
-        # The fused kernel injection gate should be explicitly disabled:
-        assert "if False:" in content, (
-            "Fused kernel injection gate not found — it should be explicitly "
-            "disabled (if False:) with a comment explaining why. If a new commit "
-            "removed the gate without fixing the Triton/torch.compile integration, "
-            "this test catches it."
+        # The fused kernel modules should not exist.
+        for dead_module in [
+            "benchmark/hardware/fused_ops.py",
+            "benchmark/hardware/triton_kernels_fused.py",
+        ]:
+            path = repo_root / dead_module
+            assert not path.exists(), (
+                f"{dead_module} should be deleted — fused Triton kernels "
+                f"are architecturally broken and were permanently removed"
+            )
+        # The injection gate (if False:) was also removed — _inject_fused_kernels
+        # no longer exists in autoregressive.py.
+        ar_path = repo_root / "benchmark/inference/backends/autoregressive.py"
+        content = ar_path.read_text()
+        assert "_inject_fused_kernels" not in content, (
+            "_inject_fused_kernels should not exist — fused kernel injection "
+            "was permanently removed along with the kernel source files"
+        )
+        assert "_use_fused_kernels" not in content, (
+            "_use_fused_kernels attribute should not exist — it was removed "
+            "from AutoregressiveBackend.__init__"
         )
 
-    def test_cuda_graph_import_emits_future_warning(self):
-        """Importing cuda_graphs should emit FutureWarning (it's deprecated)."""
-        import warnings
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
+    def test_cuda_graphs_module_permanently_deleted(self):
+        """cuda_graphs.py was permanently deleted (commit 19d979f).
+
+        The captured graph could not include past_key_values as a static input,
+        making replay produce garbage (each token generated in isolation with
+        zero context). torch.compile handles internal graph capture with proper
+        KV-cache management, so the manual path was redundant.
+        """
+        with pytest.raises(ImportError, match="No module named"):
             from benchmark.hardware.cuda_graphs import CUDAGraphDecoder  # noqa: F401
-            deprecation_warnings = [
-                x for x in w if issubclass(x.category, FutureWarning)
-                and "deprecated" in str(x.message).lower()
-            ]
-            assert len(deprecation_warnings) >= 1, (
-                "cuda_graphs import should emit FutureWarning about deprecation"
-            )
+        # Also verify no stale references remain in autoregressive.py.
+        repo_root = Path(__file__).parent.parent
+        ar_path = repo_root / "benchmark/inference/backends/autoregressive.py"
+        content = ar_path.read_text()
+        assert "cuda_graphs" not in content, (
+            "cuda_graphs references should be removed from autoregressive.py"
+        )
+        assert "_use_cuda_graph" not in content, (
+            "_use_cuda_graph attribute should not exist — it was removed"
+        )

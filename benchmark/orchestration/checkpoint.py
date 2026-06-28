@@ -14,7 +14,25 @@ logger = logging.getLogger(__name__)
 
 
 class CheckpointManager:
+    """Manages atomic checkpoint saves and resume-from-checkpoint.
+    
+        Writes checkpoint JSON files to a timestamped directory with
+        temp-file + fsync + atomic rename for crash safety.  Supports
+        automatic rotation (keeping the N most recent checkpoints) and
+        position tracking (file name + document ID) for accurate resume.
+        """
     def __init__(self, run_dir: Path, interval_seconds: int = 300):
+        """Initialise the checkpoint manager.
+
+        Creates the ``checkpoints/`` subdirectory under ``run_dir`` if it does not
+        already exist.
+
+        Parameters:
+            run_dir (Path): Directory that will contain the ``checkpoints/``
+                subdirectory and all checkpoint files.
+            interval_seconds (int): Minimum elapsed time in seconds between two
+                consecutive checkpoint saves. Defaults to 300.
+        """
         self.run_dir = run_dir
         self.checkpoint_dir = run_dir / "checkpoints"
         self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
@@ -90,7 +108,48 @@ class CheckpointManager:
             logger.warning(f"Checkpoint save failed: {e}")
             return None
 
+    @staticmethod
+    def _cleanup_stale_tmp(checkpoint_dir: Path) -> int:
+        """Remove stale .tmp files left by crashed checkpoint writes.
+
+        Returns the number of files removed.
+        """
+        removed = 0
+        for tmp in checkpoint_dir.glob("*.tmp"):
+            try:
+                tmp.unlink()
+                removed += 1
+            except OSError:
+                pass
+        return removed
+
     def load_latest(self) -> dict | None:
+        """Load the most recent valid checkpoint, or None if none exists.
+
+        Scans the ``checkpoints/`` directory for ``checkpoint_*.json`` files, sorted
+        by name (which embeds the timestamp), and attempts to parse each one
+        newest-first. The first successfully parsed and version-compatible checkpoint
+        is returned. If the newest checkpoint is corrupt, a warning is logged and
+        older checkpoints are tried in turn — this ensures that a single corrupt file
+        does not prevent recovery.
+
+        Stale ``.tmp`` files left by crashed ``save()`` calls are removed before
+        scanning.
+
+        Returns:
+            dict | None: The parsed checkpoint dictionary on success, or None if no
+            readable checkpoint files were found.
+
+        Side effects:
+            - Removes stale ``.tmp`` files from the checkpoint directory.
+            - Logs warnings for corrupt or unreadable checkpoints.
+            - Logs an error if all checkpoints are corrupt.
+
+        Raises:
+            Nothing externally; JSON and OS errors are caught and logged internally.
+        """
+        # Remove stale .tmp files from previous crashed writes.
+        self._cleanup_stale_tmp(self.checkpoint_dir)
         files = sorted(self.checkpoint_dir.glob("checkpoint_*.json"))
         if not files:
             logger.info("No checkpoint files found in %s", self.checkpoint_dir)
@@ -167,6 +226,23 @@ class CheckpointManager:
         return None
 
     def _rotate(self) -> None:
+        """Delete the oldest checkpoint files when the rotation cap is exceeded.
+
+        Keeps at most ``self._rotation`` (set from ``CHECKPOINT_ROTATION``)
+        checkpoint files on disk. Deletes the oldest files first. If a deletion
+        fails (e.g. due to a permission error), rotation is aborted for this
+        save cycle to avoid silently accumulating files.
+
+        Returns:
+            None
+
+        Side effects:
+            - May delete ``checkpoint_*.json`` files from ``self.checkpoint_dir``.
+
+        Raises:
+            Nothing; OS errors during deletion are caught and logged, causing
+            rotation to stop early for this cycle.
+        """
         files = sorted(self.checkpoint_dir.glob("checkpoint_*.json"))
         while len(files) > self._rotation:
             oldest = files[0]

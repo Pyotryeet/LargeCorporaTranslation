@@ -3,7 +3,7 @@
 > **Purpose:** Document concrete mistakes AI coding agents have made in this
 > project, and preventable pitfalls they could make — to create awareness for
 > both human reviewers and LLM coders.
-> **Status:** Living document. Current as of v3.6.
+> **Status:** Living document. Current as of v3.7.
 > **Audience:** Anyone (human or agent) about to edit this codebase.
 >
 > This is a sibling to [`ARCHITECTURE.md`](ARCHITECTURE.md). ARCHITECTURE tells
@@ -47,7 +47,7 @@ advertise it as active. The code *looks* like it does something; it doesn't.
 - Fused-kernel injection: `benchmark/inference/backends/autoregressive.py:761` — `if False:  # was: self._use_fused_kernels and ...`
 - cudaMallocAsync: commented out at `autoregressive.py:654`; `_malloc_async_active = False` at `:607`.
 - PagedAttention (AR path): `_use_paged_attention` hardcoded `False` at `autoregressive.py:596`; `_convert_to_paged` referenced only in comments and doesn't exist.
-- CUDA Graph decode: graph captured at `autoregressive.py:1339` but **never replayed** — `_extreme_decode:1548` comment: *"DECODE LOOP (standard forward, no graph replay)"*. The whole `cuda_graphs.py` module emits a `FutureWarning` on import saying so.
+- CUDA Graph decode: 🗑 DELETED v3.7. `cuda_graphs.py` (389L) and all graph capture code removed.
 - INT8 KV-cache: `_kv_quant_cache` constructed at `autoregressive.py:1184`, never `.update()`/`.get()`-ed.
 - Fast-dLLM caching: `diffusion.py:709` counts cache hits but always falls through to the full forward.
 
@@ -169,12 +169,12 @@ look fine but are inflated/deflated.
 **Evidence:**
 - NLLB `input_tokens` counted the **padded** input length instead of real tokens
   → inflated TPS. Fixed for NLLB in commit `ffa707b`. The AR and TRT backends
-  had the same bug — also now **fixed**. `autoregressive.py` and `tensorrt_backend.py`
+  had the same bug — also now **fixed**. `autoregressive.py` (and formerly `tensorrt_backend.py`, deleted v3.7)
   now use `attention_mask.sum().item()` to count real tokens (not padded length),
   matching the NLLB and diffusion backends.
 
 **Update June 2026:** This is now **fixed** on all backends. `autoregressive.py` and
-`tensorrt_backend.py` now use `attention_mask.sum().item()` to count real tokens
+`autoregressive.py` now uses `attention_mask.sum().item()` to count real tokens
 (not padded length), matching the NLLB and diffusion backends. This was one of the
 longest-surviving metric bugs.
 
@@ -329,7 +329,7 @@ benchmark, tokenization was silently corrupted for the benchmark.
 - `END_OF_TURN_TOKEN_ID = 106` was hardcoded in 3+ places. **Now fixed:** it's
   defined once in `config/constants.py:82` and imported everywhere (a successful
   application of the "don't hardcode" rule).
-- `jit_compiler.py` sm90a misdetection: `hasattr(props, 'multi_processor_count')`
+- `jit_compiler.py` sm90a misdetection: 🗑 module deleted v3.7, bug removed with it
   is always True, mislabeling every Hopper GPU.
 
 **Impact:** Code that works for one model crashes or misbehaves for another.
@@ -447,7 +447,7 @@ These are risks specific to this codebase. Each is preventable by a cheap check.
 | 🟡 | **Coercing `None → 0` in a target check.** | See A15 — skip or fail-loud, consistently. |
 | 🟡 | **Writing state files non-atomically.** | temp + fsync + `os.rename`; see A12. |
 | 🟡 | **Writing a test that passes when data is missing.** | `assert` preconditions or `pytest.skip`; see A13. |
-| 🟡 | **Trusting a log line that prints a feature flag as `True`** (e.g. the H200 dry-run log `PagedAttn=True, CUDA_Graph=True, fused_kernels=True`). | The flag reflects *config*, not *hot-path activity*. Cross-check against Feature Status. |
+| 🟡 | **Trusting a log line that prints a feature flag as `True`** (e.g. the H200 dry-run log from Capability Registry (only active features shown)). | The flag reflects *config*, not *hot-path activity*. Cross-check against Feature Status. |
 | 🟡 | **The Capability Registry is now the single source of truth for what's active.** The old `print("PagedAttn=True")` log line pattern (prints config flag, not hot-path reality) is deprecated. Use `backend._capability_registry.report_text()` or check `ActivationState` directly. See `benchmark/config/capability.py`. |
 | 🟡 | **Monkey-patching at class/global scope.** | Patch the instance; see A10. |
 | 🟡 | **Positional-unpacking a library return value.** | Use attribute access; see A9. |

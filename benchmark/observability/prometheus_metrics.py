@@ -27,6 +27,7 @@ Gauges (instantaneous value):
   - tr_benchmark_quality_comet
   - tr_benchmark_quality_bertscore
   - tr_benchmark_quality_comet_kiwi
+  - tr_benchmark_quality_metricx
 
 Gauges (rolling):
   - tr_benchmark_throughput_tokens_per_second_rolling  (60 s rolling avg; safe
@@ -54,6 +55,7 @@ from __future__ import annotations
 import json
 import logging
 import threading
+from collections import deque
 import time
 from collections import deque
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -70,9 +72,32 @@ logger = logging.getLogger(__name__)
 
 
 class _Metric:
-    """Base metric with atomic updates via lock."""
+    """Base metric with atomic updates via an internal lock.
+
+    Provides the PROMETHEUS text-format rendering interface that Counter, Gauge, and
+    Histogram subclasses implement. Tracks creation timestamp for future OpenMetrics
+    ``_created`` line support.
+
+    Thread-safe: all mutable state is protected by ``threading.Lock``.
+    """
 
     def __init__(self, name: str, help_text: str, labels: dict[str, str] | None = None):
+        """Initialize a Prometheus metric.
+
+        Parameters
+        ----------
+        name : str
+            Fully-qualified Prometheus metric name (e.g. ``tr_benchmark_batches_total``).
+        help_text : str
+            HELP string rendered in the Prometheus text exposition format.
+        labels : dict[str, str] or None, optional
+            Key-value label pairs attached to every sample of this metric.
+
+        Side effects
+        ------------
+        Creates a ``threading.Lock`` and records ``_created_ts`` for future
+        OpenMetrics ``_created`` timestamp support.
+        """
         self.name = name
         self.help = help_text
         self.labels = labels or {}
@@ -83,23 +108,65 @@ class _Metric:
         self._created_ts = time.time()
 
     def _label_str(self) -> str:
+        """Return the Prometheus label string for this metric.
+
+        Returns
+        -------
+        str
+            A Prometheus-compliant label string, e.g. ``{device="0",backend="cuda"}``,
+            or an empty string if the metric carries no labels.
+        """
         if not self.labels:
             return ""
         parts = [f'{k}="{v}"' for k, v in sorted(self.labels.items())]
         return "{" + ",".join(parts) + "}"
 
     def render(self) -> str:
+        """Render the metric in Prometheus text exposition format.
+
+        Returns
+        -------
+        str
+            One or more lines in the Prometheus text format, including HELP and TYPE
+            header lines.
+
+        Raises
+        ------
+        NotImplementedError
+            Always — subclasses must override this method.
+        """
         raise NotImplementedError
 
 
 class Counter(_Metric):
-    """Monotonically increasing counter."""
+    """Monotonically increasing Prometheus counter.
+
+    A counter represents a cumulative metric that only ever goes up (e.g., total
+    tokens translated, total errors).  Prometheus functions like ``rate()`` and
+    ``increase()`` assume strict monotonicity — resetting a counter in production
+    will cause these functions to produce garbage.  Use ``_reset_for_testing`` for
+    test teardown only.
+
+    Thread-safe: all mutations are guarded by an internal lock.
+    """
 
     def __init__(self, name: str, help_text: str, labels: dict[str, str] | None = None):
+        """Initialize a counter metric.
+
+        Parameters
+        ----------
+        name : str
+            Prometheus metric name.
+        help_text : str
+            HELP string rendered in exposition format.
+        labels : dict[str, str] or None, optional
+            Key-value label pairs.
+        """
         super().__init__(name, help_text, labels)
         self._value: float = 0.0
 
     def inc(self, delta: float = 1.0) -> None:
+        """Increment the counter by *delta* (default 1.0)."""
         with self._lock:
             self._value += delta
 
@@ -114,10 +181,24 @@ class Counter(_Metric):
             self._value = value
 
     def get(self) -> float:
+        """Return the current counter value.
+
+        Returns
+        -------
+        float
+            The cumulative sum of all ``inc()`` calls so far.
+        """
         with self._lock:
             return self._value
 
     def render(self) -> str:
+        """Render the counter in Prometheus text exposition format.
+
+        Returns
+        -------
+        str
+            HELP, TYPE, and value lines in Prometheus text format.
+        """
         label_str = self._label_str()
         return (
             f"# HELP {self.name} {self.help}\n"
@@ -127,21 +208,60 @@ class Counter(_Metric):
 
 
 class Gauge(_Metric):
-    """Instantaneous value that can go up and down."""
+    """Prometheus gauge — a single numeric value that can go up and down.
+
+    Gauges represent instantaneous measurements (e.g., GPU utilization, queue depth,
+    RAM usage).  Unlike counters, there is no monotonicity contract — the value can
+    be set to any float at any time.
+
+    Thread-safe: all mutations are guarded by an internal lock.
+    """
 
     def __init__(self, name: str, help_text: str, labels: dict[str, str] | None = None):
+        """Initialize a gauge metric.
+
+        Parameters
+        ----------
+        name : str
+            Prometheus metric name.
+        help_text : str
+            HELP string rendered in exposition format.
+        labels : dict[str, str] or None, optional
+            Key-value label pairs.
+        """
         super().__init__(name, help_text, labels)
         self._value: float = 0.0
 
     def set(self, value: float) -> None:
+        """Set the gauge to an absolute value.
+
+        Parameters
+        ----------
+        value : float
+            The new value for this gauge.
+        """
         with self._lock:
             self._value = value
 
     def get(self) -> float:
+        """Return the current gauge value.
+
+        Returns
+        -------
+        float
+            The most recently set value, or 0.0 if never set.
+        """
         with self._lock:
             return self._value
 
     def render(self) -> str:
+        """Render the gauge in Prometheus text exposition format.
+
+        Returns
+        -------
+        str
+            HELP, TYPE, and value lines in Prometheus text format.
+        """
         label_str = self._label_str()
         return (
             f"# HELP {self.name} {self.help}\n"
@@ -157,6 +277,10 @@ class Histogram(_Metric):
     sub-millisecond prefill/decode on small models to multi-second batch
     latencies on large models: 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05,
     0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, +Inf
+
+    Internally stores per-bucket counts (each observation increments exactly one
+    bucket).  ``render()`` converts to cumulative counts as required by the
+    Prometheus exposition format.
     """
 
     _DEFAULT_BUCKETS = [
@@ -172,6 +296,20 @@ class Histogram(_Metric):
         labels: dict[str, str] | None = None,
         buckets: list[float] | None = None,
     ):
+        """Initialize a histogram metric.
+
+        Parameters
+        ----------
+        name : str
+            Prometheus metric name.
+        help_text : str
+            HELP string rendered in exposition format.
+        labels : dict[str, str] or None, optional
+            Key-value label pairs.
+        buckets : list[float] or None, optional
+            Bucket boundaries in seconds.  If None, uses the default latency-tuned
+            buckets defined in ``_DEFAULT_BUCKETS``.
+        """
         super().__init__(name, help_text, labels)
         self.buckets = buckets or self._DEFAULT_BUCKETS
         self._bucket_counts: dict[float, int] = {b: 0 for b in self.buckets}
@@ -179,6 +317,21 @@ class Histogram(_Metric):
         self._count: int = 0
 
     def observe(self, value: float) -> None:
+        """Record an observation in the histogram.
+
+        Parameters
+        ----------
+        value : float
+            The observed value (e.g., latency in seconds, TPS).  Values exceeding
+            all defined bucket boundaries fall into the implicit ``+Inf`` bucket,
+            which is tracked via ``_count``.
+
+        Side effects
+        ------------
+        Increments ``_count`` and ``_sum``.  Increments exactly one bucket — the
+        smallest boundary <= ``value``.  Values above the largest explicit boundary
+        do not increment any explicit bucket but are counted in ``_count``.
+        """
         with self._lock:
             self._count += 1
             self._sum += value
@@ -222,32 +375,116 @@ class Histogram(_Metric):
 
 
 class PrometheusRegistry:
-    """Collects all metrics and renders the /metrics endpoint."""
+    """In-memory registry that collects metrics and renders the /metrics endpoint.
+
+    Metrics are deduplicated by ``(name, sorted_labels)`` key.  Factory methods
+    (``counter``, ``gauge``, ``histogram``) create, register, and return the metric
+    in a single call.
+
+    ``render_all()`` produces the complete Prometheus text exposition format,
+    suitable for serving over HTTP.
+    """
 
     def __init__(self):
+        """Initialize an empty metric registry."""
         self._metrics: dict[str, _Metric] = {}
 
     def register(self, metric: _Metric) -> _Metric:
+        """Register a metric in the registry, keyed by name and sorted labels.
+
+        Parameters
+        ----------
+        metric : _Metric
+            The metric to register.
+
+        Returns
+        -------
+        _Metric
+            The same metric instance (enables chaining).
+
+        Notes
+        -----
+        The registry key is ``(name, tuple(sorted(labels.items())))`` converted to
+        a string.  Metrics with the same name but different label sets are treated
+        as distinct entries.
+        """
         key = (metric.name, tuple(sorted(metric.labels.items())))
         self._metrics[str(key)] = metric
         return metric
 
     def counter(self, name: str, help_text: str, labels: dict[str, str] | None = None) -> Counter:
+        """Create and register a Counter metric.
+
+        Parameters
+        ----------
+        name : str
+            Prometheus metric name.
+        help_text : str
+            HELP string.
+        labels : dict[str, str] or None, optional
+            Key-value label pairs.
+
+        Returns
+        -------
+        Counter
+            The newly created and registered Counter.
+        """
         m = Counter(name, help_text, labels)
         self.register(m)
         return m
 
     def gauge(self, name: str, help_text: str, labels: dict[str, str] | None = None) -> Gauge:
+        """Create and register a Gauge metric.
+
+        Parameters
+        ----------
+        name : str
+            Prometheus metric name.
+        help_text : str
+            HELP string.
+        labels : dict[str, str] or None, optional
+            Key-value label pairs.
+
+        Returns
+        -------
+        Gauge
+            The newly created and registered Gauge.
+        """
         m = Gauge(name, help_text, labels)
         self.register(m)
         return m
 
     def histogram(self, name: str, help_text: str, labels: dict[str, str] | None = None, buckets: list[float] | None = None) -> Histogram:
+        """Create and register a Histogram metric.
+
+        Parameters
+        ----------
+        name : str
+            Prometheus metric name.
+        help_text : str
+            HELP string.
+        labels : dict[str, str] or None, optional
+            Key-value label pairs.
+        buckets : list[float] or None, optional
+            Bucket boundaries.  If None, uses ``Histogram._DEFAULT_BUCKETS``.
+
+        Returns
+        -------
+        Histogram
+            The newly created and registered Histogram.
+        """
         m = Histogram(name, help_text, labels, buckets=buckets)
         self.register(m)
         return m
 
     def render_all(self) -> str:
+        """Render every registered metric in Prometheus text exposition format.
+
+        Returns
+        -------
+        str
+            The complete Prometheus text format output, terminated with ``# EOF``.
+        """
         parts = []
         for m in self._metrics.values():
             parts.append(m.render())
@@ -297,6 +534,20 @@ class PrometheusExporter:
         backend: str = "unknown",
         num_gpus: int = 1,
     ):
+        """Initialize the Prometheus exporter and create all metric objects.
+
+        Parameters
+        ----------
+        port : int or None, optional
+            TCP port for the HTTP metrics server.  If None, reads the
+            ``TR_PROMETHEUS_PORT`` environment variable, falling back to 9090.
+        host : str, optional
+            Hostname or IP address to bind to.  Default ``"localhost"``.
+        backend : str, optional
+            Backend label attached to per-device metrics.  Default ``"unknown"``.
+        num_gpus : int, optional
+            Number of GPUs to create per-device gauges for.  Default 1.
+        """
         # WARNING: port 9090 is hardcoded. Multi-node deployments must pass
         # unique ports via TR_PROMETHEUS_PORT or equivalent.
         import os
@@ -362,6 +613,7 @@ class PrometheusExporter:
         # Rolling window for throughput gauge.
         # Each entry is (monotonic_timestamp, tokens, latency_ms).
         self._tps_window: deque[tuple[float, int, float]] = deque()
+        self._tps_window_lock = threading.Lock()
         self._tps_window_seconds: float = 60.0
 
         # Per-device gauges (one instance per GPU).
@@ -417,6 +669,14 @@ class PrometheusExporter:
             "tr_benchmark_quality_comet_kiwi",
             "COMET-Kiwi (reference-free) system score from the most recent quality benchmark.",
         )
+        self.quality_metricx = self.registry.gauge(
+            "tr_benchmark_quality_metricx",
+            "MetricX-24 system score (lower is better) from the most recent quality benchmark.",
+        )
+        self.quality_xcomet = self.registry.gauge(
+            "tr_benchmark_quality_xcomet",
+            "xCOMET-lite system score from the most recent quality benchmark.",
+        )
 
         # ── Histogram metrics ──
         self.throughput_hist = self.registry.histogram(
@@ -446,6 +706,14 @@ class PrometheusExporter:
     # ── Lifecycle ───────────────────────────────────────────────────────
 
     def _index_html(self) -> str:
+        """Return an HTML landing page for the metrics server root path.
+
+        Returns
+        -------
+        str
+            A minimal HTML document linking to ``/metrics`` and ``/health``,
+            labelled with the benchmark version.
+        """
         try:
             from benchmark import __version__
         except ImportError:
@@ -525,7 +793,14 @@ class PrometheusExporter:
         )
 
     def stop(self) -> None:
-        """Stop the metrics server."""
+        """Stop the metrics server and block until the server thread exits.
+
+        Calls ``HTTPServer.shutdown()`` then ``server_close()``, resets internal
+        state to None, and joins the server thread with a 5-second timeout.
+
+        Safe to call multiple times — subsequent calls are no-ops once the server
+        has been shut down.
+        """
         if self._server is not None:
             try:
                 self._server.shutdown()
@@ -580,10 +855,12 @@ class PrometheusExporter:
         # gaps between batches do not deflate TPS, and tight test loops
         # do not inflate it.
         now = time.monotonic()
-        self._tps_window.append((now, tokens, latency_ms))
+        with self._tps_window_lock:
+            self._tps_window.append((now, tokens, latency_ms))
         # Prune entries older than the window.
-        while self._tps_window and now - self._tps_window[0][0] > self._tps_window_seconds:
-            self._tps_window.popleft()
+        with self._tps_window_lock:
+            while self._tps_window and now - self._tps_window[0][0] > self._tps_window_seconds:
+                self._tps_window.popleft()
         # Compute rolling TPS from sum(tokens) / sum(latency_seconds).
         window_tokens = sum(t[1] for t in self._tps_window)
         window_latency_s = sum(t[2] for t in self._tps_window) / 1000.0
@@ -599,7 +876,28 @@ class PrometheusExporter:
         temp_c: float | None = None,
         power_w: float | None = None,
     ) -> None:
-        """Record device-level metrics for one GPU."""
+        """Record device-level metrics for one GPU.
+
+        Parameters
+        ----------
+        device_id : int
+            Zero-based GPU index.  Silently ignored if >= ``num_gpus``.
+        util_pct : float or None, optional
+            GPU utilization percentage (0-100).
+        mem_used_mib : float or None, optional
+            GPU memory used, in **mebibytes**.  Converted to bytes internally.
+        mem_total_mib : float or None, optional
+            GPU total memory, in **mebibytes**.  Converted to bytes internally.
+        temp_c : float or None, optional
+            GPU temperature in degrees Celsius.
+        power_w : float or None, optional
+            GPU power draw in watts.
+
+        Notes
+        -----
+        Only non-None values are updated; passing ``None`` for any parameter
+        leaves that gauge unchanged.
+        """
         if device_id >= len(self._device_gauges):
             return
         g = self._device_gauges[device_id]
@@ -620,13 +918,31 @@ class PrometheusExporter:
         ram_used_mib: float,
         swap_used_mib: float = 0.0,
     ) -> None:
-        """Record system-level metrics."""
+        """Record system-level CPU, RAM, and swap metrics.
+
+        Parameters
+        ----------
+        cpu_pct : float
+            CPU utilization percentage (0-100).
+        ram_used_mib : float
+            RAM used, in **mebibytes**.  Converted to bytes internally.
+        swap_used_mib : float, optional
+            Swap used, in **mebibytes**.  Default 0.0.  Converted to bytes.
+        """
         self.cpu_util.set(cpu_pct)
         self.ram_used.set(ram_used_mib * 1024 * 1024)
         self.swap_used.set(swap_used_mib * 1024 * 1024)
 
     def record_pipeline(self, queue_depth: int, starvation_pct: float = 0.0) -> None:
-        """Record pipeline-level metrics."""
+        """Record pipeline-level metrics.
+
+        Parameters
+        ----------
+        queue_depth : int
+            Number of tokenised chunks waiting in the pipeline queue.
+        starvation_pct : float, optional
+            Percentage of time the GPU spent idle waiting for data.  Default 0.0.
+        """
         self.queue_depth.set(queue_depth)
         self.data_starvation.set(starvation_pct)
 
@@ -637,8 +953,31 @@ class PrometheusExporter:
         comet: float | None = None,
         bertscore: float | None = None,
         comet_kiwi: float | None = None,
+        metricx: float | None = None,
+        xcomet: float | None = None,
     ) -> None:
-        """Record quality benchmark scores."""
+        """Record quality benchmark scores.
+
+        Parameters
+        ----------
+        bleu : float or None, optional
+            BLEU score (typically 0-100).
+        chrf : float or None, optional
+            chrF++ score (typically 0-100).
+        comet : float or None, optional
+            COMET-22 system score (typically 0-1, higher is better).
+        bertscore : float or None, optional
+            BERTScore F1 system score (typically 0-1).
+        comet_kiwi : float or None, optional
+            COMET-Kiwi reference-free quality score (typically 0-1).
+        metricx : float or None, optional
+            MetricX-24 system score (lower is better).
+
+        Notes
+        -----
+        Only non-None values are updated; passing ``None`` for any metric
+        leaves its gauge unchanged.
+        """
         if bleu is not None:
             self.quality_bleu.set(bleu)
         if chrf is not None:
@@ -649,6 +988,10 @@ class PrometheusExporter:
             self.quality_bertscore.set(bertscore)
         if comet_kiwi is not None:
             self.quality_comet_kiwi.set(comet_kiwi)
+        if metricx is not None:
+            self.quality_metricx.set(metricx)
+        if xcomet is not None:
+            self.quality_xcomet.set(xcomet)
 
     def record_error(self) -> None:
         """Increment the error counter."""
@@ -657,7 +1000,21 @@ class PrometheusExporter:
     # ── Snapshot ─────────────────────────────────────────────────────────
 
     def snapshot(self) -> dict:
-        """Return a JSON-serializable summary of all current metric values."""
+        """Return a JSON-serializable summary of all current gauge and counter values.
+
+        Returns
+        -------
+        dict
+            A flat dictionary mapping metric keys to their current numeric values.
+            Includes the legacy ``throughput_tps`` key alias alongside the explicit
+            ``throughput_tps_rolling`` key.
+
+        Notes
+        -----
+        Histogram distributions are NOT included — this snapshot captures only
+        the instantaneous gauge and cumulative counter values.  For histogram data,
+        scrape the ``/metrics`` HTTP endpoint.
+        """
         _rolling = self.throughput_rolling.get()
         return {
             "batches_total": self.batches_total.get(),
@@ -676,4 +1033,6 @@ class PrometheusExporter:
             "quality_comet": self.quality_comet.get(),
             "quality_bertscore": self.quality_bertscore.get(),
             "quality_comet_kiwi": self.quality_comet_kiwi.get(),
+            "quality_metricx": self.quality_metricx.get(),
+            "quality_xcomet": self.quality_xcomet.get(),
         }

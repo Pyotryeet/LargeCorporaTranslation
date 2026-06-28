@@ -17,6 +17,23 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class SystemSample:
+    """A single snapshot of system-level metrics captured at a point in time.
+
+    A dataclass holding CPU utilization, RAM usage, disk I/O throughput, and
+    swap usage for one sampling instant.  Also provides JSON serialization
+    via :meth:`to_json`.
+
+    Attributes:
+        timestamp: ISO-8601 UTC timestamp with millisecond precision (str).
+        elapsed_s: Wall-clock seconds since the sampler was started (float).
+        cpu_util_pct: CPU utilization as a percentage (0-100) (float).
+        ram_used_mib: RAM currently in use, in mebibytes (int).
+        ram_total_mib: Total physical RAM, in mebibytes (int).
+        disk_read_mbps: Disk read throughput in mebibytes per second (float).
+        disk_write_mbps: Disk write throughput in mebibytes per second (float).
+        swap_used_mib: Swap space currently in use, in mebibytes. Defaults to 0 (int).
+    """
+
     timestamp: str
     elapsed_s: float
     cpu_util_pct: float
@@ -27,11 +44,27 @@ class SystemSample:
     swap_used_mib: int = 0
 
     def to_json(self) -> str:
+        """Serialize this sample to a JSON string.
+
+        Returns:
+            str: A JSON object string with all dataclass fields. Values are sanitized
+            (non-finite floats become null, non-serializable types are converted to
+            strings) via :func:`benchmark.utils.json_utils.sanitized_dumps`.
+        """
         return sanitized_dumps(asdict(self), ensure_ascii=False)
 
 
 class SystemSampler:
     def __init__(self, output_dir: Path, sample_rate_hz: int = 1):
+        """Initialize the system sampler.
+
+        Args:
+            output_dir: Directory where the system-metrics JSONL log file will be
+                written. The file is created on :meth:`start`.
+            sample_rate_hz: Target sampling frequency in Hz. Defaults to 1 (once per
+                second). This value is stored for reference but the caller is
+                responsible for pacing calls to :meth:`sample`.
+        """
         self.output_dir = output_dir
         self.sample_rate_hz = sample_rate_hz
         self.sample_count = 0
@@ -48,9 +81,22 @@ class SystemSampler:
         self._cpu_initialized = False
 
     def start(self, start_time: float) -> None:
-        self._start_time = start_time
+        """Begin system metric collection.
+
+        Opens a new timestamped JSONL log file in ``output_dir`` and primes the
+        disk I/O baseline counters so that the first call to :meth:`sample`
+        produces meaningful throughput deltas.
+
+        CPU priming is deferred to the first :meth:`sample` call (see that
+        method for rationale).
+
+        Args:
+            start_time: The reference ``time.monotonic()`` value used to compute
+                ``elapsed_s`` for every subsequent sample.
+        """
         ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         self._log_file = self.output_dir / f"system_metrics_{ts}.jsonl"
+        self._start_time = start_time
         # Prime disk I/O baseline so the first sample() call produces real deltas.
         disk = psutil.disk_io_counters()
         if disk is not None:
@@ -63,6 +109,25 @@ class SystemSampler:
         logger.info(f"System sampler -> {self._log_file}")
 
     def sample(self) -> Optional[SystemSample]:
+        """Capture one system-metrics snapshot.
+
+        Reads CPU utilization, virtual memory, swap, and disk I/O counters via
+        psutil and produces a :class:`SystemSample`.  On the very first call it
+        primes the CPU measurement so subsequent calls produce non-zero deltas.
+
+        The sample is appended to an in-memory buffer.  When the buffer reaches
+        ``_flush_interval`` entries, the buffer is flushed to disk automatically.
+
+        Returns:
+            Optional[SystemSample]: The captured sample, or ``None`` if
+            :meth:`start` has not been called yet.
+
+        Side effects:
+            - Updates internal disk I/O baselines (``_prev_read``, ``_prev_write``,
+              ``_prev_time``) for the next call.
+            - Increments ``sample_count``.
+            - May write to the JSONL log file if the buffer threshold is reached.
+        """
         if self._start_time is None:
             return None
         wall_now = time.monotonic()

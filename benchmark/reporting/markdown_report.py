@@ -1,4 +1,9 @@
-"""Markdown report renderer — produces human-readable benchmark_report.md."""
+"""Markdown report renderer — produces human-readable benchmark_report.md.
+
+Writes a formatted Markdown report from a benchmark result dictionary, including
+configuration, environment, throughput, GPU utilisation, quality scores, and
+extrapolation estimates with confidence intervals.
+"""
 
 import logging
 import math
@@ -9,8 +14,8 @@ from datetime import datetime
 from pathlib import Path
 
 from benchmark.config.constants import (
-    QUALITY_BLEU_TARGET, QUALITY_CHRF_TARGET, QUALITY_COMET_TARGET,
-    QUALITY_BERTSORE_TARGET,
+    QUALITY_BLEU_TARGET, QUALITY_CHRF_TARGET, QUALITY_COMET_TARGET, QUALITY_COMET_KIWI_TARGET,
+    QUALITY_BERTSORE_TARGET, QUALITY_METRICX_TARGET, QUALITY_XCOMET_TARGET,
 )
 
 logger = logging.getLogger(__name__)
@@ -31,7 +36,37 @@ def _fmt_num(val, fmt_spec=",.1f", default="N/A"):
 
 
 class MarkdownReportWriter:
+    """Renders benchmark results as a Markdown report file.
+
+    Public method `write` takes an output directory and a report dictionary, renders
+    the Markdown, and writes it atomically via a tempfile + rename (with cross-
+    filesystem fallback to copy).
+    """
+
     def write(self, output_dir: Path, report: dict) -> Path:
+        """Render and write the benchmark report to disk.
+
+        Creates the output subdirectory ``output_dir/report`` if it does not exist,
+        then atomically writes ``benchmark_report.md`` inside it.
+
+        Args:
+            output_dir: The parent directory under which the ``report/`` subdirectory
+                will be created (or reused).
+            report: A nested dictionary with the full benchmark result. Expected keys
+                include ``_metadata``, ``config``, ``environment``, ``metrics``
+                (``batch``, ``device``), ``quality``, and ``extrapolation``.
+
+        Returns:
+            The Path to the written report file
+            (``output_dir / "report" / "benchmark_report.md"``).
+
+        Raises:
+            OSError: If the tempfile or rename fails (the tempfile is cleaned up on
+                failure).
+
+        Side effects:
+            Creates ``output_dir/report/`` and writes a .md file inside it.
+        """
         report_dir = output_dir / "report"
         report_dir.mkdir(parents=True, exist_ok=True)
         path = report_dir / "benchmark_report.md"
@@ -56,6 +91,17 @@ class MarkdownReportWriter:
         return path
 
     def _render(self, r: dict) -> str:
+        """Build the full Markdown report string from a benchmark result dictionary.
+
+        Args:
+            r: A nested dictionary with the full benchmark result. See ``write()``
+                for the expected schema.
+
+        Returns:
+            A string containing the complete Markdown report.
+
+        Side effects: None. No I/O — pure rendering.
+        """
         def _safe(d, *keys, default="N/A"):
             """Walk nested dict lookups without crashing on missing keys or non-dicts."""
             _NOT_FOUND = object()
@@ -126,7 +172,13 @@ class MarkdownReportWriter:
         lines.append(f"| BERTScore | {bertscore_s_fmt} | >= {QUALITY_BERTSORE_TARGET} | {'✅' if isinstance(bertscore_s, (int, float)) and bertscore_s >= QUALITY_BERTSORE_TARGET else '—'} |")
         comet_kiwi_s = q.get("comet_kiwi", {}).get("system_score", "N/A")
         comet_kiwi_s_fmt = f"{comet_kiwi_s:.4f}" if isinstance(comet_kiwi_s, (int, float)) and math.isfinite(comet_kiwi_s) else "N/A"
-        lines.append(f"| COMET-Kiwi | {comet_kiwi_s_fmt} | >= {QUALITY_COMET_TARGET} | {'✅' if isinstance(comet_kiwi_s, (int, float)) and comet_kiwi_s >= QUALITY_COMET_TARGET else '—'} |")
+        lines.append(f"| COMET-Kiwi | {comet_kiwi_s_fmt} | >= {QUALITY_COMET_KIWI_TARGET} | {'✅' if isinstance(comet_kiwi_s, (int, float)) and comet_kiwi_s >= QUALITY_COMET_TARGET else '—'} |")
+        metricx_s = q.get("metricx", {}).get("system_score", "N/A")
+        metricx_s_fmt = f"{metricx_s:.4f}" if isinstance(metricx_s, (int, float)) and math.isfinite(metricx_s) else "N/A"
+        lines.append(f"| MetricX-24 | {metricx_s_fmt} | <= {QUALITY_METRICX_TARGET} | {'✅' if isinstance(metricx_s, (int, float)) and metricx_s <= QUALITY_METRICX_TARGET else '—'} |")
+        xcomet_s = q.get("xcomet", {}).get("system_score", "N/A")
+        xcomet_s_fmt = f"{xcomet_s:.4f}" if isinstance(xcomet_s, (int, float)) and math.isfinite(xcomet_s) else "N/A"
+        lines.append(f"| xCOMET-lite | {xcomet_s_fmt} | >= {QUALITY_XCOMET_TARGET} | {'✅' if isinstance(xcomet_s, (int, float)) and xcomet_s >= QUALITY_XCOMET_TARGET else '—'} |")
         lines.append("")
         ext = r.get("extrapolation", {})
         lines.append("## Extrapolation")

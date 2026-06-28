@@ -11,7 +11,6 @@
 #    ./run.sh --model 12B               # Select model size (4B|12B|27B|E2B|E4B|E2B-Q4_0|E4B-Q4_0|26B-A4B)
 #    ./run.sh --multi-gpu               # Run 1 model copy per GPU (data-parallel)
 #    ./run.sh --diffusion               # Use diffusion model (LLaDA 8B)
-#    ./run.sh --tensorrt                # TensorRT acceleration (CUDA only)
 #    ./run.sh --precompile              # Pre-compile all kernels, then exit
 #    ./run.sh --observability           # Enable Prometheus dashboard on :9090
 #    ./run.sh --batch-size 128          # Force batch size
@@ -19,7 +18,6 @@
 #    ./run.sh --resume output/dir/      # Resume from checkpoint
 #
 #  Quick combinations:
-#    ./run.sh --quick --tensorrt        # Fast eval with TRT
 #    ./run.sh --diffusion --quick       # Test diffusion model
 #    ./run.sh --full --observability    # Production with live dashboard
 #    ./run.sh --no-compile --multi-gpu  # 2× throughput on dual GPU
@@ -57,15 +55,14 @@ info(){ echo -e "  ${C}→${N} $*"; }
 # ═══════════════════════════════════════════════════════════════════════════
 
 # Run mode.
-MODE="full"                    # full | quick | dry-run | benchmark-only | translate-only | warmup-only | precompile
+MODE="full"                    # full | quick | dry-run | benchmark-only | translate-only | warmup-only
 MODEL_SIZE="4B"               # 4B | E2B | E4B | E2B-Q4_0 | E4B-Q4_0 | 26B-A4B | ministral-3b
-BACKEND="auto"                 # auto | autoregressive | diffusion | tensorrt
+BACKEND="auto"                 # auto | autoregressive | diffusion
 DURATION=""                    # Override seconds
 BATCH_SIZE=""                  # Override batch size
 RESUME_DIR=""                  # Resume path
 CONFIG_FILE=""                 # Explicit config file (overrides auto-gen)
 OBSERVABILITY=false            # Enable Prometheus
-FORCE_RECOMPILE=false          # Force JIT + TRT recompilation
 SPECULATIVE=false              # Enable speculative decoding
 SPEC_MODE="self"               # self | draft_model
 SPEC_TOKENS=3                  # K speculative tokens
@@ -77,10 +74,6 @@ EXTRA_ARGS=()
 FORCE_CHECKPOINT=""            # Custom checkpoint interval
 DISABLE_FP8=false              # Skip FP8 entirely (TR_SKIP_FP8=1)
 SINGLE_GPU=false               # Force single-GPU
-TRT_PRECISION="fp16"           # fp16 | fp8 | int8
-TRT_CACHE_DIR=""               # TensorRT engine cache dir
-TRT_CALIBRATION=""             # Calibration data file for INT8
-TRT_ENABLED=false              # Track TensorRT flag (--tensorrt or --use-tensorrt)
 DATA_SHARD=""                  # Data shard index for multi-GPU runs (0-based)
 MULTI_GPU=false                # Opt-in: run 1 model copy per GPU with data shards
 
@@ -92,10 +85,8 @@ while [[ $# -gt 0 ]]; do
         --benchmark-only)    MODE="benchmark-only"; shift ;;
         --translate-only)    MODE="translate-only"; shift ;;
         --warmup-only)       MODE="warmup-only"; shift ;;
-        --precompile)        MODE="precompile"; shift ;;
         --model)             MODEL_SIZE="$2"; shift 2 ;;
         --diffusion)         BACKEND="diffusion"; shift ;;
-        --tensorrt)          BACKEND="tensorrt"; shift ;;
         --nllb)              BACKEND="encoder_decoder"; shift ;;
         --ar)                BACKEND="autoregressive"; shift ;;
         --nllb-src-lang)     NLLB_SRC_LANG="$2"; shift 2 ;;
@@ -110,7 +101,6 @@ while [[ $# -gt 0 ]]; do
         --shard)             DATA_SHARD="$2"; shift 2 ;;
         --config)            CONFIG_FILE="$2"; shift 2 ;;
         --observability)     OBSERVABILITY=true; shift ;;
-        --force-recompile)   FORCE_RECOMPILE=true; shift ;;
         --output)            FORCE_OUTPUT="$2"; shift 2 ;;
         --data)              FORCE_DATA="$2"; shift 2 ;;
         --refs)              FORCE_REFS="$2"; shift 2 ;;
@@ -128,11 +118,7 @@ while [[ $# -gt 0 ]]; do
         --no-fp8)            DISABLE_FP8=true; shift ;;
         --single-gpu)        SINGLE_GPU=true; shift ;;
         --no-sudo)           info "run.sh does not require sudo — ignoring --no-sudo"; shift ;;
-        --use-tensorrt)      BACKEND="tensorrt"; TRT_ENABLED=true; shift ;;
         --multi-gpu)         MULTI_GPU=true; shift ;;
-        --trt-precision)     TRT_PRECISION="$2"; shift 2 ;;
-        --trt-calibration)   TRT_CALIBRATION="$2"; shift 2 ;;
-        --trt-cache)         TRT_CACHE_DIR="$2"; shift 2 ;;
         --help|-h)
             echo "Usage: ./run.sh [OPTIONS]"
             echo ""
@@ -140,7 +126,6 @@ while [[ $# -gt 0 ]]; do
             echo "  (default)      Full 2-hour benchmark"
             echo "  --quick        5-minute evaluation"
             echo "  --dry-run      60-second smoke test"
-            echo "  --precompile   Pre-compile all kernels + TRT engines, then exit"
             echo "  --warmup-only  Load + warmup model, then exit"
             echo "  --benchmark-only   Quality evaluation only"
             echo "  --translate-only   Translation only (skip quality)"
@@ -148,11 +133,9 @@ while [[ $# -gt 0 ]]; do
             echo "MODEL:"
             echo "  --model 4B|E2B|E4B|E2B-Q4_0|E4B-Q4_0|26B-A4B|ministral-3b   Model size (default: 4B)"
             echo "  --diffusion           Use diffusion model (LLaDA 8B)"
-            echo "  --tensorrt            TensorRT acceleration (CUDA only)"
             echo "  --nllb                NLLB encoder-decoder translation model"
             echo "  --nllb-src-lang CODE  NLLB source language (default: eng_Latn)"
             echo "  --nllb-tgt-lang CODE  NLLB target language (default: tur_Latn)"
-            echo "  --use-tensorrt        Alias for --tensorrt"
             echo "  --ar                  Force autoregressive (default)"
             echo "  --speculative         Enable speculative decoding (self-speculative)"
             echo "  --spec-mode MODE      'self' or 'draft_model' (default: self)"
@@ -163,7 +146,6 @@ while [[ $# -gt 0 ]]; do
             echo "  --duration N      Run duration in seconds"
             echo "  --batch-size N    Force batch size"
             echo "  --observability   Enable Prometheus dashboard on :9090"
-            echo "  --force-recompile Force JIT + TRT recompilation"
             echo "  --config FILE     Use explicit config file"
             echo "  --resume DIR      Resume from checkpoint directory"
             echo "  --output DIR      Output directory"
@@ -180,9 +162,6 @@ while [[ $# -gt 0 ]]; do
             echo "  --warmup          Alias for --warmup-only"
             echo "  --single-gpu      Force single-GPU mode"
             echo "  --no-fp8          Disable FP8 precision (use BF16)"
-            echo "  --trt-precision   fp16|fp8|int8  TensorRT precision (default: fp16)"
-            echo "  --trt-cache DIR   TensorRT engine cache directory"
-            echo "  --trt-calibration FILE  Calibration data for INT8"
             echo "  --no-sudo         No-op (run.sh does not require sudo)"
             echo "  --python PATH     Python binary"
             echo "  --venv DIR        Virtual env directory"
@@ -209,10 +188,6 @@ if [ "$UNAME_S" = "Darwin" ] && [ "$UNAME_M" = "arm64" ]; then
     DEFAULT_OUTPUT="data/output"
     DEFAULT_REFS="data/references/golden_en_tr.jsonl"
     PLATFORM_LABEL="macOS Apple Silicon (MPS)"
-    if [ "$BACKEND" = "tensorrt" ]; then
-        warn "TensorRT is CUDA-only — using extreme-optimized AR backend instead"
-        BACKEND="autoregressive"
-    fi
 elif [ "$UNAME_S" = "Linux" ] && command -v nvidia-smi &>/dev/null; then
     PLATFORM="cuda"
     NG=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1 || echo "GPU")
@@ -239,10 +214,6 @@ else
     DEFAULT_OUTPUT="data/output"
     DEFAULT_REFS="data/references/golden_en_tr.jsonl"
     PLATFORM_LABEL="CPU"
-    if [ "$BACKEND" = "tensorrt" ]; then
-        warn "TensorRT requires CUDA — using AR backend"
-        BACKEND="autoregressive"
-    fi
 fi
 
 # Override model path for diffusion.
@@ -471,49 +442,12 @@ PYSPLIT
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Pre-compile mode
-# ═══════════════════════════════════════════════════════════════════════════
-if [ "$MODE" = "precompile" ]; then
-    banner "Pre-compiling JIT Kernels + TRT Engines"
-    source "${VENV_DIR}/bin/activate" 2>/dev/null || true
-
-    if [ "$FORCE_RECOMPILE" = true ]; then
-        export TR_BENCHMARK_FORCE_RECOMPILE=1
-        info "Force recompilation enabled"
-    fi
-
-    $PYTHON_BIN -c "
-from benchmark.hardware.jit_compiler import precompile_all_kernels, get_jit_compiler
-from benchmark.hardware.trt_builder import TRTEngineBuilder
-import torch
-
-n_jit = precompile_all_kernels()
-print(f'JIT Kernels compiled: {n_jit}')
-
-compiler = get_jit_compiler()
-print(f'Cache: {compiler.cache_stats()}')
-" 2>&1 || warn "JIT pre-compilation had warnings (expected if nvcc not available)"
-
-    if [ "$PLATFORM" = "cuda" ] && $PYTHON_BIN -c "import tensorrt" 2>/dev/null; then
-        info "TensorRT engine pre-build requires a model download on first run."
-        info "The engine will be built automatically during the first benchmark."
-    fi
-
-    banner "Pre-compilation Complete"
-    echo "  Run ./run.sh --full to start benchmarking."
-    exit 0
-fi
-
-# ═══════════════════════════════════════════════════════════════════════════
 # Write runtime config
 # ═══════════════════════════════════════════════════════════════════════════
 
 if [ -z "$CONFIG_FILE" ]; then
     CONFIG_FILE="$OUTPUT/runtime_config_$(date +%Y%m%d_%H%M%S).yaml"
     mkdir -p "$OUTPUT"
-
-    TRT_BOOL="false"
-    if [ "$BACKEND" = "tensorrt" ]; then TRT_BOOL="true"; fi
 
     DIFF_STEPS=256
     DIFF_GUIDANCE=1.0
@@ -540,11 +474,6 @@ model:
   backend_type: "$BACKEND"
   plugin_name: ""
   plugin_config: {}
-  use_tensorrt: $TRT_BOOL
-  tensorrt_precision: "${TRT_PRECISION:-fp16}"
-  tensorrt_max_batch: 32
-  tensorrt_cache_dir: "${TRT_CACHE_DIR:-}"
-  tensorrt_calibration_file: "${TRT_CALIBRATION:-}"
   # v3.4: Speculative decoding
   use_speculative: ${SPECULATIVE,,}   # bash lower-casing: true/false
   speculative_mode: "$SPEC_MODE"
@@ -648,7 +577,7 @@ esac
 echo -e "  ${B}Model:${N}     ${_model_label}"
 echo -e "  ${B}Backend:${N}   $BACKEND"
 echo -e "  ${B}Platform:${N}  $PLATFORM ($(uname -m))"
-echo -e "  ${B}Precision:${N} BF16 + TF32 + SDPA (FP8 not active on pip venvs; see docs/FP8_TE_CUDA_ISSUES.md)"
+echo -e "  ${B}Precision:${N} BF16 + TF32 + SDPA"
 echo -e "  ${B}Config:${N}    $CONFIG_FILE"
 echo ""
 
@@ -667,11 +596,6 @@ else:
 print(f'  PyTorch: {torch.__version__}')
 " 2>/dev/null || true
 
-if [ "$FORCE_RECOMPILE" = true ]; then
-    export TR_BENCHMARK_FORCE_RECOMPILE=1
-    warn "Force recompilation enabled — engines will be rebuilt"
-fi
-
 # ═══════════════════════════════════════════════════════════════════════════
 # Activate venv + launch
 # ═══════════════════════════════════════════════════════════════════════════
@@ -688,20 +612,9 @@ if [ -f "${VENV_DIR}/bin/activate" ]; then
 fi
 
 if [ "$OBSERVABILITY" = true ]; then
-    info "Starting Prometheus metrics exporter (background)..."
-    $PYTHON_BIN -c "
-from benchmark.observability.server import start_dashboard_server
-srv = start_dashboard_server(port=9090)
-print('Dashboard: http://localhost:9090/')
-print('Metrics:   http://localhost:9090/metrics')
-import time; time.sleep(2)
-" &
-    OBS_PID=$!
-    # Clean up on SIGINT/SIGTERM as well — not just EXIT.
-    # Without this, Ctrl-C leaves the Prometheus exporter orphaned.
-    _cleanup_obs() { kill "$OBS_PID" 2>/dev/null || true; }
-    trap _cleanup_obs EXIT SIGINT SIGTERM
-    ok "Observability: http://localhost:9090/"
+    info "Observability mode enabled — the benchmark harness will start a"
+    info "Prometheus metrics exporter on port 9090 at launch."
+    ok "Observability: http://localhost:9090/ metrics on :9090/metrics"
 fi
 
 info "Launching benchmark..."

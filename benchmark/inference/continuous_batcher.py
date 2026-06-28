@@ -127,10 +127,28 @@ class SequenceState:
 
     @property
     def total_tokens(self) -> int:
+        """Return the total number of tokens processed so far for this sequence.
+
+        This is the sum of the current position (tokens consumed by the model,
+        including prompt tokens and generated tokens accounted via position)
+        and the number of generated output tokens.
+
+        Returns
+        -------
+        int
+            Total token count (prompt consumed + generated).
+        """
         return self.current_position + len(self.generated_ids)
 
     @property
     def prompt_len(self) -> int:
+        """Return the number of tokens in the original prompt for this sequence.
+
+        Returns
+        -------
+        int
+            Length of the input prompt in tokens.
+        """
         return len(self.input_ids)
 
     @property
@@ -161,6 +179,25 @@ class ContinuousBatcher:
         max_batch_size: int = 64,
         pad_token_id: int = 0,
     ):
+        """Initialise the continuous batching scheduler.
+
+        Parameters
+        ----------
+        engine : InferenceEngine
+            The inference engine providing the model, tokenizer, and decoding params.
+        paged_kv : PagedKVCache
+            The paged KV-cache manager for zero-fragmentation block allocation.
+        max_batch_size : int, default 64
+            Maximum number of sequences allowed in the combined prefill+decode batch.
+        pad_token_id : int, default 0
+            Token ID used for padding shorter sequences within a batch.
+
+        Side effects
+        ------------
+        Initialises internal queues (_waiting heap, _prefill_queue, _decode_queue),
+        sequence tracking dicts, batch ordering structures, PagedCache state, and
+        performance statistics counters.
+        """
         self.engine = engine
         self._paged_kv = paged_kv
         self.max_batch_size = max_batch_size
@@ -211,6 +248,10 @@ class ContinuousBatcher:
         # ── Priority scheduling normalisers ──
         self._max_prompt_len: int = 1  # longest prompt seen so far (>= 1 avoids div0)
         self._max_wait: float = 1.0    # longest wait seen so far (>= 1.0 avoids div0)
+
+        # ── Deferred heap rescore (avoids O(N) heapify on every dequeue) ──
+        self._dequeue_since_rescore: int = 0
+        self._rescore_interval: int = 16  # rebuild heap every N dequeues
 
     # ── Public API ────────────────────────────────────────────────────────
 
@@ -419,18 +460,55 @@ class ContinuousBatcher:
         return self._completed
 
     def is_idle(self) -> bool:
-        """True when no sequences are waiting, prefilling, or decoding."""
+        """Return True when no sequences are waiting, prefilling, or decoding.
+
+        The scheduler is considered idle when all three queues are empty:
+        _waiting (heap), _prefill_queue, and _decode_queue.
+
+        Returns
+        -------
+        bool
+            True if no work is pending or in progress.
+        """
         return not self._waiting and not self._prefill_queue and not self._decode_queue
 
     def running_count(self) -> int:
-        """Total active sequences (prefill + decode)."""
+        """Return the total number of active sequences currently in the scheduler.
+
+        Active sequences include those in _prefill_queue (mid-prefill) and
+        _decode_queue (generating tokens).  Does not include waiting sequences.
+
+        Returns
+        -------
+        int
+            Number of sequences currently prefilling or decoding.
+        """
         return len(self._prefill_queue) + len(self._decode_queue)
 
     def waiting_count(self) -> int:
+        """Return the number of sequences waiting in the submission queue.
+
+        Sequences that have been submitted but not yet admitted into the
+        prefill or decode queues are counted here.
+
+        Returns
+        -------
+        int
+            Number of sequences in the _waiting heap.
+        """
         return len(self._waiting)
 
     def active_batch_size(self) -> int:
-        """Number of sequences currently in the decode batch (excludes prefilling)."""
+        """Return the number of sequences currently in the decode batch.
+
+        Only fully-prefilled sequences in _decode_queue that have an entry in
+        _active_order are counted.  Prefill-only sequences are excluded.
+
+        Returns
+        -------
+        int
+            Size of the active decode batch (length of _active_order).
+        """
         return len(self._active_order)
 
     # ── Priority queue helpers ─────────────────────────────────────────────
@@ -457,22 +535,54 @@ class ContinuousBatcher:
         return score
 
     def _priority_tuple(self, seq: SequenceState) -> tuple[float, int, SequenceState]:
-        """Build a heapq entry for *seq* with a freshly computed score."""
+        """Build a heapq entry for *seq* with a freshly computed priority score.
+
+        The tuple format is (score, seq_id, state) suitable for use with
+        Python's heapq module (min-heap, so lower scores = higher priority).
+
+        Parameters
+        ----------
+        seq : SequenceState
+            The sequence to score.
+
+        Returns
+        -------
+        tuple[float, int, SequenceState]
+            A (priority_score, seq_id, SequenceState) tuple.  The seq_id is
+            included as a tie-breaker to avoid comparing SequenceState objects
+            directly when scores are equal.
+        """
         return (self._score(seq), seq.seq_id, seq)
 
     def _dequeue_waiting(self) -> SequenceState:
         """Pop the highest-priority sequence from the waiting queue.
 
-        Because priorities change with wait time, the heap is sorted on every
-        pop: we recompute scores for all entries, rebuild the heap, then pop
-        the current best.  For typical batch sizes (<1000) this is negligible.
+        Priorities change with wait time, so the heap is periodically rescored.
+        To avoid O(N*steps) overhead from re-heapifying on every single dequeue,
+        rescoring is deferred until ``_rescore_interval`` dequeues have passed
+        since the last full rebuild.  For typical batch sizes (<1000) and a
+        rescore interval of 16, this reduces heap-rebuild overhead by ~94%.
+
+        Returns
+        -------
+        SequenceState
+            The highest-priority waiting sequence.
+
+        Raises
+        ------
+        IndexError
+            If the waiting queue is empty when this method is called.
         """
         if not self._waiting:
             raise IndexError("_dequeue_waiting called on empty queue")
 
-        # Re-score and rebuild heap so the top entry reflects current wait times.
-        self._waiting = [self._priority_tuple(entry[2]) for entry in self._waiting]
-        heapq.heapify(self._waiting)
+        # Increment a counter; only rebuild the full heap periodically.
+        self._dequeue_since_rescore += 1
+        if self._dequeue_since_rescore >= self._rescore_interval:
+            self._waiting = [self._priority_tuple(entry[2]) for entry in self._waiting]
+            heapq.heapify(self._waiting)
+            self._dequeue_since_rescore = 0
+
         _, _, seq = heapq.heappop(self._waiting)
         return seq
 
@@ -532,17 +642,15 @@ class ContinuousBatcher:
                 self._prefill_chunks(prefill_chunks)
                 self.total_prefill_ms += (time.monotonic() - t0) * 1000.0
             except Exception:
-                # Prefill failure — atomic rollback.
-                # Free blocks allocated during this prefill attempt, reset
-                # prefill_progress so the sequence stays in _prefill_queue
-                # and can retry.
-                for seq, chunk_size in prefill_chunks:
-                    seq.prefill_progress = max(0, seq.prefill_progress - chunk_size)
+                # Prefill failure — _prefill_chunks already rolled back
+                # prefill_progress for the chunks it attempted.  We free
+                # paged blocks (the KV data in them may be corrupt) and
+                # let the scheduler retry on the next step() call.
+                for seq, _chunk_size in prefill_chunks:
                     try:
                         self._paged_kv.free(seq.seq_id)
                     except KeyError:
                         pass
-                    seq.current_position = seq.prefill_progress
                 raise
 
         # ── Build PagedCache for the combined decode + prefill batch ──
@@ -637,18 +745,43 @@ class ContinuousBatcher:
         except Exception:
             # Rollback: reset prefill_progress for chunks that were
             # partially written (paged blocks may be corrupt — caller
-            # should free and re-allocate).
+            # frees and re-allocates blocks in the outer handler).
             for sid, csize in written_chunks:
                 seq = self._running.get(sid)
                 if seq is not None:
                     seq.prefill_progress -= csize
                     seq.current_position = seq.prefill_progress
+            raise  # propagate so the outer handler frees blocks and retries
             raise
 
     def _decode_one_step(self) -> list[int]:
         """Run one decode step for all sequences in _decode_queue.
 
-        Returns list of seq_ids that completed (EOS or max_tokens).
+        Assembles a batch of the next input token for each active decode
+        sequence, runs a single model forward pass (1 token per sequence),
+        updates the PagedCache in-place, and checks for completions.
+
+        Uses _active_order for deterministic batch-index to seq_id mapping,
+        avoiding the dict-iteration ordering bug.
+
+        Side effects
+        ------------
+        - Updates seq.generated_ids with the newly sampled token.
+        - Increments seq.current_position.
+        - Increments self.total_tokens_generated.
+        - Adds elapsed decode time to self.total_decode_ms.
+        - Marks completed sequences as seq.done = True.
+        - PagedCache is mutated in-place by attention layers.
+
+        Returns
+        -------
+        list[int]
+            seq_ids that completed this step (hit EOS or max_new_tokens).
+
+        Notes
+        -----
+        The attention mask is not passed to the model — PagedCache assembles
+        full-length KV tensors that already encode the causal mask.
         """
         device = self.device
         completed_ids: list[int] = []
@@ -678,12 +811,14 @@ class ContinuousBatcher:
         self.total_decode_ms += decode_ms
 
         # ── Update sequences, detect completions ──
+        # Convert to CPU once — avoid per-sequence .item() GPU→CPU syncs.
+        next_tokens_cpu = next_tokens.cpu().tolist()
         for batch_idx, seq_id in enumerate(self._active_order):
             seq = self._running.get(seq_id)
             if seq is None or seq.done:
                 continue
 
-            tok = next_tokens[batch_idx].item()
+            tok = next_tokens_cpu[batch_idx]
             seq.generated_ids.append(tok)
             seq.current_position += 1
             self.total_tokens_generated += 1
@@ -698,10 +833,25 @@ class ContinuousBatcher:
     # ── Internal: Legacy prefill (kept for backward compat / testing) ───────
 
     def _prefill_batch(self, sequences: list[SequenceState]) -> None:
-        """Full-prompt prefill (legacy, non-chunked).
+        """Full-prompt prefill for a batch of newly admitted sequences (legacy, non-chunked).
 
-        Used when chunked prefill is disabled or for testing.  Prefills
-        the entire prompt in one forward pass, then builds the PagedCache.
+        Used when chunked prefill is disabled or for testing.  Prefills the entire
+        prompt for each sequence in one forward pass, then rebuilds the PagedCache.
+
+        When there are 4 or more sequences (MIN_BATCH_FOR_CHUNKED_PREFILL), uses
+        batched padded prefill (_prefill_batch_padded); otherwise prefills sequences
+        one at a time (_prefill_sequence) to avoid padding waste.
+
+        Parameters
+        ----------
+        sequences : list[SequenceState]
+            Newly admitted sequences to fully prefill.
+
+        Side effects
+        ------------
+        - Allocates paged KV-cache blocks for each sequence.
+        - Sets seq.current_position to the prompt length.
+        - Rebuilds self._paged_cache to include all active sequences.
         """
         from benchmark.inference.paged_attention import PagedCache
 
@@ -726,7 +876,28 @@ class ContinuousBatcher:
         self._paged_cache = PagedCache(self._paged_kv, seq_ids=all_seq_ids)
 
     def _prefill_batch_padded(self, sequences: list[SequenceState]) -> None:
-        """Batched prefill for 4+ sequences — pads to max prompt length."""
+        """Batched prefill for 4+ sequences — pads to the longest prompt length.
+
+        Pads all sequences to a uniform length with pad_token_id, runs a single
+        model forward pass, then writes the resulting KV tensors into individually
+        allocated paged KV-cache blocks for each sequence.
+
+        Parameters
+        ----------
+        sequences : list[SequenceState]
+            Sequences to prefill together (must be >= MIN_BATCH_FOR_CHUNKED_PREFILL).
+
+        Side effects
+        ------------
+        - Allocates paged KV-cache blocks for each sequence that does not already have them.
+        - Sets seq.current_position to the actual (non-padded) prompt length.
+        - Writes prefill KV into paged blocks via self._paged_kv.write().
+
+        Raises
+        ------
+        Exception
+            If write fails, all newly allocated blocks are freed before propagating.
+        """
         device = self.device
 
         # Pad to max length in the group.
@@ -779,7 +950,27 @@ class ContinuousBatcher:
             raise
 
     def _prefill_sequence(self, seq: SequenceState) -> None:
-        """Single-sequence prefill — no padding, direct block allocation."""
+        """Single-sequence prefill — no padding, directly writes KV into allocated blocks.
+
+        Used for small batches (fewer than MIN_BATCH_FOR_CHUNKED_PREFILL sequences)
+        where the padding overhead of batched prefill outweighs the throughput gain.
+
+        Parameters
+        ----------
+        seq : SequenceState
+            The single sequence to prefill.
+
+        Side effects
+        ------------
+        - Allocates paged KV-cache blocks for the sequence.
+        - Sets seq.current_position to the prompt length.
+        - Writes full prompt KV into paged blocks via self._paged_kv.write().
+
+        Raises
+        ------
+        Exception
+            If allocation or write fails, allocated blocks are freed before propagating.
+        """
         device = self.device
         prompt = torch.tensor([seq.input_ids], dtype=torch.long, device=device)
         prompt_len = len(seq.input_ids)
@@ -931,10 +1122,16 @@ class ContinuousBatcher:
         return drained
 
     def flush_completed(self) -> list[SequenceState]:
-        """Drain all remaining running sequences (called at shutdown).
+        """Drain all remaining running sequences, freeing paged KV-cache blocks.
 
-        Deprecated: use ``drain_running()`` instead.  Kept for backward
-        compatibility.
+        .. deprecated:: v3.7
+            Use ``drain_running()`` instead.  Kept for backward compatibility.
+
+        Returns
+        -------
+        list[SequenceState]
+            All sequences that were in the prefill or decode queues, each
+            marked as done.
         """
         return self.drain_running()
 

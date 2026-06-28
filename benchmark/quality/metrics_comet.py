@@ -1,7 +1,9 @@
-"""COMET-22 reference-based evaluation — neural MT quality metric.
+"""COMET-22 reference-based and COMETKiwi reference-free evaluation — neural MT quality metrics.
 
 v2.0: Module-level model cache (P0-09) — the COMET model is downloaded and
 loaded once per process lifetime, not on every ``compute_comet()`` call.
+Includes a transformers 5.x compatibility shim (``_apply_comet_tokenizer_patch``)
+and direct HuggingFace Hub download fallback for non-registry models (e.g., Kiwi).
 """
 
 __all__ = [
@@ -40,7 +42,28 @@ def _apply_comet_tokenizer_patch(tokenizer_instance):
         from types import MethodType
 
         def _build_inputs_compat(self, token_ids_0, token_ids_1=None):
-            """Re-add removed method for COMET 2.2.7 compatibility."""
+            """Re-add the ``build_inputs_with_special_tokens`` method removed in transformers 5.x.
+
+            This is a compatibility shim for COMET 2.2.7, which calls
+            ``build_inputs_with_special_tokens`` directly.  The underlying logic
+            still exists in transformers — it was just renamed — so this shim
+            delegates to the newer method names.
+
+            Args:
+                token_ids_0: First sequence of token IDs (``list[int]``).
+                token_ids_1: Optional second sequence of token IDs (``list[int]``
+                    or ``None``).  When ``None``, delegates to single-sequence
+                    builder; otherwise delegates to pair builder.
+
+            Returns:
+                ``list[int]`` — the combined token IDs with special tokens inserted.
+
+            Notes:
+                This function is defined inside ``_apply_comet_tokenizer_patch``
+                and is bound to the tokenizer instance as a method via ``types.MethodType``.
+                It is intentionally instance-scoped to avoid polluting the tokenizer
+                base class globally.
+            """
             if token_ids_1 is None:
                 return self.build_inputs_with_special_tokens_single_seq(token_ids_0)
             return self.build_inputs_with_special_tokens_pair(token_ids_0, token_ids_1)
@@ -75,10 +98,27 @@ DEFAULT_COMET_BATCH_SIZE = 8
 def _download_comet_model_direct(model_name: str):
     """Download a COMET model checkpoint via huggingface_hub directly.
 
-    COMET v2.2.7's download_model() only works for models in the COMET
-    registry (wmt22-comet-da, etc.) and rejects Kiwi models.  This
+    COMET v2.2.7's ``download_model()`` only works for models in the COMET
+    registry (wmt22-comet-da, etc.) and rejects Kiwi models.  This function
     bypasses that limitation by downloading the HF repo directly and
     returning the checkpoint path.
+
+    Args:
+        model_name: HuggingFace repo ID to download (e.g.
+            ``"Unbabel/wmt22-cometkiwi-da"``).
+
+    Returns:
+        ``str`` — the absolute path to the ``checkpoints/model.ckpt`` file
+        inside the downloaded repo snapshot.
+
+    Raises:
+        RuntimeError: If the model repo is gated (HTTP 401/403) on
+            HuggingFace.  The exception message includes a link to request
+            access.
+        FileNotFoundError: If the ``checkpoints/model.ckpt`` file is not
+            found inside the downloaded snapshot.
+        Propagates ``huggingface_hub.snapshot_download`` network/filesystem
+        exceptions on non-gating failures.
     """
     from huggingface_hub import snapshot_download
     from pathlib import Path
@@ -107,7 +147,35 @@ _comet_model_cache: dict[str, object] = {}
 
 
 def _get_comet_model(model_name: str):
-    """Return a cached COMET model, downloading only on first access (P0-09)."""
+    """Return a cached COMET model, downloading only on first access (P0-09).
+
+    Args:
+        model_name: HuggingFace repo ID of the COMET model to load
+            (e.g. ``"Unbabel/wmt22-comet-da"``).
+
+    Returns:
+        The loaded COMET model object on success, or ``None`` if
+        ``HAS_COMET`` is ``False`` (the ``unbabel-comet`` package could not
+        be imported).  Once loaded, the model is stored in
+        ``_comet_model_cache`` and reused on subsequent calls.
+
+    Side effects:
+        On first access for a given ``model_name``:
+
+        1. Downloads the model checkpoint via ``download_model`` (COMET
+           registry) or falls back to ``_download_comet_model_direct``
+           (direct HF snapshot) for Kiwi and other non-registry models.
+        2. Patches the model's tokenizer instance for transformers 5.x
+           compatibility via ``_apply_comet_tokenizer_patch``.
+        3. Stores the loaded model in ``_comet_model_cache``.
+
+        Logs progress at INFO level.
+
+    Raises:
+        FileNotFoundError: If the checkpoint file is missing after download.
+        RuntimeError: If the model repo is gated on HuggingFace.
+        Propagates any exception from ``load_from_checkpoint`` on failure.
+    """
     if model_name not in _comet_model_cache:
         if not HAS_COMET:
             return None
@@ -180,6 +248,45 @@ def clear_comet_cache():
 
 def compute_comet(sources: list[str], hypotheses: list[str], references: list[str],
                   model_name: str = DEFAULT_COMET_MODEL) -> dict:
+    """Evaluate translation quality using a reference-based COMET model.
+
+    Args:
+        sources: Source-language sentences as a list of strings.
+        hypotheses: Model-generated (machine-translated) sentences as a list
+            of strings.  Must be the same length as ``sources``.
+        references: Human reference translations as a list of strings.  Must
+            be the same length as ``sources``.
+        model_name: HuggingFace repo ID of the COMET model to use.
+            Defaults to ``DEFAULT_COMET_MODEL`` ("Unbabel/wmt22-comet-da").
+
+    Returns:
+        A ``dict`` with keys:
+
+        * ``system_score``: The segment-aggregated COMET score as a ``float``
+          rounded to 4 decimal places, or ``None`` on failure.
+        * ``segments_scores``: A ``list[float]`` of per-segment COMET scores,
+          each rounded to 4 decimal places.
+        * ``low_quality_segments``: A ``list[dict]`` of segments whose COMET
+          score falls below 0.4.  Each dict contains the original ``src``,
+          ``mt``, ``ref``, and the ``comet`` score.
+        * ``model``: The HuggingFace repo ID that was used (``str``).
+        * ``error``: An error message string (only present when
+          ``system_score`` is ``None``).
+
+    Side effects:
+        Downloads and caches the COMET model on first call (via
+        ``_get_comet_model``).  Logs the system score at INFO level and
+        errors at ERROR level.
+
+    Raises:
+        Does not raise — all exceptions are caught internally and returned
+        as an error dict with ``system_score=None``.
+
+    Notes:
+        Requires ``unbabel-comet>=2.2.0`` (``HAS_COMET`` must be ``True``).
+        When COMET is not installed, the function returns immediately with
+        ``system_score=None`` and an error string.
+    """
     if not HAS_COMET:
         logger.error("COMET not installed. Run: pip install unbabel-comet>=2.2.0")
         return {"system_score": None, "error": "COMET not installed", "segments_scores": []}
@@ -212,6 +319,24 @@ def compute_comet(sources: list[str], hypotheses: list[str], references: list[st
         # Convert segment scores defensively (numpy scalars, etc.).
         import numpy as _np
         def _to_float(val):
+            """Convert a COMET segment score to a plain Python ``float`` defensively.
+
+            COMET segment scores can be numpy scalars, numpy arrays, or plain
+            Python floats.  This helper normalizes them to a single ``float``,
+            averaging if the value is an array.
+
+            Args:
+                val: The raw score value — may be a ``float``, ``int``, numpy
+                    scalar, ``numpy.ndarray``, or ``list``.
+
+            Returns:
+                ``float`` — the scalar value, or the mean if ``val`` is an
+                array/list.  Returns ``0.0`` if conversion fails for any reason.
+
+            Notes:
+                This is a nested function inside ``compute_comet``, used to process
+                per-segment scores defensively before rounding.
+            """
             try:
                 if isinstance(val, (_np.ndarray, list)):
                     return float(_np.mean([float(x) for x in val]))
@@ -231,11 +356,47 @@ def compute_comet(sources: list[str], hypotheses: list[str], references: list[st
 
 def compute_comet_kiwi(sources: list[str], hypotheses: list[str],
                        model_name: str = DEFAULT_COMETKIWI_MODEL) -> dict:
-    """Reference-free COMETKiwi evaluation for EN-TR translation quality.
+    """Evaluate translation quality using a reference-free COMETKiwi model.
 
-    wmt22-cometkiwi-da correlates better with human judgments for English-Turkish
-    than reference-based COMET, because high-quality reference translations are
-    scarce for this language pair.
+    COMETKiwi (wmt22-cometkiwi-da) correlates better with human judgments for
+    English-Turkish than reference-based COMET, because high-quality reference
+    translations are scarce for this language pair.
+
+    Args:
+        sources: Source-language sentences as a list of strings.
+        hypotheses: Model-generated (machine-translated) sentences as a list
+            of strings.  Must be the same length as ``sources``.
+        model_name: HuggingFace repo ID of the COMETKiwi model to use.
+            Defaults to ``DEFAULT_COMETKIWI_MODEL``
+            ("Unbabel/wmt22-cometkiwi-da").
+
+    Returns:
+        A ``dict`` with keys:
+
+        * ``system_score``: The segment-aggregated COMETKiwi score as a
+          ``float`` rounded to 4 decimal places, or ``None`` on failure.
+        * ``segments_scores``: A ``list[float]`` of per-segment COMETKiwi
+          scores, each rounded to 4 decimal places.
+        * ``low_quality_segments``: A ``list[dict]`` of segments whose
+          COMETKiwi score falls below 0.4.  Each dict contains ``src``,
+          ``mt``, and ``cometkiwi``.
+        * ``model``: The HuggingFace repo ID that was used (``str``).
+        * ``error``: An error message string (only present when
+          ``system_score`` is ``None``).
+
+    Side effects:
+        Downloads and caches the COMETKiwi model on first call (via
+        ``_get_comet_model``).  Logs the system score at INFO level and
+        errors at ERROR level.
+
+    Raises:
+        Does not raise — all exceptions are caught internally and returned
+        as an error dict with ``system_score=None``.
+
+    Notes:
+        Unlike ``compute_comet``, this function does **not** require
+        reference translations.  It is a quality-estimation (QE) metric that
+        operates on source-hypothesis pairs only.
     """
     if not HAS_COMET:
         logger.error("COMETKiwi not available. Run: pip install unbabel-comet>=2.2.0")

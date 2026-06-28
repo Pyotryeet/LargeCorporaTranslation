@@ -12,7 +12,7 @@
 #    ./setup.sh --cpu                    # CPU-only, no GPU deps
 #    ./setup.sh --full                   # Everything including TensorRT + Triton
 #    ./setup.sh --minimal                # Bare minimum to run tests
-#    ./setup.sh --quick                  # Dev setup (skip TRT, skip model DL)
+#    ./setup.sh --quick                  # Dev setup (skip model DL)
 # =============================================================================
 
 set -euo pipefail
@@ -52,7 +52,7 @@ while [[ $# -gt 0 ]]; do
             echo ""
             echo "Profiles:"
             echo "  (default)       Full install — everything including TensorRT + Triton"
-            echo "  --quick         Dev setup — skip TRT, skip model download"
+            echo "  --quick         Dev setup — skip model download"
             echo "  --minimal       Bare minimum — just Python + PyTorch + shared deps"
             echo ""
             echo "Platform overrides:"
@@ -168,6 +168,7 @@ else
 fi
 
 source "$VENV_DIR/bin/activate"
+PYTHON_BIN="$VENV_DIR/bin/python"
 # NOTE: pip install without --require-hashes — hash checking is deferred because:
 #        (1) upstream wheels are signed by PyPI and verified via TLS; (2) this
 #        project pins top-level constraints but not transitive hashes; (3) nightly
@@ -207,7 +208,7 @@ ok "Core dependencies installed"
 #     torch.compile(mode="default") active on 2.12–2.13; mode="reduce-overhead" on 2.14+.
 #   - 2.6.0+cu124  → Works but compile auto-skipped (cudagraph_trees bug).
 #   - 2.11.0+cu130 → SDPA crashes on SM90 (cuDNN frontend has no execution plans)
-# See docs/COMPILATION_GUIDE.md, docs/FP8_TE_CUDA_ISSUES.md.
+# See docs/COMPILATION_GUIDE.md.
 if [ "$MODE" = "cuda" ]; then
     if [ -n "$FORCE_CUDA_VERSION" ]; then
         CUDA_INDEX="cu${FORCE_CUDA_VERSION//./}"
@@ -268,6 +269,10 @@ if [ "$MODE" = "cuda" ]; then
     # default build isolation sandbox fails (torch isn't in the sandbox).
     # ── CUDA extras ─────────────────────────────────────────────────
     $PYTHON_BIN -m pip install nvidia-ml-py --quiet --no-cache-dir || true
+    info "Installing FlashAttention-3..."
+    $PYTHON_BIN -m pip install "flash-attn-3" --index-url "https://download.pytorch.org/whl/$CUDA_INDEX" --quiet --no-cache-dir || \
+        $PYTHON_BIN -m pip install "flash-attn-3" --quiet --no-cache-dir || \
+        warn "FlashAttention-3 installation failed"
     ok "CUDA extras installed"
 
     # ── Transformer Engine (FP8 on Hopper) ──────────────────────────
@@ -275,7 +280,7 @@ if [ "$MODE" = "cuda" ]; then
     # cuBLASLt crashes on all tested drivers (580, 565)**.  TE is COMMENTED
     # OUT by default to avoid a 2-5 minute compile that produces non-working
     # FP8.  The only known-working FP8 path is the NGC container
-    # (nvcr.io/nvidia/pytorch:24.12-py3).  See docs/FP8_TE_CUDA_ISSUES.md.
+    # (nvcr.io/nvidia/pytorch:24.12-py3).
     #
     # To attempt TE anyway (YMMV — verify with the 256x256 smoking gun test):
     #   source .venv/bin/activate
@@ -283,37 +288,15 @@ if [ "$MODE" = "cuda" ]; then
     #
     # Static quantization (SmoothQuant / QAT) via save_fp8_weights() /
     # load_fp8_weights() is the path forward for pip venvs.
-    info "Skipping Transformer Engine — known broken on pip venvs (see docs/FP8_TE_CUDA_ISSUES.md)"
+    info "Skipping Transformer Engine — known broken on pip venvs"
     info "  FP8 is available via NGC container (nvcr.io/nvidia/pytorch:24.12-py3)"
-fi
-
-# TensorRT (full profile, CUDA only).
-if [ "$PROFILE" = "full" ] && [ "$MODE" = "cuda" ]; then
-    info "Installing TensorRT + ONNX..."
-    # NOTE: pip install without --require-hashes — hash checking is deferred because:
-    # (1) upstream wheels are signed by PyPI and verified via TLS; (2) this project
-    # pins top-level constraints but not transitive hashes; (3) nightly PyTorch/CUDA
-    # wheels change daily, making hash files stale immediately.
-    # When moving to a production Docker build, freeze all deps with:
-    #   pip-compile --generate-hashes -o requirements-tensorrt.txt requirements-tensorrt.in
-    $PYTHON_BIN -m pip install -e ".[tensorrt]" --quiet --no-cache-dir 2>/dev/null || {
-        warn "tensorrt pip package not available — install system package:"
-        warn "  apt install tensorrt python3-libnvinfer"
-    }
-    if python -c "import tensorrt" 2>/dev/null; then
-        PY_TRT=$(python -c "import tensorrt as t; print(t.__version__)" 2>/dev/null || echo "unknown")
-        ok "TensorRT: $PY_TRT"
-    else
-        warn "TensorRT Python bindings not available — TRT engine path disabled"
-    fi
 fi
 
 # ── Post-install compatibility check (CUDA only) ─────────────────────────
 # torch 2.11+cu130 ships a cuDNN frontend with no SM90 execution plans for
 # H200 GPUs — all SDPA backends (flash, mem_efficient, math) crash with
 # "No valid execution plans built".  PyTorch 2.6.0+cu124 is the known-good
-# combination for H200/SM90.  See docs/H200_SETUP.md and
-# docs/MEASUREMENT_PLAN.md §B.1 for the full investigation.
+# combination for H200/SM90.  See docs/H200_SETUP.md.
 #
 # Also removes packages that conflict with torch 2.6: torchao 0.17+ requires
 # torch >= 2.10 (register_constant); compressed-tensors 0.17+ requires
@@ -391,9 +374,6 @@ try:
     import triton; print(f'  Triton:       {triton.__version__}')
 except: print('  Triton:       NOT INSTALLED (Linux/NVIDIA only)')
 try:
-    import tensorrt; print(f'  TensorRT:     {tensorrt.__version__}')
-except: print('  TensorRT:     NOT INSTALLED')
-try:
     import psutil; print(f'  RAM:          {psutil.virtual_memory().total/(1024**3):.1f} GiB')
 except: pass
 " || warn "Some imports failed — may be missing optional deps"
@@ -432,19 +412,6 @@ if [ "$NO_MODEL_DL" = false ] && [ "$PROFILE" != "minimal" ]; then
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════
-# STEP 7 — Pre-compile JIT kernels (optional, saves first-run latency)
-# ═══════════════════════════════════════════════════════════════════════════
-if [ "$PROFILE" = "full" ] && [ "$MODE" = "cuda" ]; then
-    step 7 "Pre-compiling JIT kernels..."
-
-    python -c "
-from benchmark.hardware.jit_compiler import precompile_all_kernels
-n = precompile_all_kernels()
-print(f'  Kernels compiled: {n} (cached for future runs)')
-" 2>/dev/null || warn "JIT pre-compilation skipped (nvcc not available)"
-fi
-
-# ═══════════════════════════════════════════════════════════════════════════
 # Done
 # ═══════════════════════════════════════════════════════════════════════════
 banner "Setup Complete!"
@@ -456,7 +423,6 @@ echo "  Next steps:"
 echo "    ./run.sh --dry-run        Smoke test (1 min)"
 echo "    ./run.sh --quick          Quick benchmark (5 min)"
 echo "    ./run.sh --full           Full 2-hour benchmark"
-echo "    ./run.sh --tensorrt       TensorRT-accelerated (CUDA only)"
 echo "    ./run.sh --diffusion      Diffusion model (LLaDA)"
 echo ""
 echo "  Activate environment:"

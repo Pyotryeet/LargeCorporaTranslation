@@ -13,7 +13,23 @@ from benchmark.config.constants import TOTAL_CLEARNET_TOKENS as TARGET_TOKENS
 
 
 def fmt(n: float, d: int = 1) -> str:
-    """Format a number with commas and given decimal places."""
+    """Format a number with thousands-separator commas and a given number of decimal places.
+
+    Parameters
+    ----------
+    n : float
+        The number to format.
+    d : int, default=1
+        Number of decimal places after the radix point.
+
+    Returns
+    -------
+    str
+        Human-readable string with commas and ``d`` decimal places.
+        For |n| >= 1,000,000 the format is ``{n:,.{d}f}``.
+        For 1,000 <= |n| < 1,000,000 the format is ``{n:,.{d}f}``.
+        Otherwise the format is ``{n:.{d}f}`` (no commas).
+    """
     if abs(n) >= 1_000_000:
         return f"{n:,.{d}f}"
     if abs(n) >= 1000:
@@ -22,6 +38,25 @@ def fmt(n: float, d: int = 1) -> str:
 
 
 def main():
+    """Entry-point: read a benchmark report JSON and print a human-readable summary.
+
+    Expects the JSON filepath as ``sys.argv[1]``.  Prints a summary spanning
+    raw per-batch metrics, scale projections (GB/GPU-hour, time-to-translate 1 GB,
+    and cluster-size projections anchored on the 6.23 T token target corpus), and
+    quality scores (BERTScore / COMET-22 / COMET-Kiwi).
+
+    Side effects
+    ------------
+    - Reads the named JSON file from disk.
+    - Prints formatted output to stdout via ``print()``.
+    - Prints errors and usage to stderr, then calls ``sys.exit(1)`` on failure.
+
+    Raises
+    ------
+    SystemExit
+        Exit code 1 when the file cannot be found, cannot be parsed as JSON,
+        or any unexpected processing error occurs.
+    """
     if len(sys.argv) < 2:
         print("Usage: python -m benchmark.utils.print_summary <benchmark_report.json>", file=sys.stderr)
         sys.exit(1)

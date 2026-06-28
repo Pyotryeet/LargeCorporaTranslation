@@ -99,13 +99,20 @@ class BlockTable:
 
     @property
     def num_blocks(self) -> int:
+        """Number of physical blocks allocated to this sequence."""
         return len(self.block_ids)
 
     @property
     def total_tokens(self) -> int:
+        """Total number of tokens stored across all allocated blocks."""
         return self._total_tokens
 
     def set_total_tokens(self, n: int) -> None:
+        """Update the total token count for this sequence.
+
+        Args:
+            n: The new total token count.
+        """
         self._total_tokens = n
 
 
@@ -132,6 +139,22 @@ class PagedKVCache:
         dtype: torch.dtype = torch.bfloat16,
         device: torch.device | str = "cuda:0",
     ):
+        """Initialize the paged KV-cache memory manager.
+
+        Args:
+            num_layers: Number of transformer layers in the model.
+            num_kv_heads: Number of key-value attention heads.
+            head_dim: Dimensionality of each attention head.
+            block_size: Number of token positions stored per physical block.
+            num_blocks: Total number of physical blocks in the pool.
+            dtype: Data type for KV-cache tensors (default: bfloat16).
+            device: CUDA device for tensor storage (default: "cuda:0").
+
+        Side effects:
+            Initializes internal block pool, free-list, block table registry,
+            and sequence length tracker.  Physical block tensors are NOT
+            allocated until the first ``write()`` call (lazy allocation).
+        """
         self.num_layers = num_layers
         self.num_kv_heads = num_kv_heads
         self.head_dim = head_dim
@@ -246,13 +269,20 @@ class PagedKVCache:
                 block.layers.append((k_tensor, v_tensor))
 
             # Write slice into block.
+            # KEY INVARIANT: key/value tensors are indexed relative to
+            # start_pos — index 0 in the tensor maps to absolute position
+            # start_pos within the sequence.  Block-local offsets must
+            # NOT be used for tensor slicing.
             block_start = block_idx * self.block_size
             offset_start = max(start_pos, block_start) - block_start
             offset_end = min(end_pos, block_start + self.block_size) - block_start
 
+            key_start = max(start_pos, block_start) - start_pos
+            key_end = min(end_pos, block_start + self.block_size) - start_pos
+
             k_block, v_block = block.layers[layer_idx]
-            key_slice = key[:, offset_start:offset_end, :]
-            val_slice = value[:, offset_start:offset_end, :]
+            key_slice = key[:, key_start:key_end, :]
+            val_slice = value[:, key_start:key_end, :]
             k_block[:, offset_start:offset_end, :].copy_(key_slice)
             v_block[:, offset_start:offset_end, :].copy_(val_slice)
 
@@ -413,12 +443,23 @@ class PagedLayer:
         layer_idx: int,
         seq_ids: list[int],
     ):
+        """Initialize a per-layer adapter backed by a shared PagedKVCache.
+
+        Args:
+            paged_cache: The shared block-level KV-cache manager.  All
+                reads/writes for this layer are delegated to it.
+            layer_idx: Index of this transformer layer (0-based).
+            seq_ids: List mapping batch position (index) to global
+                sequence ID.  Used to route per-batch-element KV
+                operations through PagedKVCache.
+        """
         self._cache = paged_cache
         self._layer_idx = layer_idx
         self._seq_ids = list(seq_ids)  # batch-index → seq_id
 
     @property
     def is_initialized(self) -> bool:
+        """Always True -- paged layers do not require lazy initialization."""
         return True
 
     def get_seq_length(self) -> int:
@@ -522,12 +563,15 @@ class PagedLayer:
         return -1
 
     def reset(self) -> None:
+        """No-op -- reset is handled by PagedKVCache.clear()."""
         pass
 
     def reorder_cache(self, beam_idx: torch.Tensor) -> None:
+        """No-op -- beam-search reordering is managed at the PagedCache level."""
         pass
 
     def crop(self, max_length: int) -> None:
+        """No-op -- cropping is not supported for paged caches."""
         pass
 
 
@@ -550,6 +594,15 @@ class PagedCache:
         paged_cache: PagedKVCache,
         seq_ids: list[int],
     ):
+        """Initialize a drop-in DynamicCache replacement.
+
+        Args:
+            paged_cache: The shared paged KV-cache instance backing all
+                layers.  Multiple PagedCache objects can share the same
+                PagedKVCache (e.g., during speculative decoding).
+            seq_ids: List of global sequence IDs in batch order.  Position
+                i in the batch corresponds to sequence seq_ids[i].
+        """
         self._paged = paged_cache
         self._seq_ids = list(seq_ids)
         # Materialised PagedLayer per layer index (lazy, created by update()).
@@ -574,13 +627,38 @@ class PagedCache:
         )
 
     def get_seq_length(self, layer_idx: int = 0) -> int:
+        """Return the maximum cached sequence length across all active sequences.
+
+        Args:
+            layer_idx: The layer to query (all layers share the same length
+                in a paged cache, so this is largely cosmetic).
+
+        Returns:
+            The maximum token count across all active sequences.
+        """
         pl = self._layers.get(layer_idx)
         return pl.get_seq_length() if pl else 0
 
     def get_max_cache_shape(self, layer_idx: int = 0) -> int:
+        """Return the maximum supported sequence length.
+
+        Returns:
+            -1, indicating unbounded growth (limited only by available
+            physical blocks).
+        """
         return -1  # unbounded
 
     def get_mask_sizes(self, cache_position, layer_idx: int = 0) -> tuple[int, int]:
+        """Return (kv_length, kv_offset) for causal attention mask creation.
+
+        Args:
+            cache_position: Position tensor from the model forward pass.
+            layer_idx: The attention layer index to query.
+
+        Returns:
+            Tuple of (kv_length, kv_offset).  kv_offset is always 0 for
+            paged caches.
+        """
         pl = self._layers.get(layer_idx)
         return pl.get_mask_sizes(cache_position) if pl else (0, 0)
 
@@ -619,20 +697,35 @@ class PagedCache:
     # ── Introspection ────────────────────────────────────────────────────
 
     def reset(self) -> None:
+        """Clear all per-layer PagedLayer instances.
+
+        Note:
+            This does NOT free physical blocks -- call ``PagedKVCache.clear()``
+            or ``PagedKVCache.free_all()`` on the underlying shared cache to
+            reclaim GPU memory.
+        """
         self._layers.clear()
 
     def crop(self, max_length: int) -> None:
+        """No-op -- sequence cropping is not supported for paged caches."""
         pass
 
     # ── Cache protocol extensions (required by HF >= 4.45) ───────────────
 
     @property
     def is_initialized(self) -> bool:
+        """Always True -- PagedCache does not require lazy initialization."""
         return True
 
     def num_layers(self) -> int:
+        """Return the number of layers that have been written to so far.
+
+        Returns:
+            Count of unique layer indices that have called ``update()``.
+        """
         return len(self._layers)
 
     @property
     def seq_ids(self) -> list[int]:
+        """Return a copy of the active sequence IDs in batch order."""
         return list(self._seq_ids)

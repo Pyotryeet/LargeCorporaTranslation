@@ -4,9 +4,14 @@ v2.0: Performance-model initial guess to reduce binary-search steps.
       Pinned-memory test tensors for realistic CUDA transfer simulation.
 v3.3: Robust MPS OOM detection — handles PyTorch 2.x MPS error variants.
       Batch tuning failure gracefully falls back to batch_size=1.
+v3.6: MPS uses a single-probe fast path to avoid MPSGraph compilation cache
+      accumulation (binary search creates 15-25 GB of unfreeable memory).
+      CUDA path uses an optional TPS-aware sweep (gated by BATCH_TUNE_TPS_SWEEP
+      env var) to find throughput-maximizing batch size for HBM-bound models.
 """
 
 import logging
+import os
 import torch
 import torch.nn as nn
 
@@ -62,13 +67,79 @@ _MPS_OOM_MESSAGES = (
 
 
 class BatchSizeTuner:
+    """Auto batch-size tuner that discovers the maximum viable batch size for a given
+    model and backend via binary search (CUDA) or single-probe (MPS).
+
+    On CUDA, it performs a binary search up to a per-GPU-memory cap, optionally
+    followed by a TPS-aware sweep to pick the throughput-maximizing batch size
+    rather than the largest one.  On MPS, it probes the cap once to avoid
+    accumulating unfreeable MPSGraph compilation caches.
+
+    The tuner uses a performance model based on model config (or hardcoded
+    defaults) to produce an informational KV-cache estimate, but the estimate
+    does NOT cap the binary search — the actual OOM boundary is found
+    empirically.
+
+    Public API:
+        tune(model, tokenizer, device, backend, max_input_tokens=512) -> int
+
+    Attributes (set during tune()):
+        safety_margin (float): Fraction of max-viable batch to reserve.
+        _default_max_cuda (int): Hard upper bound for CUDA batch size.
+        _default_max_mps (int): Hard upper bound for MPS batch size.
+    """
     def __init__(self, safety_margin: float = DEFAULT_SAFETY_MARGIN, max_cuda: int = DEFAULT_MAX_CUDA, max_mps: int = DEFAULT_MAX_MPS):
+        """Initialize the batch-size tuner.
+
+        Args:
+            safety_margin: Fraction of the max-viable batch size to reserve as
+                headroom (e.g. 0.05 reserves 5%). Applied after binary search
+                to avoid borderline OOMs during real workloads.
+            max_cuda: Hard upper bound for CUDA batch size. Overridden at tune()
+                time for GPUs with >= 80 GB memory (raised to DEFAULT_MAX_CUDA=2048).
+            max_mps: Hard upper bound for MPS batch size.
+        """
         self.safety_margin = safety_margin
         # max_cuda/max_mps are initial defaults; tune() may override for large GPUs.
         self._default_max_cuda = max_cuda
         self._default_max_mps = max_mps
 
     def tune(self, model: nn.Module, tokenizer, device: torch.device, backend: str, max_input_tokens: int = DEFAULT_MAX_INPUT_TOKENS) -> int:
+        """Find the optimal batch size for the given model and backend.
+
+        On CUDA, this performs a binary search between 1 and the per-GPU-memory
+        cap, then optionally runs a TPS-aware sweep (gated by the
+        BATCH_TUNE_TPS_SWEEP env var, default enabled) to select the
+        throughput-maximizing batch size rather than the largest viable one.
+        A safety margin is subtracted from the final result.
+
+        On MPS, this uses a single-probe fast path (see _tune_mps_single_probe).
+
+        Args:
+            model: An nn.Module that supports model.generate(...). Its config
+                attribute (if present) is read to compute a KV-cache performance
+                estimate for logging.
+            tokenizer: A tokenizer with encode(), pad_token_id, and eos_token_id.
+            device: The torch.device to run on ("cuda" or "mps").
+            backend: Backend identifier string ("cuda" or "mps").
+            max_input_tokens: Maximum number of input tokens for the test
+                sequences. Controls the test prompt length and feeds into the
+                KV-cache estimate.
+
+        Returns:
+            int: The tuned batch size, guaranteed to be >= 1. A safety margin
+            has already been subtracted from the max-viable size.
+
+        Raises:
+            RuntimeError: Re-raised if a non-OOM RuntimeError occurs during
+                binary search (i.e. the error is not memory-related).
+
+        Side effects:
+            - Reads and temporarily sets the TRANSFORMERS_VERBOSITY env var.
+            - Calls torch.cuda.empty_cache() or torch.mps.empty_cache() after
+              each OOM to release fragmented memory.
+            - Logs performance-model estimates and tuning progress at INFO level.
+        """
         # Detect per-GPU memory to classify GPU tier.
         if backend == "cuda":
             try:
@@ -236,6 +307,56 @@ class BatchSizeTuner:
                     high = mid - 1  # treat unexpected errors as OOM, lower cap
 
         safety_factor = 1.0 - self.safety_margin
+
+        # ── TPS-aware sweep: find throughput-maximizing batch size ──
+        # For memory-bandwidth-bound models on H200, larger batches can have
+        # LOWER throughput due to HBM contention.  Measure actual TPS at
+        # several batch sizes between high//2 and high and pick the best.
+        # Gate with BATCH_TUNE_TPS_SWEEP=0 for fast restarts.
+        if backend == "cuda" and high > MIN_BATCH_SIZE:
+            tps_sweep_enabled = os.environ.get("BATCH_TUNE_TPS_SWEEP", "1") != "0"
+            if tps_sweep_enabled:
+                best_tps = 0.0
+                best_bs = high
+                # Test 4-5 points between half and max
+                step = max(1, high // 5)
+                candidates = sorted(set(
+                    max(MIN_BATCH_SIZE, bs)
+                    for bs in range(max(MIN_BATCH_SIZE, high // 2), high + 1, step)
+                ))
+                if len(candidates) < 3:
+                    # Too few points for meaningful sweep — just test high
+                    candidates = [high]
+                for candidate_bs in candidates:
+                    try:
+                        import time
+                        # 3-5 iterations to amortize startup overhead
+                        n_iters = max(2, 8 // candidate_bs)
+                        t0 = time.monotonic()
+                        for _ in range(n_iters):
+                            self._test_batch(model, tokenizer, device,
+                                             candidate_bs, max_input_tokens, backend)
+                        elapsed = time.monotonic() - t0
+                        tokens_per_iter = candidate_bs * TEST_GENERATION_TOKENS
+                        tps = (tokens_per_iter * n_iters) / elapsed if elapsed > 0 else 0
+                        logger.info(
+                            "  TPS sweep: bs=%d → %.0f tok/s (%d iters, %.2fs)",
+                            candidate_bs, tps, n_iters, elapsed,
+                        )
+                        if tps > best_tps:
+                            best_tps = tps
+                            best_bs = candidate_bs
+                    except (torch.cuda.OutOfMemoryError, RuntimeError, MemoryError):
+                        logger.debug("TPS sweep: bs=%d OOM, skipping", candidate_bs)
+                        if backend == "cuda":
+                            torch.cuda.empty_cache()
+                        continue
+                logger.info(
+                    "TPS-optimal batch: %d (%.0f tok/s, max viable: %d)",
+                    best_bs, best_tps, high,
+                )
+                high = best_bs  # Use TPS-optimal, not max-viable
+
         optimal = max(int(high * safety_factor), MIN_BATCH_SIZE)
         logger.info("Tuned batch size: %d (max viable: %d)", optimal, high)
         return optimal
@@ -274,7 +395,32 @@ class BatchSizeTuner:
         return MIN_BATCH_SIZE
 
     def _test_batch(self, model, tokenizer, device, batch_size, max_input_tokens, backend):
-        """Run a test generation with production-sized input to catch OOM."""
+        """Run a single test generation to verify a candidate batch size fits in memory.
+
+        Constructs a padded input tensor of shape (batch_size, seq_len) using a
+        repeated test sentence, then calls model.generate() with greedy decoding.
+        An OOM exception propagates to the caller; success means the batch size
+        is viable.
+
+        Args:
+            model: An nn.Module that supports model.generate(input_ids, ...).
+            tokenizer: A tokenizer with encode(), pad_token_id, and eos_token_id.
+            device: The torch.device to run on.
+            batch_size: Number of sequences to generate in parallel.
+            max_input_tokens: Maximum input sequence length (tokens).
+            backend: Backend identifier string ("cuda" or "mps").
+
+        Side effects:
+            - Temporarily sets TRANSFORMERS_VERBOSITY="error" to suppress
+              HuggingFace generation warnings; restored in a finally block.
+            - On CUDA, calls torch.cuda.synchronize() after generation.
+            - On MPS, calls torch.mps.empty_cache() after generation (if available).
+
+        Raises:
+            torch.cuda.OutOfMemoryError: If the batch size exceeds CUDA memory.
+            RuntimeError: If the batch size triggers an MPS or generic OOM.
+            torch.OutOfMemoryError: If a generic PyTorch OOM occurs.
+        """
         txt = "This is a test sentence for batch size tuning. " * TEST_SENTENCE_MULTIPLIER
         tids = tokenizer.encode(txt, add_special_tokens=True)[:max_input_tokens]
         pad_id = tokenizer.pad_token_id or FALLBACK_PAD_TOKEN_ID

@@ -32,6 +32,8 @@ logger = logging.getLogger(__name__)
 # chat template fails (e.g. SmolLM2's tokenizer doesn't know source_lang_code).
 # Warn once per tokenizer identity instead of per chunk (which would flood).
 _TEMPLATE_WARNED: set[str] = set()
+# Track how many chunks were processed with the fallback format.
+_TEMPLATE_FALLBACK_COUNT: int = 0
 
 # ── Per-tokenizer prompt-style cache ───────────────────────────────────────────
 # _build_translation_prompt probes tokenizer properties (has src_lang? is MADLAD?)
@@ -52,6 +54,35 @@ _DEFAULT_MAX_SEQ_LEN = DEFAULT_MAX_SEQ_LEN
 
 @dataclass
 class PipelineBatch:
+    """An assembled batch of tokenised chunks ready for inference.
+
+    Attributes
+    ----------
+    batch_id : int
+        Monotonic batch counter assigned at assembly time.
+    input_ids : torch.Tensor
+        Padded token-ID tensor, shape ``(batch_size, max_seq_len)``.
+    attention_mask : torch.Tensor
+        Binary mask tensor (1 for real tokens, 0 for padding), same shape.
+    input_lengths : list[int]
+        Number of real tokens per sequence (before padding).
+    raw_texts : list[str]
+        Original untokenised text for each sequence in the batch.
+    token_counts : list[int]
+        Same as ``input_lengths`` — number of tokens per sequence.
+    _pool_ids : torch.Tensor or None
+        Back-reference to the full pre-allocated pinned input_ids buffer, if the
+        batch was sliced from a :class:`PinnedBufferPool`.  Set by
+        :meth:`AsyncPipeline.next_batch`.
+    _pool_mask : torch.Tensor or None
+        Back-reference to the full pre-allocated pinned attention_mask buffer.
+
+    Notes
+    -----
+    ``input_ids`` and ``attention_mask`` are *views* (slices) into the pooled
+    buffers when the pinned pool is active.  Callers must not mutate or retain
+    these tensors after calling :meth:`AsyncPipeline.release_batch`.
+    """
     batch_id: int
     input_ids: torch.Tensor
     attention_mask: torch.Tensor
@@ -75,6 +106,18 @@ class PinnedBufferPool:
     """
 
     def __init__(self, max_batch_size: int, max_seq_len: int, pool_size: int = 4):
+        """Initialise a bounded pool of pre-allocated pinned-memory tensors.
+
+        Parameters
+        ----------
+        max_batch_size : int
+            Maximum number of sequences per batch.  Determines tensor dimension 0.
+        max_seq_len : int
+            Maximum token length per sequence.  Determines tensor dimension 1.
+        pool_size : int, optional
+            Number of buffer pairs to pre-allocate (default 4).  Excess releases
+            beyond this bound are silently discarded.
+        """
         self.max_batch_size = max_batch_size
         self.max_seq_len = max_seq_len
         self.pool_size = pool_size
@@ -141,6 +184,14 @@ class PinnedBufferPool:
 
     @property
     def hit_rate(self) -> float:
+        """Fraction of acquire() calls that were satisfied from the pool.
+
+        Returns
+        -------
+        float
+            Ratio ``hits / (hits + misses)``.  Returns 0.0 when no acquires have
+            been attempted yet.
+        """
         total = self._hits + self._misses
         return self._hits / total if total > 0 else 0.0
 
@@ -163,6 +214,42 @@ class AsyncPipeline:
                  max_queue_size: int = 32, backend: str = "cpu",
                  max_input_tokens: Optional[int] = None,
                  pretokenized_loader=None):
+        """Initialise the async data pipeline.
+
+        Parameters
+        ----------
+        loader : JSONLLoader
+            Source that yields ``(doc_id, file_name, text)`` tuples.
+        chunker : TextChunker or NullChunker
+            Splits raw text into tokeniser-friendly chunks.
+        tokenizer : PreTrainedTokenizerBase
+            Shared tokenizer instance used for single-threaded chunking and as a
+            template for per-worker thread-local copies.
+        text_filter : ChunkFilter
+            Predicate that decides whether a tokenised chunk should be kept.
+        batch_size : int, optional
+            Number of sequences to collect before emitting a batch (default 8).
+        prefetch_workers : int, optional
+            Number of background tokenizer threads (default 4).
+        max_queue_size : int, optional
+            Bound on the internal raw-queue depth (default 32).
+        backend : str, optional
+            Backend identifier, e.g. ``"cuda"``, ``"mps"``, ``"cpu"``.  Only
+            ``"cuda"`` enables pinned (page-locked) memory allocation.
+        max_input_tokens : int or None, optional
+            Per-chunk token-length ceiling.  Defaults to
+            ``min(tokenizer.model_max_length, DEFAULT_MAX_SEQ_LEN)``.
+        pretokenized_loader : PreTokenizedLoader or None, optional
+            When supplied, the pipeline runs the fast path — it feeds pre-tokenised
+            chunks directly, skipping the loader, chunker, tokenizer, and filter.
+
+        Notes
+        -----
+        The queues are auto-clamped so that ``_tokenised_queue`` capacity is never
+        smaller than ``batch_size`` — this prevents a deadlock where all producers
+        block on ``put()`` because the queue is full, while the consumer waits for
+        ``batch_size`` items that can never arrive.
+        """
         self.loader = loader
         self.chunker = chunker
         self.tokenizer = tokenizer
@@ -233,6 +320,19 @@ class AsyncPipeline:
     # ── Public API ──────────────────────────────────────────────────────────
 
     def start_prefetch(self) -> None:
+        """Launch all background threads (loader and tokenizer workers).
+
+        Drains any stale items left in the queues from a previous pipeline run,
+        then starts either the pre-tokenized fast path (if ``_pretokenized_loader``
+        is set) or the full loader+tokenizer pipeline.
+
+        Side effects
+        ------------
+        - Sets ``_running`` flag.
+        - Clears ``_done`` flag.
+        - Spawns daemon threads.
+        - Emits an INFO log line summarising pipeline configuration.
+        """
         self._running.set()
         self._done.clear()
 
@@ -285,6 +385,17 @@ class AsyncPipeline:
         )
 
     def stop_prefetch(self) -> None:
+        """Signal all background threads to stop and wait for them to join.
+
+        Clears the ``_running`` flag and joins the loader thread and all tokenizer
+        worker threads with configured timeouts.  After this call, the caller may
+        safely tear down or restart the pipeline.
+
+        Side effects
+        ------------
+        - Clears ``_running`` flag.
+        - Blocks until all threads exit or time out.
+        """
         self._running.clear()
         if self._loader_thread and self._loader_thread.is_alive():
             self._loader_thread.join(timeout=_LOADER_JOIN_TIMEOUT)
@@ -293,9 +404,30 @@ class AsyncPipeline:
                 t.join(timeout=_WORKER_JOIN_TIMEOUT)
 
     def draining(self) -> bool:
+        """Return whether the pipeline has been notified as done.
+
+        Returns
+        -------
+        bool
+            ``True`` if :meth:`notify_done` has been called, indicating the loader
+            has finished feeding data and sentinels have been dispatched.
+        """
         return self._done.is_set()
 
     def notify_done(self) -> None:
+        """Mark the pipeline as done and push sentinels into the raw queue.
+
+        Sets the ``_done`` event and pushes one sentinel object per tokenizer
+        worker into ``_raw_queue`` so every worker can detect end-of-stream and
+        exit cleanly.  Retries on ``queue.Full`` up to 100 attempts per worker.
+
+        Side effects
+        ------------
+        - Sets ``_done`` event.
+        - Pushes sentinel objects into ``_raw_queue``.
+        - Emits a warning if a sentinel cannot be delivered after 100 retries.
+          In that case the worker will eventually exit by checking ``_running``.
+        """
         self._done.set()
         # Push one sentinel per tokenizer worker so they all drain.
         # Retry on Full to avoid the race where a worker re-puts the sentinel
@@ -432,6 +564,16 @@ class AsyncPipeline:
             self._pinned_pool = None
 
     def queue_depth(self) -> int:
+        """Return the current number of items in the tokenised output queue.
+
+        Returns
+        -------
+        int
+            Approximate count of tokenised chunks waiting to be assembled into
+            a batch (``len(_tokenised_queue)``).  Readers from another thread may
+            change the queue between the call and the return, so the value is a
+            snapshot.
+        """
         return self._tokenised_queue.qsize()
 
     def release_batch(self, batch: PipelineBatch) -> None:
@@ -449,14 +591,9 @@ class AsyncPipeline:
 
     @staticmethod
     def _local_kwargs(path: str) -> dict:
-        """Return ``local_files_only=True`` when *path* is a filesystem path.
-
-        This prevents ``AutoTokenizer.from_pretrained()`` from attempting a
-        network fetch when the caller supplies a local directory or file.
-        """
-        if os.path.isdir(path) or os.path.isfile(path):
-            return {"local_files_only": True}
-        return {}
+        """Return ``local_files_only=True`` when *path* is a filesystem path."""
+        from benchmark.utils.helpers import local_kwargs
+        return local_kwargs(path)
 
     def _get_tokenizer(self):
         """Return a thread-local copy of the tokenizer (lock-free).
@@ -491,6 +628,19 @@ class AsyncPipeline:
     # ── Loader loop ─────────────────────────────────────────────────────────
 
     def _loader_loop(self) -> None:
+        """Background thread target: stream documents, chunk, and feed the raw queue.
+
+        Iterates the loader's documents, chunks each text under a lock (chunkers
+        use the shared tokenizer which is not thread-safe), and pushes ``(file_name,
+        chunk, doc_id)`` tuples into ``_raw_queue``.  Exits when ``_running`` is
+        cleared or the loader is exhausted.
+
+        Side effects
+        ------------
+        - Pushes items into ``_raw_queue``.
+        - Calls :meth:`notify_done` in the ``finally`` block (unconditionally).
+        - Logs exceptions at ERROR level with full traceback.
+        """
         try:
             for doc_id, file_name, text in self.loader.iter_documents():
                 if not self._running.is_set():
@@ -594,9 +744,49 @@ class AsyncPipeline:
                 msgs, tokenize=False, add_generation_prompt=True,
             )
         else:  # style == "plain"
+            # Periodically remind that translation prompts use a fallback format.
+            # The initial warning fires once per tokenizer identity; without this
+            # counter, all subsequent chunks silently use the bare format.
+            _TEMPLATE_FALLBACK_COUNT += 1
+            if _TEMPLATE_FALLBACK_COUNT % 1000 == 1 and _TEMPLATE_FALLBACK_COUNT > 1:
+                logger.warning(
+                    "_build_translation_prompt: still using plain-text fallback "
+                    "for tokenizer models %s (%d chunks processed). Quality of "
+                    "translations may be degraded.",
+                    ', '.join(sorted(_TEMPLATE_WARNED)),
+                    _TEMPLATE_FALLBACK_COUNT,
+                )
             return f"Translate English to Turkish:\n{text}"
 
     def _tokeniser_loop(self) -> None:
+        """Background thread target: dequeue raw chunks, tokenise, and feed output.
+
+        Each worker lazily acquires a thread-local tokenizer instance via
+        :meth:`_get_tokenizer`, then loops until ``_running`` is cleared *and* the
+        raw queue is empty.  For each chunk: wraps the text with a translation
+        prompt, encodes with the thread-local tokenizer, applies the chunk filter,
+        and pushes ``(text, token_ids, token_count)`` tuples into
+        ``_tokenised_queue``.
+
+        A sentinel object (checked by identity via ``_SENTINEL``) causes immediate
+        exit.  The ``put()`` into ``_tokenised_queue`` uses a 1-second timeout so
+        the worker can periodically check ``_running`` — this avoids a deadlock
+        where all workers are blocked on a full output queue during shutdown.
+
+        Side effects
+        ------------
+        - Reads from ``_raw_queue``.
+        - Pushes into ``_tokenised_queue``.
+        - Increments ``total_chunks_produced`` under a lock.
+        - Logs``UnicodeDecodeError`` at WARNING with the problematic byte context.
+        - Skips any chunk where tokenisation raises an exception.
+
+        Notes
+        -----
+        Token IDs are converted to native Python ``int`` before queuing because
+        SentencePiece returns numpy-backed integers that cause overflow errors
+        when assigned to torch/numpy arrays on ARM64 macOS (MPS).
+        """
         tok = self._get_tokenizer()  # one deep-copy per thread lifetime
         chunk_produced = 0
 

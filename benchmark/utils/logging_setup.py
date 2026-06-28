@@ -9,7 +9,39 @@ from pathlib import Path
 
 
 class JSONFormatter(logging.Formatter):
+    """Logging formatter that serializes each :class:`logging.LogRecord` as a single-line JSON object.
+
+    Produces output with the following keys: ``timestamp`` (ISO 8601 with
+    millisecond precision in UTC), ``level``, ``logger``, ``thread``,
+    ``module``, and ``message``.  If the record carries exception info
+    (``exc_info``), an ``exception`` key holding the formatted traceback
+    is also included.
+
+    This formatter is intended for machine consumption (e.g. log
+    aggregators) and emits one JSON object per line (JSON Lines).
+    """
+
     def format(self, record):
+        """Format *record* as a JSON string.
+
+        Parameters
+        ----------
+        record : logging.LogRecord
+            The log record to format.
+
+        Returns
+        -------
+        str
+            A single-line JSON string (no trailing newline).
+
+        Notes
+        -----
+        - Timestamps are UTC with millisecond precision.
+        - Exception tracebacks are included under the ``exception`` key when
+          ``record.exc_info`` is truthy.
+        - The output uses ``ensure_ascii=False`` so non-ASCII characters are
+          preserved as-is rather than escaped.
+        """
         now = datetime.now(timezone.utc)
         obj = {"timestamp": now.strftime("%Y-%m-%dT%H:%M:%S.") + f"{now.microsecond//1000:03d}Z",
                "level": record.levelname, "logger": record.name, "thread": record.threadName,

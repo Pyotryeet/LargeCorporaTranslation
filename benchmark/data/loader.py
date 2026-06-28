@@ -105,6 +105,32 @@ class JSONLLoader:
         max_shuffle_memory_gb: Optional[float] = None,
         shuffle_temp_dir: str = "",
     ):
+        """Initialise the JSONL loader with file patterns and shuffle settings.
+
+        Parameters
+        ----------
+        input_patterns : list[str]
+            Glob patterns to resolve input files (e.g., ``["data/*.jsonl.gz"]``).
+        shuffle : bool
+            If True, documents are yielded in a deterministic shuffled order
+            seeded from *seed*.  If False, documents are yielded in file-then-line
+            order.
+        seed : int
+            Random seed used for deterministic shuffle permutation.
+        max_shuffle_memory_gb : Optional[float]
+            Memory budget in GiB for in-memory shuffle.  Datasets exceeding this
+            budget fall back to disk-backed external sort.  Falls back to
+            ``SHUFFLE_MEMORY_BUDGET_BYTES`` from config when None.
+        shuffle_temp_dir : str
+            Directory for temporary run files during external sort.  Uses the
+            system temp directory when empty.
+
+        Notes
+        -----
+        - Immediately resolves file patterns via ``_resolve_files()``.
+        - No files matching the patterns produces a warning (not an error) so
+          dry-run and smoke-test pipelines drain gracefully.
+        """
         self.input_patterns = input_patterns
         self.shuffle = shuffle
         self.seed = seed
@@ -134,6 +160,19 @@ class JSONLLoader:
     # ------------------------------------------------------------------
 
     def _resolve_files(self) -> None:
+        """Resolve input glob patterns to concrete file paths.
+
+        Populates ``self._files`` with sorted ``Path`` objects for every file
+        matching any of ``self.input_patterns`` and accumulates the total
+        on-disk byte count in ``self._total_bytes``.
+
+        Side Effects
+        ------------
+        - Sets ``self._files`` and ``self._total_bytes``.
+        - Logs a warning if no files match (pipeline will drain immediately).
+        - Logs an info line with file count, total size in GiB, and orjson
+          availability.
+        """
         for pattern in self.input_patterns:
             for m in sorted(glob(pattern, recursive=True)):
                 p = Path(m)
@@ -202,6 +241,22 @@ class JSONLLoader:
             yield from self._sequential_iter()
 
     def _sequential_iter(self) -> Iterator[tuple[int, str, str]]:
+        """Yield documents in file-then-line order (no shuffle).
+
+        Yields
+        ------
+        Iterator[tuple[int, str, str]]
+            Tuples of ``(doc_id, file_name, text)`` in natural file order.  If a
+            seek position was set via ``seek_to()``, the first *skip_remaining*
+            documents are silently skipped.
+
+        Side Effects
+        ------------
+        - Updates ``self._current_file`` and ``self._current_doc_id`` for every
+          document yielded (used by ``current_position`` for checkpointing).
+        - Resets ``self._seek_skip_docs`` to 0 after the iteration completes so
+          subsequent calls do not skip again.
+        """
         doc_id = 0
         skip_remaining = self._seek_skip_docs
 
@@ -474,21 +529,32 @@ class JSONLLoader:
             dir=str(tmp_root), prefix="shuffle_run_", suffix=".bin",
         )
         tmp_path = Path(tmp_path_str)
+        f = None
         try:
-            with os.fdopen(fd, "wb") as f:
-                for key, doc_id, file_name, text in buffer:
-                    self._write_run_record(f, key, doc_id, file_name, text)
+            f = os.fdopen(fd, "wb")
+            for key, doc_id, file_name, text in buffer:
+                self._write_run_record(f, key, doc_id, file_name, text)
         except Exception:
-            # The with-statement's __exit__ already closed fd via the file
-            # object — do NOT os.close(fd) here (that would be a double-
-            # close on a potentially-reused fd).  Just unlink the output.
+            # Close the file object if it was created; close the raw fd
+            # if fdopen itself raised (fd would otherwise leak).
+            if f is not None:
+                try:
+                    f.close()
+                except OSError:
+                    pass
+            else:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
             try:
                 tmp_path.unlink(missing_ok=True)
             except OSError:
                 pass
             raise
-
-        run_files.append(tmp_path)
+        else:
+            f.close()
+            run_files.append(tmp_path)
 
     def _kway_merge(
         self,

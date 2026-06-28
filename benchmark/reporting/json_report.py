@@ -1,4 +1,8 @@
-"""JSON report writer — produces benchmark_report.json."""
+"""JSON report writer.
+
+Produces ``report/benchmark_report.json`` under the given output directory.
+Writes are atomic (tempfile + rename) to guard against partial writes.
+"""
 
 import logging
 import os
@@ -14,7 +18,45 @@ logger = logging.getLogger(__name__)
 
 
 class JSONReportWriter:
+    """Atomic JSON report writer.
+
+    Serialises a benchmark result dictionary to a JSON file under
+    ``<output_dir>/report/benchmark_report.json``.  Metadata (generation
+    timestamp and benchmark version) is injected automatically.  Writes are
+    performed atomically via a tempfile + shutil.move, with a copy+delete
+    fallback for cross-filesystem moves.
+    """
+
     def write(self, output_dir: Path, report: dict) -> Path:
+        """Write the benchmark report to disk atomically.
+
+        Parameters
+        ----------
+        output_dir : pathlib.Path
+            Parent directory under which ``report/benchmark_report.json`` will
+            be created.  Intermediate directories are created if needed.
+        report : dict
+            The benchmark result payload.  A ``_metadata`` key is injected in-
+            place with ``generated_at`` (ISO-8601 UTC) and ``benchmark_version``.
+
+        Returns
+        -------
+        pathlib.Path
+            Absolute path to the written JSON file.
+
+        Side effects
+        ------------
+        - Creates ``<output_dir>/report/`` if it does not exist.
+        - Mutates *report* in-place by adding the ``_metadata`` key.
+        - Writes to a tempfile first, then atomically renames it to the target
+          path.  On cross-filesystem rename failure, falls back to copy+unlink.
+
+        Raises
+        ------
+        OSError
+            If directory creation or file I/O fails.  The tempfile is cleaned up
+            on error.
+        """
         report_dir = output_dir / "report"
         report_dir.mkdir(parents=True, exist_ok=True)
         path = report_dir / "benchmark_report.json"

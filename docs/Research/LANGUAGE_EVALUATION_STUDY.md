@@ -29,22 +29,26 @@ LLM-as-a-Judge Protocol(Later stage implementation and validation)
 The integration of frontier Large Language Models as evaluative judges introduces pragmatic and context-aware validation. An LLM-as-a-Judge protocol prompt-engineered with a custom multidimensional rubrics can evaluate translations on nuance, style, and morphological correctness.
 The judge can analyze specific Turkish linguistic constraints, such as vowel harmony, word-order variations (Turkish is fundamentally SOV but allows flexible word order for emphasis), and honorific registers (sen vs. siz).
 
-Proposed Composite Scoring Methodology
-To create a robust accuracy measuring suite for Turkish, this analysis proposes the Turkish Translation Quality Scoring (TTQS) framework. The TTQS integrates four dimensions of evaluation to balance the strengths and weaknesses of lexical, neural, and generative metrics.
+Proposed Composite Scoring & Human-in-the-Loop Calibration Pipeline
+To create a robust accuracy measuring suite for Turkish, the system implements the Turkish Translation Quality Scoring (TTQS) framework. The TTQS integrates lexical, character-level, semantic, and neural quality estimation metrics (chrF++, spBLEU, all COMET family models including COMET-Kiwi and COMET-22, and MetricX-24) into a single composite score calibrated by human judgments.
 
-Evaluation Dimension,Metric Employed,Suggested Weight,Evaluative Focus in Turkish
-Lexical Overlap,chrF++,20%,Captures root word accuracy and suffix spelling variants.
-Neural Reference Similarity,MetricX-24,40%,"Measures deep semantic alignment, ignoring structural reordering."
-Quality Estimation,COMET-Kiwi,20%,Detects hallucinations and target-to-source alignment.
-Generative Judgment,LLM-as-a-Judge,20%,"Evaluates vowel harmony, register, and grammatical rules."
+### The Model Selection and Human Evaluation Pipeline
 
-The best course of action to take to make this evaluation system better is to have a human feedback for the model specific translation data and then fine tune the weights of
-different evaluation metrics according to the native human Turkish speaker feedback to make the most accurate evaluation have more impact on the overall score.
-
-This human evalution pipeline will have different translation instances from the models(that are candidates of being used in the main translation) of the same english corpus and 
-attached to the translation object the different scores from different evaluation systems(chrF++, chrF, BLEU, COMET-Kiwi, etc.) and native human Turkish speakers will blindly rate
-the translations without looking at anything but pure sentences and their corresponding translations and then the human rating data will be used to fine tune the weights of different
-evaluation metrics contribution to the overall translation accuracy score.
+1. **Extract Reference Corpus**: A specific subset of the translation corpora consisting of exactly 50 long, linguistically diverse English sentences is compiled.
+2. **Multi-Model Translation (MPS Dev Path)**: All candidate models (e.g. NLLB variants, TranslateGemma, MADLAD) are run on this identical 50-sentence reference corpus using the local macOS Apple Silicon (MPS) development backend to perform rapid quality benchmarking.
+3. **Automated Quality Rating**: All implemented quality metrics run over the generated translations to score them:
+   * **chrF++ & spBLEU**: Capture character-level morphological suffixes and lexical precision.
+   * **COMET-22 & COMET-Kiwi**: Reference-based and reference-free semantic alignment.
+   * **MetricX-24**: Deep neural semantic similarity scoring.
+4. **Blind Human Rating Webpage**: A web application displays the source sentences alongside the translated outputs from each model in a randomized, double-blind fashion. Native Turkish-speaking human evaluators rate the translations for fluency, grammatical correctness, and adequacy (without knowing which model produced which translation).
+5. **Metric Weight Optimization (Softmax Normalization)**: The human feedback ratings are aligned with the automated metrics scores. We perform regression or correlation analysis to assign contribution weights to each metric:
+   $$W = \text{Softmax}([w_{\text{chrF++}}, w_{\text{spBLEU}}, w_{\text{COMET}}, w_{\text{MetricX-24}}])$$
+   These weights are summed to construct a single overall translation quality score:
+   $$\text{TTQS} = \sum_{m} W_m \cdot S_m$$
+6. **Model Selection & Code Hardening**:
+   * The candidate model achieving the highest overall human-calibrated TTQS score is selected.
+   * All other candidate models are removed/pruned from the active registry.
+   * Production engineering resources are concentrated solely on the selected model: the execution code is wrapped with aggressive CUDA-specific optimizations (NCCL data parallelism, custom Triton kernels, and Inductor compile graphs) to run it extremely fast in the production H200 environment.
 
 This composite model ensures that translations are evaluated not only for semantic accuracy but also for grammatical and morphological correctness, addressing the specific challenges of Turkish translation evaluation.
 

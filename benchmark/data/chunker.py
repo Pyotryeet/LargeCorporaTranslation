@@ -24,6 +24,24 @@ class TextChunker:
     """
 
     def __init__(self, tokenizer: PreTrainedTokenizerBase, max_input_tokens: int = 512, overlap_tokens: int = 50):
+        """Initialize the token-level text chunker.
+
+        Parameters
+        ----------
+        tokenizer : PreTrainedTokenizerBase
+            A HuggingFace tokenizer instance used for encoding and decoding text.
+        max_input_tokens : int, default=512
+            Maximum number of tokens per chunk (including special tokens like
+            BOS/EOS). Chunks will not exceed this size.
+        overlap_tokens : int, default=50
+            Number of tokens to overlap between consecutive chunks when sliding
+            the window. Must be strictly less than ``max_input_tokens``.
+
+        Raises
+        ------
+        ValueError
+            If ``overlap_tokens >= max_input_tokens``.
+        """
         self.tokenizer = tokenizer
         self.max_input_tokens = max_input_tokens
         self.overlap_tokens = overlap_tokens
@@ -149,9 +167,44 @@ class TextChunker:
 class NullChunker:
     """No-op chunker — passes text through unchanged."""
     def chunk(self, text: str) -> Iterator[str]:
+        """Yield the input text unchanged if it is non-empty.
+
+        Parameters
+        ----------
+        text : str
+            The input text to pass through.
+
+        Yields
+        ------
+        str
+            The original input text, unchanged, if it is non-empty and contains
+            at least one non-whitespace character. Yields nothing for empty or
+            whitespace-only input.
+        """
         if text and text.strip():
             yield text
 
     def chunk_with_tokens(self, text: str):
+        """Yield the input text unchanged with empty token metadata.
+
+        This is a no-op implementation of the token-level chunking interface
+        used by ``TextChunker.chunk_with_tokens``. It returns empty token ID
+        lists and zero token counts so that callers can treat chunked and
+        non-chunked inputs uniformly without branching.
+
+        Parameters
+        ----------
+        text : str
+            The input text to pass through.
+
+        Yields
+        ------
+        str
+            The original text, unchanged.
+        list[int]
+            An empty list (no pre-computed token IDs).
+        int
+            Zero (no token count).
+        """
         if text and text.strip():
             yield text, [], 0

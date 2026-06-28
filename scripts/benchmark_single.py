@@ -191,8 +191,12 @@ def run_one_model(model_def: dict) -> dict:
             pipeline.release_batch(batch)
             try:
                 metrics.log_batch(result)
-            except Exception:
-                pass  # bypass internal MetricsCollector bugs
+            except (ValueError, TypeError, AttributeError) as e:
+                # Metrics collection is optional — data collection failures
+                # must not crash the benchmark, but we log them so they are visible.
+                _logging.getLogger(__name__).warning(
+                    "MetricsCollector.log_batch failed: %s", e,
+                )
             batches += 1; total_tokens += result.output_tokens_total
 
             now = timer.elapsed()
@@ -247,12 +251,12 @@ def run_one_model(model_def: dict) -> dict:
 
     # Clean up
     try: engine.close()
-    except: pass
+    except Exception: pass
     del engine, pipeline, metrics
     gc.collect()
     if is_mps:
         try: torch.mps.empty_cache()
-        except: pass
+        except Exception: pass
     elif is_cuda:
         torch.cuda.empty_cache()
 
@@ -331,7 +335,8 @@ def run_llama_model(model_def: dict) -> dict:
     wall_start = time.monotonic()
 
     for pi, prompt in enumerate(prompts):
-        if time.monotonic() - wall_start > RUN_DURATION:
+        elapsed = time.monotonic() - wall_start
+        if elapsed > RUN_DURATION:
             break
         t0 = time.monotonic()
         try:
@@ -343,9 +348,10 @@ def run_llama_model(model_def: dict) -> dict:
                     "-t", str(threads), "-b", "2048",
                     "-s", str(SEED + pi), "--no-conversation",
                     "--log-verbosity", "1", "-p", prompt]
+            remaining = max(10, int(RUN_DURATION - elapsed))
             env = os.environ.copy()
             env["GGML_METAL_PATH_RESOURCES"] = str(llama_bin.parent)
-            r = subprocess.run(cmd, capture_output=True, text=True, timeout=300, env=env)
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=remaining, env=env)
             out = r.stdout.strip()
             if "Turkish:" in out:
                 out = out.split("Turkish:")[-1].strip()

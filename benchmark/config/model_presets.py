@@ -89,10 +89,36 @@ class ModelPreset:
 
     @property
     def is_quantized(self) -> bool:
+        """Return True if this preset uses a quantization method other than "none".
+
+        Shortcut for checking whether any bitsandbytes (INT8/NF4) or other
+        quantization scheme is active.  Equivalent to
+        ``preset.quantization_method != "none"``.
+
+        Returns
+        -------
+        bool
+            ``True`` when ``quantization_method`` is not ``"none"``,
+            ``False`` otherwise.
+        """
         return self.quantization_method != "none"
 
     @property
     def bytes_per_element(self) -> float:
+        """Return the number of bytes consumed by a single weight element.
+
+        Derived from ``self.quantization``:
+          - ``"int4"`` returns 0.5 (4-bit packed),
+          - ``"int8"`` returns 1,
+          - anything else (bf16, fp16) returns 2.
+
+        Useful for memory-footprint estimates of weight matrices and KV caches.
+
+        Returns
+        -------
+        float
+            Byte count per weight element at this preset's quantization level.
+        """
         if self.quantization in ("int4",):
             return 0.5  # 4 bits per weight = 0.5 bytes per element (packed)
         if self.quantization in ("int8",):
@@ -101,7 +127,25 @@ class ModelPreset:
 
     @property
     def kv_cache_bytes_per_layer(self) -> int:
-        """Estimated KV-cache bytes per layer (K + V, per sequence position)."""
+        """Return the estimated KV-cache memory per layer, per sequence position.
+
+        Computed as ``2 * num_kv_heads * head_dim * bytes_per_element``,
+        representing the combined size of one key and one value vector across
+        all KV heads for a single token position.  Multiply by ``num_layers``
+        and ``max_seq_len`` to get the total KV-cache budget.
+
+        Returns
+        -------
+        int
+            Estimated byte count per layer per sequence position.
+
+        Notes
+        -----
+        The formula assumes the KV cache uses the same precision as the weights
+        (as reported by ``bytes_per_element``).  Some backends may store the
+        cache in a different dtype; this is a planning estimate, not a
+        guarantee.
+        """
         return 2 * self.num_kv_heads * self.head_dim * self.bytes_per_element
 
 
@@ -328,7 +372,76 @@ MODEL_PRESETS: dict[str, ModelPreset] = {
         supports_fp8=True,      # StaticFP8Linear — always works on CUDA (diffusion backend)
         recommended_batch_size=1,
     ),
+    "nllb-600m": ModelPreset(
+        name="nllb-600m",
+        display_name="NLLB 600M (BF16)",
+        hf_model_id="facebook/nllb-200-distilled-600M",
+        num_layers=12,
+        num_kv_heads=16,
+        head_dim=64,
+        hidden_size=1024,
+        vocab_size=256206,
+        quantization="bf16",
+        quantization_method="none",
+        eos_token_id=2,
+        end_of_turn_token_id=-1,
+        max_seq_len=1024,
+        supports_fp8=False,
+        recommended_batch_size=1,
+    ),
+    "nllb-1.3b": ModelPreset(
+        name="nllb-1.3b",
+        display_name="NLLB 1.3B (BF16)",
+        hf_model_id="facebook/nllb-200-distilled-1.3B",
+        num_layers=24,
+        num_kv_heads=16,
+        head_dim=64,
+        hidden_size=1024,
+        vocab_size=256206,
+        quantization="bf16",
+        quantization_method="none",
+        eos_token_id=2,
+        end_of_turn_token_id=-1,
+        max_seq_len=1024,
+        supports_fp8=False,
+        recommended_batch_size=1,
+    ),
+    "nllb-3b": ModelPreset(
+        name="nllb-3b",
+        display_name="NLLB 3B (BF16)",
+        hf_model_id="facebook/nllb-200-3.3B",
+        num_layers=24,
+        num_kv_heads=16,
+        head_dim=128,
+        hidden_size=2048,
+        vocab_size=256206,
+        quantization="bf16",
+        quantization_method="none",
+        eos_token_id=2,
+        end_of_turn_token_id=-1,
+        max_seq_len=1024,
+        supports_fp8=False,
+        recommended_batch_size=1,
+    ),
+    "madlad-3b": ModelPreset(
+        name="madlad-3b",
+        display_name="MADLAD 3B (BF16)",
+        hf_model_id="google/madlad400-3b-mt",
+        num_layers=32,
+        num_kv_heads=16,
+        head_dim=64,
+        hidden_size=1024,
+        vocab_size=256000,
+        quantization="bf16",
+        quantization_method="none",
+        eos_token_id=1,
+        end_of_turn_token_id=-1,
+        max_seq_len=2048,
+        supports_fp8=False,
+        recommended_batch_size=1,
+    ),
 }
+
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -339,7 +452,20 @@ MODEL_PRESETS: dict[str, ModelPreset] = {
 def get_preset_by_name(name: str) -> Optional[ModelPreset]:
     """Look up a preset by its short name.
 
-    Returns None if the name is not registered.
+    Searches the ``MODEL_PRESETS`` registry for a key matching *name*
+    (case-sensitive).  Typical keys are strings like
+    ``"translategemma-4b-int8"`` or ``"ministral-3b-bf16"``.
+
+    Parameters
+    ----------
+    name : str
+        Short machine-readable preset name (e.g. ``"translategemma-4b-int8"``).
+
+    Returns
+    -------
+    ModelPreset or None
+        The matching immutable preset dataclass if *name* is registered,
+        or ``None`` if the name is not found in the registry.
     """
     return MODEL_PRESETS.get(name)
 

@@ -61,7 +61,11 @@ def is_transformer_engine_available() -> bool:
     return _TE_IMPORTED
 
 
-# Backward-compatible private alias.
+# Backward-compatible alias for :func:`is_transformer_engine_available`.
+#
+# This is a module-level alias, not a function wrapper. It references
+# ``is_transformer_engine_available`` directly, so calling it is equivalent
+# to calling the canonical function.
 _te_is_available = is_transformer_engine_available
 
 
@@ -161,6 +165,30 @@ class PrecisionConfig:
     """
 
     def __init__(self, backend: str, preferred: PrecisionMode = "auto"):
+        """Initialize a PrecisionConfig for the given backend.
+
+        Parameters
+        ----------
+        backend : str
+            The inference backend identifier. One of ``"cuda"``, ``"mps"``, ``"cpu"``.
+            Case-insensitive, leading/trailing whitespace is stripped.
+        preferred : PrecisionMode, default ``"auto"``
+            The user's requested precision mode. ``"auto"`` selects FP8 on CUDA when
+            Transformer Engine is available, falling back to BF16 for GPU or FP32 for
+            CPU otherwise.
+
+        Raises
+        ------
+        ValueError
+            If the resolved backend or precision combination is unsupported (handled
+            downstream by the resolver methods).
+
+        Notes
+        -----
+        All instance attributes (``master_dtype``, ``compute_dtype``,
+        ``uses_transformer_engine``, ``uses_fp8``, ``supports_fp8_native``,
+        ``tf32_enabled``) are resolved eagerly during ``__init__``.
+        """
         self.backend = backend.strip().lower()
         self.preferred = preferred
         self.master_dtype = self._resolve_master_dtype()
@@ -171,6 +199,24 @@ class PrecisionConfig:
         self.tf32_enabled = self._resolve_tf32()
 
     def _resolve_master_dtype(self) -> torch.dtype:
+        """Resolve the master-weight torch dtype based on backend and preference.
+
+        Parameters
+        ----------
+        None (uses ``self.backend`` and ``self.preferred``).
+
+        Returns
+        -------
+        torch.dtype
+            ``torch.bfloat16`` for GPU backends in ``"auto"`` or ``"bf16"`` modes;
+            ``torch.float16`` for ``"fp16"``; ``torch.float32`` for ``"fp32"`` or
+            CPU in ``"auto"`` mode.
+
+        Notes
+        -----
+        FP8-requested precision resolves to BF16 master weights (FP8 compute is
+        handled separately via Transformer Engine's ``fp8_autocast``).
+        """
         if self.preferred in ("fp8", "float8_e4m3fn") and self.backend == "cuda":
             return torch.bfloat16
         if self.preferred in ("bf16", "bfloat16"):
@@ -185,6 +231,23 @@ class PrecisionConfig:
         return torch.float32
 
     def _resolve_compute_dtype(self) -> torch.dtype:
+        """Resolve the effective compute dtype.
+
+        Parameters
+        ----------
+        None (uses ``self.uses_transformer_engine`` and ``self.master_dtype``).
+
+        Returns
+        -------
+        torch.dtype
+            ``torch.float8_e4m3fn`` when Transformer Engine is active (FP8 tensor-core
+            matmul via ``te.fp8_autocast``), otherwise the master dtype.
+
+        Notes
+        -----
+        When TE is active, the compute dtype is informational — the actual FP8
+        casting is managed by TE's ``fp8_autocast`` context, not by this dtype.
+        """
         # When TE is active, compute dtype is FP8 at the op level (handled
         # by te.fp8_autocast).  The master dtype stays BF16.
         if self.uses_transformer_engine:
@@ -232,6 +295,24 @@ class PrecisionConfig:
         return te_ok
 
     def _resolve_fp8(self) -> bool:
+        """Return True if FP8 compute is actively in use.
+
+        Parameters
+        ----------
+        None (uses ``self.uses_transformer_engine``).
+
+        Returns
+        -------
+        bool
+            True when Transformer Engine has been successfully loaded and is
+            configured for FP8 tensor-core matmul.
+
+        Notes
+        -----
+        This is a convenience that delegates to ``self.uses_transformer_engine``.
+        FP8 compute implies TE is active; there is no FP8 path without TE in the
+        current architecture.
+        """
         return self.uses_transformer_engine
 
     def _resolve_fp8_native(self) -> bool:
@@ -266,6 +347,25 @@ class PrecisionConfig:
         )
 
     def to_dict(self) -> dict:
+        """Serialize the precision configuration to a dictionary.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        dict
+            Dictionary with string keys: ``"backend"``, ``"preferred"``,
+            ``"master_dtype"``, ``"compute_dtype"``, ``"uses_transformer_engine"``,
+            ``"uses_fp8"``, ``"supports_fp8_native"``, ``"tf32_enabled"``.
+            Dtype values are converted to their string representations (e.g.
+            ``"torch.bfloat16"``).
+
+        Notes
+        -----
+        This is intended for logging, reporting, and checkpoint serialization.
+        """
         return {
             "backend": self.backend,
             "preferred": self.preferred,
@@ -293,19 +393,25 @@ def get_precision_config(
     backend: str,
     preferred: PrecisionMode = "auto",
 ) -> PrecisionConfig:
-    """Create a PrecisionConfig for the given backend.
+    """Create and log a PrecisionConfig for the given backend.
 
     Parameters
     ----------
     backend : str
         One of ``"cuda"``, ``"mps"``, ``"cpu"``.
-    preferred : PrecisionMode
-        User's requested precision.  ``"auto"`` (default) selects FP8 on
-        CUDA when Transformer Engine is available, BF16 otherwise.
+    preferred : PrecisionMode, default ``"auto"``
+        User-requested precision. ``"auto"`` selects FP8 on CUDA when Transformer
+        Engine is available, BF16 on MPS, FP32 on CPU.
 
     Returns
     -------
     PrecisionConfig
+        Fully resolved precision configuration object.
+
+    Side Effects
+    ------------
+    Logs the resolved configuration at INFO level, including effective precision
+    label, master dtype, compute dtype, TE status, and FP8 status.
     """
     cfg = PrecisionConfig(backend=backend, preferred=preferred)
     logger.info(
@@ -373,6 +479,15 @@ class StaticFP8Linear(torch.nn.Module):
         w_max = w.abs().max()
         if w_max == 0:
             w_max = torch.tensor(1.0, dtype=torch.float32, device=w.device)
+        elif w_max < 1e-6:
+            # Near-zero weight matrix — quantization will produce all-zero FP8.
+            # This typically indicates a dead layer; log a warning so it's not silent.
+            _name = getattr(linear, '_static_fp8_name', 'unknown')
+            logger.warning(
+                "StaticFP8: weight max is %.2e for layer '%s' — "
+                "quantization will destroy precision. Check for dead/untrained layers.",
+                w_max.item(), _name,
+            )
         scale = (w_max / 448.0).to(torch.float32)
         w_fp8 = (w / scale).clamp(-448.0, 447.0).to(torch.float8_e4m3fn)
         self.register_buffer("weight_fp8", w_fp8)
@@ -383,6 +498,25 @@ class StaticFP8Linear(torch.nn.Module):
             self.bias = None
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Forward pass with FP8-to-BF16 dequantization on read.
+
+        Parameters
+        ----------
+        x : torch.Tensor
+            Input activation tensor of shape ``(..., in_features)``.
+
+        Returns
+        -------
+        torch.Tensor
+            Output tensor of shape ``(..., out_features)`` after linear projection,
+            computed in BF16 with TF32 tensor-core acceleration.
+
+        Notes
+        -----
+        The FP8 weight is dequantized to BF16 in the same memory transaction as the
+        read — the H200 memory controller casts inline. There is zero per-token
+        compute overhead from dequantization. The matmul itself runs in BF16.
+        """
         # Dequantize on same cycle as memory read — zero overhead.
         w_bf16 = self.weight_fp8.to(torch.bfloat16) * self.weight_scale.to(torch.bfloat16)
         return torch.nn.functional.linear(x, w_bf16, self.bias)
@@ -439,7 +573,29 @@ def apply_static_fp8_to_model(
 # ---------------------------------------------------------------------------
 
 def _model_weight_hash(model: torch.nn.Module, model_path: str) -> str:
-    """Stable hash of model identity + Linear weight shapes and checksums."""
+    """Compute a stable hash of model identity and Linear layer structure.
+
+    Parameters
+    ----------
+    model : torch.nn.Module
+        The loaded PyTorch model whose Linear layers will be hashed.
+    model_path : str
+        The filesystem path from which the model was loaded. Used as a seed
+        for the hash so that different models (even with coincidentally similar
+        shapes and sums) produce distinct hashes.
+
+    Returns
+    -------
+    str
+        A 16-character hex digest string (first 16 chars of SHA-256).
+
+    Notes
+    -----
+    The hash incorporates the model path and, for every ``nn.Linear`` submodule,
+    the fully qualified module name, weight shape, and weight sum. This is
+    designed to be stable across runs but sensitive to weight changes
+    (e.g. fine-tuning). It does NOT hash bias tensors — only weight matrices.
+    """
     import hashlib
     h = hashlib.sha256(model_path.encode())
     for name, mod in model.named_modules():
@@ -455,12 +611,34 @@ def save_fp8_weights(
     model_path: str,
     cache_dir: str | os.PathLike | None = None,
 ) -> str | None:
-    """Quantize all nn.Linear weights to FP8 and save each as a safetensors file.
+    """Quantize all nn.Linear weights to FP8 E4M3 and save each as a safetensors file.
 
-    Weights are stored in ``{cache_dir}/{hash}/`` — one ``.safetensors`` file
-    per module.  The lm_head is excluded.
+    Parameters
+    ----------
+    model : torch.nn.Module
+        The loaded PyTorch model whose Linear weights will be quantized.
+    model_path : str
+        Path to the model, used as part of the hash key for cache isolation.
+    cache_dir : str or os.PathLike or None, optional
+        Root directory for the FP8 weight cache. If ``None``, defaults to
+        ``~/.cache/tr_benchmark/fp8_weights/``.
 
-    Returns the cache directory path, or None if the save failed.
+    Returns
+    -------
+    str or None
+        The cache directory path (``{cache_dir}/{hash}/``) on success,
+        or ``None`` if ``safetensors`` is not installed or no layers were saved.
+
+    Side Effects
+    ------------
+    - Creates the cache directory tree if it does not exist.
+    - Writes one ``.safetensors`` file per Linear layer to the cache directory.
+
+    Notes
+    -----
+    lm_head layers are excluded. Near-zero weight matrices (max < 1e-6) that
+    would quantize to all-zero FP8 are also skipped. Each file contains two
+    tensors: ``"weight"`` (FP8 E4M3) and ``"scale"`` (FP32 per-tensor scale).
     """
     try:
         from safetensors.torch import save_file

@@ -4,9 +4,6 @@ Replaces the ad-hoc boolean flags and env-var gates scattered across the codebas
 with a centralized, queryable registry. Every backend populates this after load(),
 and the harness reads from it at startup to print an honest capability table.
 
-This directly addresses Flaw #1 (False Flag Architecture) and Flaw #3 (Ad-Hoc
-Feature Gating) from docs/ARCHITECTURAL_FLAWS.md.
-
 Usage::
 
     from benchmark.config.capability import (
@@ -112,7 +109,30 @@ class CapabilityRegistry:
     _frozen: bool = False
 
     def register(self, entry: CapabilityEntry) -> None:
-        """Add a capability entry.  Raises if frozen or if dependency violated."""
+        """Add a capability entry to the registry.
+
+        Parameters
+        ----------
+        entry : CapabilityEntry
+            The capability entry to register. Must have a unique feature_id.
+
+        Returns
+        -------
+        None
+
+        Raises
+        ------
+        RuntimeError
+            If the registry is already frozen (load() has completed).
+        ValueError
+            If a dependency is registered but not ACTIVE, or if a conflict
+            is registered and ACTIVE.
+
+        Side Effects
+        ------------
+        - Inserts the entry into the registry's entries dict.
+        - Logs a warning if a dependency has not been registered yet.
+        """
         if self._frozen:
             raise RuntimeError(
                 f"Cannot register '{entry.feature_id}' — "
@@ -243,5 +263,4 @@ FEATURE_IDS = {
     "bleu_wired":            "BLEU Quality Metric",
     "chrf_wired":            "chrF++ Quality Metric",
     "prometheus_exporter":   "Prometheus Metrics Exporter",
-    "perf_regression":       "Performance Regression Gate",
 }

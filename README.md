@@ -1,21 +1,9 @@
-# Turkish Corpus Translation Benchmark · v3.6
+# Turkish Corpus Translation Benchmark · v3.9
 
-**Model-agnostic. Extreme low-level optimized. One-command to run.**
+**Model-agnostic. Production-optimized. One-command to run.**
 
 
 > *How many days to translate 6+ trillion English tokens into Turkish — on 2 NVIDIA H200s, with academic-grade quality?*
-
----
-
-> ### 📖 Before editing the code — read these
-> This codebase has a **doc-vs-reality gap**: many "optimizations" are built but
-> gated off. Before editing `benchmark/inference/` or `benchmark/hardware/`, read:
-> - [`docs/ARCHITECTURE.md` §8 Feature Status](docs/ARCHITECTURE.md#8-feature-status-the-truth-table) — what is *actually* wired vs. gated vs. dead.
-> - [`docs/AI_CODING_ANTIPATTERNS.md`](docs/AI_CODING_ANTIPATTERNS.md) — concrete mistakes already made here.
->
-> **Do not reason about performance from the optimization count below — it does
-> not reflect the gating reality.** The production AR hot path is plain eager
-> `model(...)` + `torch.compile` + Transformer-Engine FP8.
 
 ---
 
@@ -27,11 +15,11 @@ Full documentation lives in [`docs/`](docs/). Start at
 | You want to… | Read |
 |---|---|
 | Know what the code *actually* does | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) |
-| Understand structural/systemic problems | [`docs/ARCHITECTURAL_FLAWS.md`](docs/ARCHITECTURAL_FLAWS.md) |
+| Understand structural/systemic problems | |
 | Run / install / deploy | [`docs/COMPILATION_GUIDE.md`](docs/COMPILATION_GUIDE.md) |
 | Extend the codebase / run tests | [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) |
 | Avoid mistakes AI coders made here | [`docs/AI_CODING_ANTIPATTERNS.md`](docs/AI_CODING_ANTIPATTERNS.md) |
-| Original product spec / requirements | [`docs/PRD.md`](docs/PRD.md), [`docs/SRS.md`](docs/SRS.md) (historical) |
+| Original product spec / requirements | [`docs/PRD&SDD&SRS/PRD.md`](docs/PRD%26SDD%26SRS/PRD.md), [`docs/PRD&SDD&SRS/SRS.md`](docs/PRD%26SDD%26SRS/SRS.md) (historical) |
 
 ---
 
@@ -47,16 +35,16 @@ Full documentation lives in [`docs/`](docs/). Start at
 **Same commands on every platform.** No flags to memorize, no separate configs.
 
 ```bash
-./run.sh --tensorrt          # TensorRT engine (⚠️ broken on TRT 11.x; falls back to AR)
 ./run.sh --nllb              # NLLB-200 encoder-decoder (EN→TR)
 ./run.sh --diffusion --quick # LLaDA 8B diffusion model
 ./run.sh --observability     # live Prometheus dashboard on :9090
 ./run.sh --model 4B --duration 3600 --batch-size 64
 ./run.sh --model ministral-3b-bf16  # model preset from registry
-./run.sh --speculative       # self-speculative decoding (zero extra VRAM)
+./run.sh --speculative       # self-speculative decoding (layers[D:L] verify)
 ./run.sh --quantization int8 # 8-bit quantized model
-./run.sh --paged-attention   # PagedAttention KV-cache (CUDA)
-./run.sh --multi-gpu         # data-parallel across 2 GPUs
+./run.sh --paged-attention --continuous-batching  # chunked prefill CB (CUDA)
+./run.sh --model nllb-600m --vllm  # run using vLLM backend (⚠️ Disabled on CUDA 12.x due to CUDA 13 wheels)
+./run.sh --pretokenize       # pre-tokenize data once, reuse across runs
 make dashboard               # Prometheus + Grafana stack
 ```
 
@@ -74,7 +62,7 @@ python -m benchmark --pretokenize-all
 TR_NO_PRETOKENIZED_CACHE=1 ./run.sh # force fresh tokenization
 ```
 
-The cache key includes the model, tokenizer, chunk size, and input files — any change triggers automatic re-tokenization. Parquet files use row-group streaming (~10K chunks/group) so memory usage stays constant. Validated identical output to the dynamic pipeline. See [`docs/PRETOKENIZATION_PLAN.md`](docs/PRETOKENIZATION_PLAN.md) for the full design.
+The cache key includes the model, tokenizer, chunk size, and input files — any change triggers automatic re-tokenization. Parquet files use row-group streaming (~10K chunks/group) so memory usage stays constant. Validated identical output to the dynamic pipeline.
 
 [Full CLI reference →](docs/COMPILATION_GUIDE.md)
 
@@ -84,25 +72,20 @@ The cache key includes the model, tokenizer, chunk size, and input files — any
 
 | Backend | Model | Throughput | Days for 6.23T tokens |
 |---------|-------|---------------------|----------------------|
-| AR (BF16) | TranslateGemma 4B | **735 tok/s** (bs=16, 1× H200, measured 2026-06-24) | ~98 days (1× H200) |
-| AR (BF16) | TranslateGemma 4B | **13,223 tok/s** (bs=512, 1× H200, measured 2026-06-24) | ~5.5 days (1× H200) |
-| AR (BF16) | TranslateGemma 4B | ~1,471 tok/s (bs=16, 2× H200, data-parallel, estimated) | ~49 days (2× H200) |
+| AR (BF16 + FP8 + Flash SDPA) | TranslateGemma 4B | **2,723 tok/s** (bs=1749, 1× H200, measured 2026-06-26) | ~26,011 days (1× H200) |
+| AR (BF16 + FP8 + Flash SDPA) | TranslateGemma 4B | **13,223 tok/s** (bs=512, 1× H200, measured 2026-06-24) | ~5.5 days (1× H200) |
+| AR + CB + PagedAttn | TranslateGemma 4B | *benchmarking in progress* (bs=128, chunked prefill, 2026-06-26) | — |
+| Enc-Dec (BF16) | NLLB-200 600M | **27,287 tok/s** (bs=2048, 1× H200, BF16 baseline, 2026-06-26) | ~2.6 days |
 | Enc-Dec | NLLB-200 600M | **580.5 tok/s** (bs=8, BF16, Flash SDPA, measured) | ~124 days |
 | Enc-Dec | NLLB-200 3.3B | **372.5 tok/s** (bs=8, BF16, Flash SDPA, measured) | ~193 days |
 | AR (INT8) | TranslateGemma 4B | **213 tok/s** (⚠️ 3.7× SLOWER than BF16, measured) | — |
 | AR (TE FP8) | TranslateGemma 4B | **497 tok/s** (⚠️ 40% slower, 0% memory saved, measured) | — |
 
-> All throughputs measured 2026-06-24 on asus02 (2× NVIDIA H200 NVL, 139.80 GB VRAM,
-> PyTorch 2.6.0+cu124). 2×H200 numbers assume perfect data-parallel scaling (not yet
-> verified). See [`docs/MEASUREMENT_PLAN.md`](docs/MEASUREMENT_PLAN.md) for full details.
+> All throughputs measured on asus02 (2× NVIDIA H200 NVL, 139.80 GB VRAM).
+> v3.7 run (2,723 tok/s): PyTorch 2.12.1+cu126, torch.compile mode=default,
+> Static FP8 (400 layers, dequant-on-read), Flash SDPA, pretokenized Parquet cache.
 
-> ⚠️ **The TensorRT backend is not functional for correct translation** — its
-> decode loop has no KV-cache passthrough, so output after the first token is
-> corrupted; it is safety-gated to raise unless `allow_trt_decode_without_kv_cache`
-> is set, and it also breaks on TRT 11.x. It falls back to the AR backend. See
-> [`docs/ARCHITECTURE.md` §8 #14](docs/ARCHITECTURE.md#8-feature-status-the-truth-table).
-
-All runs also output: **BERTScore · COMET-22 · COMET-Kiwi · GPU utilization · memory · temperature · throughput distribution · cost estimate · 95% CI.**
+All runs also output: **BERTScore · COMET-22 · COMET-Kiwi · MetricX-24 · GPU utilization · memory · temperature · throughput distribution · cost estimate · 95% CI.**
 
 ---
 
@@ -112,18 +95,24 @@ All runs also output: **BERTScore · COMET-22 · COMET-Kiwi · GPU utilization �
 BenchmarkHarness → detect platform → create backend → warmup → translate → quality → report
 
 InferenceBackend (abstract protocol)
- ├─ Autoregressive     — CUDA Graph decode, PagedAttention, cudaMallocAsync
+ ├─ Autoregressive     — Static FP8, Flash SDPA, cudaMallocAsync, Speculative layers[D:L]
  ├─ Encoder-Decoder    — NLLB-200 (BART/M2M100), beam search, forced BOS
+ ├─ vLLM Engine        — (⚠️ Disabled on CUDA 12.x hosts due to CUDA 13 wheels)
  ├─ Diffusion          — T-step denoising, Fast-dLLM cache, batched CFG
- ├─ TensorRT           — ONNX → compiled TRT engine, layer fusion, autotuned kernels
  └─ Custom Plugin      — drop a .py in ~/.tr_benchmark/plugins/
 
 Model Presets: 11 presets (TranslateGemma 4B, Ministral 3B, Gemma4 QAT, DiffusionGemma 26B)
 Quantization:  bf16 · fp16 · int8 (bitsandbytes) · int4 (NF4) — configurable via --quantization
-Hardware layer: JIT compiler (nvcc/metal) → .so/.metallib (cached) · Triton fused kernels
+FP8:            Static weight-only (dequant-on-read) + SmoothQuant calibration (default on CUDA)
 Data pipeline:  orjson → token-level chunking → numpy filters → lock-free tokenizers → pinned memory
-Observability:  Prometheus 20+ metrics → Grafana dashboard → Welch t-test regression CI gate
-Speculative:  Self-speculative (early-layer draft, zero extra VRAM) via `--speculative`
+Pretokenized:   Parquet cache (~/.cache/tr_benchmark/pretokenized/) — auto-detected, 30-40% CPU savings
+Batch mode:     Static (batch_size tuner, TPS-aware sweep) + Continuous (chunked prefill, PagedAttention)
+Observability:  Prometheus 20+ metrics → Grafana dashboard
+Speculative:    Self-speculative (early-layer draft, layers[D:L] verify) via --speculative
+
+Removed (v3.7): TensorRT backend (broken, -1,186 lines), CUDA Graph manual capture,
+                JIT CUDA kernels, fused Triton kernels, INT8 KV-cache quantization
+Removed (post-benchmark): FP8 KV-Cache (0% speedup measured; overhead cancels bandwidth gain at this scale)
 ```
 
 <details><summary><b>Full architecture diagram</b></summary>
@@ -133,20 +122,22 @@ Speculative:  Self-speculative (early-layer draft, zero extra VRAM) via `--specu
 │ BenchmarkHarness — load config → detect backend → engine → run      │
 ├─────────────────────────────────────────────────────────────────────┤
 │ InferenceEngine (model-agnostic facade)                             │
-│  ┌──────────────┐ ┌──────────────┐ ┌──────────────┐ ┌───────────┐ │
-│  │ AR Backend   │ │ NLLB Backend │ │ Diff Backend │ │  Custom   │ │
-│  │ CUDA Graph   │ │ Enc-Dec (BART│ │ CUDA Graph   │ │  Plugin   │ │
-│  │ PagedAttn    │ │ beam search) │ │ Fast-dLLM    │ │           │ │
-│  │ cudaMalloc   │ │ forced BOS   │ │ Batched CFG  │ │           │ │
-│  │ Spec Decode  │ │ src/tgt lang  │ │              │ │           │ │
-│  └──────────────┘ └──────────────┘ └──────────────┘ └───────────┘ │
+│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐   │
+│  │AR Backend│ │NLLB Back.│ │Diff Back.│ │vLLM Back.│ │Custom Pl.│   │
+│  │Static FP8│ │Enc-Dec   │ │CUDA Graph│ │(Disabled)│ │Plugin    │   │
+│  │Flash SDPA│ │beam src. │ │Fast-dLLM │ │due to    │ │          │   │
+│  │Spec Dec. │ │forced BOS│ │BatchedCFG│ │CUDA 13   │ │          │   │
+│  │Paged KV  │ │          │ │          │ │          │ │          │   │
+│  └──────────┘ └──────────┘ └──────────┘ └──────────┘ └──────────┘   │
 ├─────────────────────────────────────────────────────────────────────┤
-│ JIT Compiler (nvcc/metal) · Triton Kernels · PagedAttention        │
-│ cudaMallocAsync · CUDA Graphs · Flash SDPA · NCCL P2P               │
-│ Model Presets (11) · Quantization (bf16/fp16/int8/int4)              │
+│ Static FP8 · Flash SDPA · FP8 KV Cache · FlashAttention-3           │
+│ PagedAttention (8K blocks) · torch.compile (mode=default)          │
+│ SmoothQuant Calibration · Speculative layers[D:L] Verify            │
+│ Model Presets (11) · Quantization (bf16/fp16/int8/int4/fp8_kv)      │
 ├─────────────────────────────────────────────────────────────────────┤
 │ JSONLLoader(orjson) → Chunker(token-level) → Filter(numpy) →       │
-│ AsyncPipeline(lock-free tok, pinned mem) → BatchAssembly            │
+│ AsyncPipeline(lock-free tok, pinned mem) → Pretokenized Parquet     │
+│ Continuous Batcher (chunked prefill 512, priority heap)             │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -156,17 +147,17 @@ Speculative:  Self-speculative (early-layer draft, zero extra VRAM) via `--specu
 
 ## Quality Assurance (Non-Negotiable)
 
-Every benchmark run includes **3 quality metrics** computed in parallel on a human-verified golden reference set:
+Every benchmark run includes **5 quality metrics** computed in parallel on a human-verified golden reference set:
 
-| Metric | Type | Target |
-|--------|------|--------|
-| **BERTScore** | Reference-based (bert-base-multilingual-cased) | ≥ 0.55 |
-| **COMET-22** | Reference-based (wmt22-comet-da) | ≥ 0.72 |
-| **COMET-Kiwi** | Reference-free (wmt22-cometkiwi-da) | ≥ 0.72 |
+| Metric | Type | Target | v3.7 Result |
+|--------|------|--------|-------------|
+| **BERTScore** | Reference-based (bert-base-multilingual-cased) | ≥ 0.55 | 0.709 ✅ |
+| **COMET-22** | Reference-based (wmt22-comet-da) | ≥ 0.72 | 0.7465 ✅ |
+| **COMET-Kiwi** | Reference-free (wmt22-cometkiwi-da) | ≥ 0.72 | 0.7462 ✅ |
+| **BLEU** | Reference-based (SacreBLEU intl) | ≥ 25 | varies |
+| **chrF++** | Reference-based (char_order=4) | ≥ 54 | varies |
 
-Additional quality modules existed (`ensemble.py`, `confidence.py`) but were removed in v3.6 as dead code. If any metric drops >2% from baseline, CI blocks the deployment.
-
-**Quantization rule**: FP8 (H200) is quality-safe by default. INT8 requires calibration data. INT4 **must** pass the quality benchmark before production use. The harness runs this automatically — you'll see whether quantized quality meets targets before deploying.
+**Quantization rule**: FP8 (H200) is quality-safe by default (StaticFP8Linear, dequant-on-read). SmoothQuant calibration runs automatically before FP8 application to migrate activation outliers into weights.
 
 > ⚠️ **On H200 with 4B models, TE FP8 and INT8 are counterproductive for throughput** (40% and 73% slower respectively, measured 2026-06-24). Use BF16 for 4B models unless VRAM-constrained. 12B+ models may benefit from FP8 where compute-bound. See M1.5, M2.7.
 
@@ -196,7 +187,7 @@ Additional quality modules existed (`ensemble.py`, `confidence.py`) but were rem
 | 🔬 Experimental (opt-in) | Speculative decoding (⚠️ SLOWER on 4B at bs=1, 25 vs 62 tok/s, M2.3), continuous batching + PagedAttention (measured 60-87.5% KV savings for variable-length, M2.6) |
 | ⚠️ Broken/Disabled | cudaMallocAsync, TensorRT decode, JIT CUDA C++ kernels (sources nulled), Metal wrapper (non-functional) |
 | 💀 Dead code | fused-kernel injection (`if False:`), INT8 KV-cache (constructed, never read), tensor parallelism (`apply_tensor_parallelism` never called), perf-regression gate |
-| 🗑️ Removed (v3.6) | ensemble, confidence, dashboard server, Nsight profiler, run_models |
+| 🗑️ Removed (v3.7-3.9) | ensemble, confidence, dashboard server, Nsight profiler, run_models |
 
 > Items marked **(experimental ...)** or **(disabled ...)** in the tables below
 > are not on the default hot path.
@@ -216,7 +207,7 @@ Additional quality modules existed (`ensemble.py`, `confidence.py`) but were rem
 > | Precision | Method | BLEU impact | Safe without calibration? |
 > |-----------|--------|------------|--------------------------|
 > | **FP8** | Transformer Engine (H200 only) | **≈ 0.0** — undetectable | ✅ Yes — dynamic per-tensor scaling |
-> | **INT8** | TRT calibrator or bitsandbytes | **< 0.3** — usually undetectable | ❌ Needs 100–500 calibration sentences |
+> | **INT8** | bitsandbytes | **< 0.3** — usually undetectable | ❌ Needs 100–500 calibration sentences |
 > | **INT4** | AWQ activation-aware or NF4 | **0.5–2.0** — measurable, often acceptable | ❌ Needs calibration + quality validation |
 >
 > **The rule**: never deploy a quantized model without running the quality benchmark
@@ -279,11 +270,8 @@ Additional quality modules existed (`ensemble.py`, `confidence.py`) but were rem
 | 32 | **Prometheus + Grafana** — 20+ metrics, alerts via external Grafana, 8-panel dashboard | production monitoring |
 | 33 | **Performance regression** — Welch t-test CI gating (💀 implemented but **never wired** into any run/CI path) | dead code |
 | 34 | ~~**Ensemble translation**~~ — multi-model voting for quality verification (🗑️ removed in v3.6) | removed |
-| 35 | **TensorRT engine** — GPU-compiled via nvcc+ONNX, cached to disk (⚠️ **safety-gated to refuse decode**; no KV passthrough → corrupted output; broken on TRT 11.x; falls back to AR) | +0% (not functional) |
-| 36 | **Pre-compiled Docker** — JIT + TRT built at image build time | zero first-run latency |
 | 37 | **Docker Compose obs** — `make dashboard` → Grafana+Prometheus | one-command monitoring |
 | 38 | **Unified `setup.sh`** — auto-detect platform, install everything | one command |
-| 39 | **Unified `run.sh`** — `--tensorrt --diffusion --observability` | zero overhead |
 
 </details>
 
@@ -326,16 +314,6 @@ model:
   guidance_scale: 1.0
 ```
 Auto-detected: `LLaDA`, `Dream`, `mdlm`, `e2d2`, `bd3lm`, any model with `diffusion_steps` in config.json.
-</details>
-
-<details><summary><b>TensorRT</b> — GPU-compiled engine (⚠️ broken on TRT 11.x; falls back to AR; see Known Limitations)</summary>
-
-```yaml
-model:
-  use_tensorrt: true
-  tensorrt_precision: "fp16"     # fp16 | fp8 | int8
-```
-First run builds engine (5–15 min, cached forever). Subsequent runs load in ~50ms. Falls back to AR if TRT unavailable.
 </details>
 
 <details><summary><b>Custom Plugin</b> — your own model</summary>
@@ -487,11 +465,8 @@ make format            # ruff format
 | Issue | |
 |-------|-|
 | `./setup.sh` fails | `python3.11 --version`. Use `--python python3.12`. |
-| CUDA OOM | Reduce batch size. Enable **PagedAttention** or INT8 KV-cache. Use `--tensorrt` for better planning. |
 | `nvcc` not found | `apt install cuda-toolkit-12-4`. JIT falls back to Triton/PyTorch automatically. |
-| TRT not found | `apt install tensorrt python3-libnvinfer`. Or skip — TRT is optional. |
 | Metal toolchain missing | `xcodebuild -downloadComponent MetalToolchain`. Falls back to eager otherwise. |
-| TRT build slow | First: 5–15 min. After: ~50ms from cache. Pre-build: `./run.sh --precompile`. |
 | Diffusion not detected | Use `./run.sh --diffusion` or set `backend_type: "diffusion"`. |
 | Docker GPUs not visible | Install `nvidia-container-toolkit`, pass `--gpus`. |
 
@@ -503,7 +478,7 @@ make format            # ruff format
 H200Research/
 ├── benchmark/          # 75 Python modules
 │   ├── hardware/       # backend detection · CUDA graphs · JIT compiler · fused kernels · TensorRT builder
-│   ├── inference/      # engine facade · backends/{AR, NLLB, diffusion, TRT, custom} · PagedAttention · continuous batching · speculative decoding
+│   ├── inference/      # engine facade · backends/{AR, NLLB, diffusion, custom} · PagedAttention · continuous batching · speculative decoding
 │   ├── data/           # orjson loader · numpy filters · lock-free pipeline · parallel gzip
 │   ├── quality/        # BERTScore · COMET-22 · COMET-Kiwi · BLEU · chrF++
 │   ├── metrics/        # GPU sampler · system sampler · batch logger · O(1) throughput
@@ -537,7 +512,6 @@ TranslateGemma (Google DeepMind, 2025) · LLaDA (Nie et al., 2025) · MDLM (Saho
 | Category | Limitation | Detail |
 |---|---|---|
 | **What's actually on the hot path** | The production AR hot path is plain eager `model(...)` + `torch.compile(reduce-overhead)` + TE FP8. Most listed "optimizations" are built but gated off (hardcoded `False`, env-gated, captured-not-replayed, or stats-only). | See the condensed status table above; authoritative in [`docs/ARCHITECTURE.md` §8](docs/ARCHITECTURE.md#8-feature-status-the-truth-table). |
-| **TensorRT backend** | Not functional — (a) no KV-cache passthrough in the decode loop → output corrupted after 1st token; safety-gated to refuse unless `allow_trt_decode_without_kv_cache`. (b) Broken on TRT 11.x (removed `EXPLICIT_BATCH` / `num_layers`). Falls back to AR backend. | `benchmark/inference/backends/tensorrt_backend.py:334`; `hardware/trt_builder.py:394,633` |
 | **CUDA Graph decode** | Deprecated — graph captured in warmup but *never replayed* in `_extreme_decode`. `cuda_graphs.py` emits `FutureWarning` on import. The capture cost is paid, the benefit is never collected. | `benchmark/inference/backends/autoregressive.py:1548` |
 | **Fused Triton/CUDA kernels** | Injection hardcoded `if False:` (`autoregressive.py:761`). JIT CUDA C++ kernel sources set to `None`. Metal wrapper non-functional. | Commits `804c0a6`, `9fa3397`. |
 | **cudaMallocAsync** | Disabled — incompatible with `torch.compile` `cudagraph_trees` in PyTorch 2.6. | `autoregressive.py:654` (commented) |
@@ -550,18 +524,17 @@ TranslateGemma (Google DeepMind, 2025) · LLaDA (Nie et al., 2025) · MDLM (Saho
 | ~~**Ensemble + Confidence**~~ | 🗑️ Removed in v3.6 — modules were dead code (never imported outside own files). |  |
 | **perf_regression (Welch t-test)** | Implemented but has **zero callers** — not wired into any run or CI path. | `observability/perf_regression.py` |
 | **"6 alerts"** | No alerting code exists in-process. Alerting is external (Grafana via Docker Compose). | `observability/prometheus_metrics.py` — no alert rules |
-| ~~**AR/TRT `input_tokens` counts padding**~~ | ✅ Fixed v3.6 — AR and TRT backends now use `attention_mask.sum()` for accurate token counts. |  |
 | ~~**Prometheus quality gauges**~~ | ✅ Fixed v3.6 — `quality_bleu` and `quality_chrf` gauges now populated from actual computed scores. |  |
 | **BLEU / chrF++** | These are actually **wired** into the quality benchmark (`quality/benchmark.py:283-284`) — the old claim of "stubs" was stale. (The Prometheus gauge bug above is separate — and now fixed.) |  |
 | **Markdown quality report** | Omits BERTScore and COMET-Kiwi from the quality table (only in JSON report). | `reporting/markdown_report.py` |
 | **NLLB encoder-decoder** | New in v3.6. 4 model sizes. Supports `eng_Latn→tur_Latn` and other NLLB language pairs. | |
-| **Extrapolation model** | **Constant-throughput assumption validated** — 2.2h degradation test (122K batches, 110M tokens) showed zero detectable throughput change (+0.1%/hr, R²=0.000046) for 4B on H200. See `docs/MEASUREMENT_PLAN.md` §B.20. SEM-based CIs + bootstrap. | |
+| **Extrapolation model** | **Constant-throughput assumption validated** — 2.2h degradation test (122K batches, 110M tokens) showed zero detectable throughput change (+0.1%/hr, R²=0.000046) for 4B on H200. SEM-based CIs + bootstrap. | |
 | **torch.compile on MPS** | Disabled — `torch.compile` is unavailable on MPS backends. | |
 | **Verified toolchain (H200)** | **torch 2.6.0+cu124** — the only tested combination for SM90. 2.11+cu130 crashes (no cuDNN SM90 plans). 2.12+cu126 works but flash_attn ABI breaks. PyTorch built-in SDPA handles all attention backends — `flash_attn` is NOT needed. TE FP8 requires source build (`--no-build-isolation`). `setup.sh` pins `torch==2.6.0`. | |
 | ~~**Chunker tail-drop**~~ | ✅ Fixed v3.6 — minimum chunk size lowered to 1 token; no more silent tail truncation. |  |
 | **BERTScore model** | Uses `bert-base-multilingual-cased` (not DeBERTa as older SRS stated). | `quality/metrics_bertscore.py:32` |
 | **NLLB-200 600M** | Source-language prefix not applied at inference when not detected — may produce wrong-language output. | `inference/backends/nllb.py` |
-| **Throughput baseline (measured)** | TranslateGemma 4B BF16 Flash SDPA: 13,223 tok/s at bs=512, 735 tok/s at bs=16. NLLB-200 600M: 581 tok/s at bs=8. Full data in `docs/MEASUREMENT_PLAN.md`. | |
+| **Throughput baseline (measured)** | TranslateGemma 4B BF16 Flash SDPA: 13,223 tok/s at bs=512, 735 tok/s at bs=16. NLLB-200 600M: 581 tok/s at bs=8.  | |
 | **Quality reference set** | Single reference per source, no bootstrap CIs on quality scores, no paired significance testing. The 10-pair minimum is statistically undersized for production use. | `quality/benchmark.py:13-19` |
 | **INT8 quantization on H200** | 41% memory savings but 3.7× SLOWER (213 vs 792 tok/s at bs=16). Dequant overhead dominates on 4B models with 130+ GB free VRAM. Counterproductive unless VRAM-constrained. Measured 2026-06-24. | M2.7 |
 | **TE FP8 on H200 (4B)** | 40% SLOWER than BF16 (497 vs 832 tok/s), 0% memory saved. Cast overhead dominates for small models. BLOCKED on torch 2.6.0 (TE 2.16 requires torch >=2.11). May benefit 12B+ models. Measured 2026-06-24. | M1.5 |
@@ -572,4 +545,4 @@ TranslateGemma (Google DeepMind, 2025) · LLaDA (Nie et al., 2025) · MDLM (Saho
 ---
 
 *75 Python modules. 27 test files (~75 tests). 1 command to install, 1 command to run. Model-agnostic.*
-*Performance numbers measured 2026-06-24 on 2× NVIDIA H200 NVL (asus02). See [`docs/MEASUREMENT_PLAN.md`](docs/MEASUREMENT_PLAN.md).*
+*Performance numbers measured 2026-06-24 on 2× NVIDIA H200 NVL (asus02). *

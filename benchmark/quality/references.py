@@ -11,10 +11,44 @@ MIN_REFERENCE_PAIRS = 10
 
 
 class ReferenceLoader:
+    """Load and validate golden reference translation pairs from a JSON-lines file.
+
+    Reads a JSON-lines file where each record contains a source text and a
+    reference translation. Attempts to auto-detect field names ("source_text" /
+    "reference_translation", "src" / "ref", "en" / "tr"). Rejects pairs that
+    fail minimum-quality validation. Raises ValueError if zero valid pairs are
+    found; emits a warning if fewer than MIN_REFERENCE_PAIRS (10) are loaded.
+    """
+
     def __init__(self, reference_path: str | Path):
+        """Initialize the loader with a path to a JSON-lines reference file.
+
+        Args:
+            reference_path: Path (string or pathlib.Path) to the JSON-lines file
+                containing golden reference pairs.
+        """
         self.reference_path = Path(reference_path)
 
     def load(self) -> tuple[list[str], list[str]]:
+        """Load and validate reference pairs from the JSON-lines file.
+
+        Iterates over each line in the file, parses JSON, auto-detects source and
+        reference fields, validates each pair, and collects the valid ones.
+
+        Returns:
+            A tuple of (sources, references) where both are list[str] of equal
+            length. Each element at index i in sources corresponds to the
+            reference at index i in references.
+
+        Raises:
+            FileNotFoundError: If the reference file does not exist.
+            ValueError: If no valid (source, reference) pairs are found in the
+                file.
+
+        Side effects:
+            Logs the number of loaded pairs at INFO level.
+            Logs a WARNING if fewer than MIN_REFERENCE_PAIRS (10) are loaded.
+        """
         if not self.reference_path.exists():
             raise FileNotFoundError(f"Reference file not found: {self.reference_path}")
         sources = []

@@ -1,10 +1,10 @@
 backend: cpu
 data:
   input_paths:
-  - /Users/baydogan/Documents/ComputerScience/Projects/H200Research/tests/fixtures/sample_input.jsonl
-  output_dir: /Users/baydogan/Documents/ComputerScience/Projects/H200Research/tests/fixtures/output
+  - tests/fixtures/sample_input.jsonl
+  output_dir: tests/fixtures/output
   prefetch_workers: 1
-  reference_set_path: /Users/baydogan/Documents/ComputerScience/Projects/H200Research/tests/fixtures/golden_en_tr.jsonl
+  reference_set_path: tests/fixtures/golden_en_tr.jsonl
   shuffle: false
 model:
   dtype: float32

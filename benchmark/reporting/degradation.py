@@ -1,7 +1,5 @@
 """Conservative degradation-aware extrapolation for H200 TR benchmark.
 
-Addresses Flaw #7 (Extrapolation Reliability Gap) from docs/ARCHITECTURAL_FLAWS.md.
-
 The existing ExtrapolationModel assumes constant throughput, but long runs
 experience thermal throttling and memory fragmentation.  This module adds:
 
@@ -119,6 +117,24 @@ class DegradationModel:
     """
 
     def __init__(self, tps_samples: list[float], timestamps: list[float]) -> None:
+        """Initialize degradation model from per-batch TPS time-series data.
+
+        Parameters
+        ----------
+        tps_samples : list[float]
+            Per-batch tokens-per-second values, in chronological order.
+            Each element is the TPS measured for a single batch.
+        timestamps : list[float]
+            Seconds elapsed since the start of the run for each TPS sample.
+            Must have the same length as *tps_samples* and be monotonically
+            non-decreasing.
+
+        Raises
+        ------
+        ValueError
+            If *tps_samples* and *timestamps* have different lengths, or if
+            fewer than 2 samples are provided.
+        """
         if len(tps_samples) != len(timestamps):
             raise ValueError(
                 f"tps_samples and timestamps must have the same length; "
@@ -311,6 +327,21 @@ class ExtrapolationV2:
     """
 
     def __init__(self, base_model) -> None:
+        """Initialize the degradation-aware extrapolation wrapper.
+
+        Parameters
+        ----------
+        base_model : ExtrapolationModel
+            An already-constructed instance from
+            ``benchmark.reporting.extrapolation``.  The wrapper delegates all
+            core statistics computation to this model, only adjusting the TPS
+            point estimate when degradation is detected.
+
+        Raises
+        ------
+        TypeError
+            If *base_model* is not an instance of ``ExtrapolationModel``.
+        """
         # Lazy import to avoid circular dependency at module level.
         from benchmark.reporting.extrapolation import ExtrapolationModel as _Base
 

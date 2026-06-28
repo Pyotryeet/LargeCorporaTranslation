@@ -22,3 +22,6 @@ nvidia-ml-py>=13.0
 # Flash + Mem-Efficient + Math backends automatically on Hopper (SM 9.0+).
 # Uncomment only if you need flash_attn_with_kvcache explicitly.
 # flash-attn>=2.6.0
+
+# FlashAttention-3 for Hopper (Method 5)
+flash-attn-3>=3.0.0

@@ -1,4 +1,10 @@
-"""SacreBLEU wrapper for reproducible BLEU scoring."""
+"""SacreBLEU wrapper for reproducible BLEU scoring.
+
+Provides ``compute_bleu()``, a thin wrapper around ``sacrebleu.corpus_bleu``
+that handles version-dependent API differences (sacrebleu 2.x vs 3.x tokenize
+parameter), normalizes references to the expected list-of-lists shape, guards
+against empty inputs, and returns a dict with score, signature, and tokenizer.
+"""
 
 import logging
 import sacrebleu
@@ -24,6 +30,36 @@ except (AttributeError, ValueError, IndexError) as e:
 
 
 def compute_bleu(hypotheses: list[str], references: list[list[str]], tokenize: str = SACREBLEU_TOKENIZER) -> dict:
+    """Compute sacreBLEU score for hypotheses against references.
+
+    Args:
+        hypotheses: List of candidate translation strings.
+        references: List of reference translations. Each element may be a
+            single string or a list of strings (multi-reference).
+        tokenize: Tokenization strategy forwarded to sacrebleu. Defaults to
+            the project-wide ``SACREBLEU_TOKENIZER`` constant. Empty string
+            or ``"none"`` is mapped to ``None`` on sacrebleu >= 3.
+
+    Returns:
+        dict with keys:
+            - ``bleu`` (float): BLEU score rounded to 1 decimal.
+            - ``score`` (float): Same value, kept for backward compatibility.
+            - ``signature`` (str): sacrebleu signature string describing the
+              computation details.
+            - ``tokenizer`` (str): The tokenizer name used.
+
+        Returns ``{"bleu": 0.0, "score": 0.0}`` (without signature or
+        tokenizer keys) when either input list is empty.
+
+    Raises:
+        Nothing explicitly; sacrebleu exceptions propagate as-is (e.g.
+        ``EOFError`` on mismatched hypothesis/reference counts in certain
+        versions).
+
+    Side effects:
+        Logs a warning at WARNING level for empty inputs.
+        Logs the computed score at INFO level.
+    """
     if not hypotheses or not references:
         logger.warning("Empty hypotheses or references for BLEU")
         return {"bleu": 0.0, "score": 0.0}

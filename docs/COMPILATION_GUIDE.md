@@ -1,10 +1,9 @@
-# Compilation & Deployment Guide — v3.6
+# Compilation & Deployment Guide — v3.7
 
 **One command to install, one command to run. Every platform. Every backend.**
 
 > ⚠️ **Some feature claims in this guide are aspirational.** The JIT CUDA kernels
-> are disabled (sources nulled), the TensorRT backend is safety-gated to refuse
-> decode and broken on TRT 11.x, and the Metal JIT kernel wrapper is
+> are all permanently deleted in v3.7. The remaining optimizations are
 > non-functional. See [`ARCHITECTURE.md` §8 Feature Status`](ARCHITECTURE.md#8-feature-status-the-truth-table)
 > for the authoritative wired-vs-gated reality.
 
@@ -18,8 +17,6 @@
 4. [Make Targets](#4-make-targets)
 5. [Docker (Pre-Compiled Images)](#5-docker-pre-compiled-images)
 6. [Docker Compose Observability](#6-docker-compose-observability)
-7. [JIT Kernel Compilation](#7-jit-kernel-compilation)
-8. [TensorRT Engine Build](#8-tensorrt-engine-build)
 9. [Model Selection Guide](#9-model-selection-guide)
 10. [Performance Tuning](#10-performance-tuning)
 11. [Multi-Node Cluster](#11-multi-node-cluster)
@@ -46,7 +43,7 @@ git clone <repo> && cd H200Research
 
 ```bash
 ./setup.sh                    # Full install, auto-detect platform
-./setup.sh --quick            # Dev setup: skip TRT, skip model download
+./setup.sh --quick            # Dev setup: skip model download
 ./setup.sh --minimal          # Bare minimum: Python + PyTorch + shared deps only
 ./setup.sh --cuda             # Force CUDA path (Linux only)
 ./setup.sh --cpu              # Force CPU-only
@@ -75,7 +72,6 @@ Step 4: Install dependencies
   Platform PyTorch: CUDA wheels (cu124) / MPS / CPU
   Dev: pytest, ruff, black
   CUDA extras: transformer-engine, pynvml, flash-attn, triton
-  TensorRT (full profile, CUDA only): tensorrt, onnx, onnxruntime
   MPS extras (full profile, macOS): mlx, mlx-lm
 
 Step 5: Post-install compatibility check (CUDA only)
@@ -84,16 +80,11 @@ Step 5: Post-install compatibility check (CUDA only)
   Runs an SDPA smoke test on GPU.  See docs/H200_SETUP.md for details.
 
 Step 6: Verify installation
-  Runs `import torch`, `import triton`, `import tensorrt` checks.
+  Runs `import torch`, `import triton` checks.
   Runs 75 unit tests.
 
 Step 7: HuggingFace login
   Auto-detects HF_TOKEN env var or cached token.
-
-Step 8: Pre-compile JIT kernels (CUDA only)
-  ⚠️ Currently no-op — both CUDA kernel sources are disabled (set to `None`).
-  The precompile step runs but produces 0 kernels. Metal RMSNorm kernel compiles
-  but the wrapper is non-functional.
 
 > 💡 **H200 / SM90 — verified toolchain (June 2026)**
 >
@@ -118,8 +109,8 @@ Step 8: Pre-compile JIT kernels (CUDA only)
 
 | Profile | Flag | What Gets Installed |
 |---------|------|-------------------|
-| **full** (default) | `./setup.sh` | Everything: PyTorch, CUDA/MPS deps, TRT, Triton, dev tools |
-| **quick** | `./setup.sh --quick` | PyTorch, core deps, dev tools. Skip TRT, skip model DL. |
+| **full** (default) | `./setup.sh` | Everything: PyTorch, CUDA/MPS deps, Triton, dev tools |
+| **quick** | `./setup.sh --quick` | PyTorch, core deps, dev tools. Skip model DL. |
 | **minimal** | `./setup.sh --minimal` | Python + PyTorch + shared deps only. No tests, no extras. |
 
 ### Transformer Engine FP8 (CUDA only) — CURRENTLY BROKEN ON PIP VENVS
@@ -190,7 +181,7 @@ Auto-invalidation on model update, tokenizer change, or input data change.
 ./run.sh                         # Full benchmark (auto-detect platform)
 ./run.sh --quick                 # 5-minute evaluation
 ./run.sh --dry-run               # 60-second smoke test
-./run.sh --precompile            # Pre-compile JIT + TRT, then exit
+./run.sh --pretokenize          # Pre-tokenize data, then exit
 ./run.sh --warmup-only           # Load + warmup, then exit
 ./run.sh --benchmark-only        # Quality evaluation only
 ./run.sh --translate-only        # Translation only (skip quality)
@@ -199,7 +190,6 @@ Auto-invalidation on model update, tokenizer change, or input data change.
 ./run.sh --nllb                  # NLLB-200 encoder-decoder (EN→TR, 600M–54B)
 ./run.sh --nllb --model ministral-3b-bf16  # NLLB with custom model
 ./run.sh --diffusion             # Diffusion model (LLaDA 8B)
-./run.sh --tensorrt              # TensorRT-accelerated (CUDA only, 20-50% more)
 ./run.sh --speculative           # Self-speculative decoding (zero extra VRAM)
 
 # ── Model ──
@@ -218,11 +208,14 @@ Auto-invalidation on model update, tokenizer change, or input data change.
 ./run.sh --nllb-src-lang eng_Latn  # NLLB source language code
 ./run.sh --nllb-tgt-lang tur_Latn  # NLLB target language code
 
+# ── New in v3.8 (Advanced Optimizations) ──
+./run.sh --use-flash-attention   # Enable Hopper-optimized FlashAttention-3 (Method 5)
+./run.sh --vllm                  # Run using vLLM engine backend (⚠️ Disabled on CUDA 12.x hosts due to CUDA 13 wheels)
+
 # ── Options ──
 ./run.sh --duration 3600         # Run for 1 hour
 ./run.sh --batch-size 128        # Force batch size
 ./run.sh --observability         # Enable Prometheus dashboard on :9090
-./run.sh --force-recompile       # Force JIT + TRT recompilation
 ./run.sh --resume output/dir/    # Resume from checkpoint
 ./run.sh --data "*.jsonl.gz"     # Custom input glob
 ./run.sh --output /path/to/out   # Output directory
@@ -236,7 +229,6 @@ Auto-invalidation on model update, tokenizer change, or input data change.
 
 # ── Combined ──
 ./run.sh --nllb --quick          # Fast NLLB evaluation
-./run.sh --tensorrt --quick      # Fast TRT evaluation
 ./run.sh --diffusion --observability  # Diffusion with live dashboard
 ./run.sh --speculative --quick   # Test speculative decoding
 ./run.sh --model gemma4-e4b-qat-ct --quantization int4  # QAT 4B, 4-bit
@@ -249,8 +241,8 @@ The script detects your platform and sets sensible defaults:
 
 | Platform | Default Model | Duration | Backend |
 |----------|--------------|----------|---------|
-| macOS MPS | TranslateGemma 4B (BF16) | 3600s | AR (TRT not available) |
-| Linux CUDA | TranslateGemma 12B (FP8) | 7200s | AR (TRT optional) |
+| macOS MPS | TranslateGemma 4B (BF16) | 3600s | AR |
+| Linux CUDA | TranslateGemma 12B (FP8) | 7200s | AR |
 | CPU | TranslateGemma 4B (FP32) | 300s | AR |
 
 All defaults can be overridden via flags.
@@ -259,7 +251,7 @@ All defaults can be overridden via flags.
 
 ```
 1. Detect platform → set defaults
-2. Apply user overrides (--model, --duration, --tensorrt, etc.)
+2. Apply user overrides (--model, --duration, --speculative, etc.)
 3. Write runtime config YAML to output/ dir
 4. Print pre-flight summary (GPU, model, backend)
 5. Activate venv (if exists)
@@ -279,14 +271,13 @@ make setup-quick      # Dev setup
 make run              # Full benchmark
 make run-quick        # 5-minute eval
 make run-dry          # Smoke test
-make run-tensorrt     # TensorRT
 make run-diffusion    # Diffusion model
 
 make test             # ~75 unit tests in 24 files
 make lint             # Ruff linter
 make format           # Ruff + Black formatter
 
-make precompile       # Pre-compile JIT + TRT
+make pretokenize      # Pre-tokenize input data
 make dashboard        # Launch Prometheus + Grafana stack
 
 make docker-build     # Build Docker image
@@ -303,10 +294,9 @@ make clean-all        # Remove build artifacts + all caches + venv
 ### Build
 
 ```bash
-# Standard — JIT kernels pre-compiled inside the image.
-docker build -t tr-benchmark:3.6 .
+# Standard — optimized image with all dependencies.
+docker build -t tr-benchmark:3.9 .
 
-# With TensorRT — TRT engines also pre-built.
 docker build -t tr-benchmark:3.6-trt --build-arg WITH_TENSORRT=1 .
 ```
 
@@ -361,42 +351,13 @@ The Grafana dashboard auto-loads with throughput, GPU utilization, temperature, 
 
 ---
 
-## 7. JIT Kernel Compilation
+## 7. JIT Kernel Compilation — 🗑 REMOVED v3.7
 
-### Automated Path
-
-```bash
-# Pre-compile all kernels (runs once, cached forever).
-./run.sh --precompile
-
-# Force recompilation.
-./run.sh --force-recompile --precompile
-```
-
-### Manual Path
-
-```bash
-# Check what's compiled.
-python -c "from benchmark.hardware.jit_compiler import get_jit_compiler; print(get_jit_compiler().cache_stats())"
-
-# Clear all compiled kernels.
-rm -rf ~/.cache/tr_benchmark/kernels/
-
-# Rebuild.
-TR_BENCHMARK_FORCE_RECOMPILE=1 python -m benchmark --config config.yaml --warmup-only
-```
-
-### What Gets Compiled
-
-| Kernel | Compiler | Speedup vs Eager |
-|--------|----------|-----------------|
-| Fused QKV+RoPE | `nvcc` (CUDA C++) | ⚠️ disabled — source set to `None` (architecturally broken) |
-| Fused SwiGLU MLP | `nvcc` (CUDA C++) | ⚠️ disabled — source set to `None` (architecturally broken) |
-| Fused RMSNorm+Residual | `xcrun metal` (MSL) | ⚠️ non-functional — wrapper returns inputs unchanged |
-
-If `nvcc` or `xcrun metal` are not installed, compilation is silently skipped and the kernels fall back to Triton (CUDA) or PyTorch eager (MPS/CPU).
-
-> 💡 **Fused Triton kernels re-enableable:** With `torch.compile` verified working on
+The entire JIT compilation subsystem was permanently deleted in commit `926855e`:
+`benchmark/hardware/jit_compiler.py` (678 lines). Both CUDA kernel sources were
+set to `None` (architecturally broken), the Metal RMSNorm wrapper returned inputs
+unchanged, and the sm90a detection was buggy. `torch.compile` with inductor handles
+kernel fusion internally — the manual JIT path was redundant.
 > PyTorch 2.6.0+cu124 (2026-06-24), the Triton fused kernels (RMSNorm+residual,
 > SwiGLU gate×up) can potentially be re-enabled. The `if False:` guard at
 > `autoregressive.py:761` that disabled them (after commit `804c0a6`) may no
@@ -406,86 +367,16 @@ If `nvcc` or `xcrun metal` are not installed, compilation is silently skipped an
 
 ---
 
-## 8. TensorRT Engine Build (⚠️ not functional — safety-gated; broken on TRT 11.x; falls back to AR)
+## 8. TensorRT — 🗑 REMOVED v3.7
 
-### Quick Start
+The TensorRT backend and builder were permanently deleted:
+`benchmark/inference/backends/tensorrt_backend.py` (459 lines) and
+`benchmark/hardware/trt_builder.py` (727 lines). The TRT decode loop had
+no KV-cache passthrough (each step was isolated → corrupted output after
+token 1), was safety-gated to raise `RuntimeError` by default, and broke
+on TRT 10+ (removed `EXPLICIT_BATCH` and `ICudaEngine.num_layers`).
+The `--tensorrt` flag references were removed from all docs and configs.
 
-```bash
-# Enable TensorRT — engine auto-built on first run, cached forever.
-./run.sh --tensorrt --quick
-
-# First run output:
-#   [TRT] cache MISS — building engine (precision=fp16) ...
-#   [TRT] ONNX exported: 2478 nodes
-#   [TRT] engine built in 485.2s — abc123.engine (384.5 MB)
-#
-# Second run output:
-#   [TRT] cache HIT — abc123.engine (384.5 MB)
-```
-
-### Precision Modes
-
-> ⚠️ **The TensorRT backend is not functional for correct translation.** The
-> decode loop has no KV-cache passthrough, so output after the first token is
-> corrupted. It is safety-gated to raise `RuntimeError` unless
-> `allow_trt_decode_without_kv_cache` is explicitly set. Additionally, TRT 11.x
-> removed `EXPLICIT_BATCH` and `ICudaEngine.num_layers`, which the builder still
-> uses (`trt_builder.py:394,633`). In practice, the TRT backend almost always
-> falls back to the AutoregressiveBackend. See
-> [`ARCHITECTURE.md` §8 #14](ARCHITECTURE.md#8-feature-status-the-truth-table).
-
-```bash
-# FP16 — fast, universal, no calibration needed. Quality identical to BF16.
-./run.sh --tensorrt  # defaults to fp16
-
-# FP8 — Hopper only (H200). Same quality as FP16 (dynamic scaling).
-TRT_PRECISION=fp8 ./run.sh --tensorrt
-
-# INT8 — 2× smaller model, faster, but MUST validate quality after building.
-#       Requires 100-500 representative EN sentences for calibration.
-#       Expect < 0.3 BLEU impact with good calibration data.
-./run.sh --tensorrt --data calibration_en.jsonl
-# After building: ALWAYS run quality check before deploying.
-./run.sh --benchmark-only
-# If BLEU/chrF++/COMET meet targets → safe to use. If not → fall back to FP16.```
-```
-
-### Manual Build
-
-```bash
-python -c "
-from benchmark.hardware.trt_builder import build_engine_if_needed
-from transformers import AutoModelForCausalLM, AutoTokenizer
-
-model = AutoModelForCausalLM.from_pretrained(
-    'google/translategemma-12b-it',
-    torch_dtype=torch.bfloat16, device_map='auto',
-)
-tok = AutoTokenizer.from_pretrained('google/translategemma-12b-it')
-
-engine_path = build_engine_if_needed(
-    'google/translategemma-12b-it', model, tok,
-    max_batch=32, max_input=512, max_output=512,
-    precision='fp16',
-)
-print(f'Engine: {engine_path}')
-"
-```
-
-### Cache
-
-```bash
-# View TRT engine cache.
-ls -lh ~/.cache/tr_benchmark/engines/
-
-# Clear.
-rm -rf ~/.cache/tr_benchmark/engines/
-
-# Force rebuild.
-TR_BENCHMARK_FORCE_RECOMPILE=1 ./run.sh --tensorrt
-```
-
----
 
 ## 9. Model Selection Guide
 
@@ -538,13 +429,7 @@ TR_BENCHMARK_FORCE_RECOMPILE=1 ./run.sh --tensorrt
 ./run.sh --diffusion --quick
 ```
 
-### TensorRT (CUDA Only)
 
-Adds 20-50% on top of AR throughput. Works with any AR model.
-
-```bash
-./run.sh --tensorrt
-```
 
 ### Quality vs Speed Trade-off
 
@@ -609,7 +494,7 @@ nsys profile --trace=cuda,nvtx,osrt,cublas,cudnn \
 ### Measured Throughput Baselines (H200, June 2026)
 
 All measurements on 2× NVIDIA H200 NVL (139.80 GB each), torch 2.6.0+cu124,
-PyTorch built-in SDPA, BF16. Full data in [`MEASUREMENT_PLAN.md`](MEASUREMENT_PLAN.md).
+PyTorch built-in SDPA, BF16. Full data available in the benchmark reference results section above.
 
 | Model | Backend | Batch | tok/s | Notes |
 |---|---|---|---|---|
@@ -640,19 +525,7 @@ After extensive testing (see [`H200_SETUP.md` §Known Issues](H200_SETUP.md)):
 | **torch.compile** | ✅ Works | `mode="reduce-overhead"`. Minimal gain for 4B; more benefit at 12B+. |
 | **bitsandbytes** | ⚠️ Functional | INT8 works but −73% TPS vs BF16 (dequant overhead). Only useful when VRAM-constrained. |
 
-### Regression Monitoring
 
-```python
-from benchmark.observability.perf_regression import PerformanceBaselineManager
-
-mgr = PerformanceBaselineManager("./baselines")
-mgr.save_baseline("h200_fp8_12b", report["metrics"])
-result = mgr.check("h200_fp8_12b", current_metrics)
-if result.is_regression:
-    print(f"REGRESSION: {result.reason}")
-```
-
----
 
 ## 11. Multi-Node Cluster
 

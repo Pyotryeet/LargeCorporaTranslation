@@ -76,6 +76,48 @@ class InferenceEngine:
         backend_type: str = "auto",
         extra: Optional[dict] = None,
     ):
+        """Initialize the inference engine for a specific model.
+
+        Determines the appropriate backend (autoregressive, diffusion, data-parallel, or
+        custom plugin) and instantiates a backend driver. The engine delegates all
+        operations (load, warmup, translate) to that backend.
+
+        Parameters
+        ----------
+        model_path : str
+            Path to the model directory or HuggingFace model ID.
+        tokenizer_path : str
+            Path to the tokenizer directory. Defaults to ``model_path`` if empty.
+        device_info : DeviceInfo
+            Hardware device descriptor (GPU count, backend type, memory, etc.).
+        tp_config : Optional[TensorParallelConfig]
+            Tensor-parallelism configuration. Auto-detected from device count if None.
+        decoding_params : Optional[DecodingParams]
+            Decoding parameters (temperature, max new tokens, top-p, etc.).
+            Defaults to ``DecodingParams()`` if None.
+        use_flash_attention : bool
+            Enable Flash Attention (SDPA) when True. Default True.
+        use_torch_compile : bool
+            Enable ``torch.compile`` for the model when True. Default True.
+        max_input_tokens : int
+            Maximum number of input tokens; input sequences are truncated to this
+            length. Default 512.
+        backend_type : str
+            Explicit backend override. ``"auto"`` (default) uses auto-detection.
+            Other values are passed through to ``BackendConfig.extra``.
+        extra : Optional[dict]
+            Additional keyword arguments forwarded to the backend. Supports
+            ``data_parallel_size`` for Tier 1 TPS acceleration on 2+ GPUs.
+
+        Side Effects
+        ------------
+        - Sets instance attributes for all configuration parameters.
+        - Creates a ``BackendConfig`` and resolves the appropriate
+          ``InferenceBackend`` via ``ModelRegistry``.
+        - Logs the selected backend at INFO level.
+        - If ``data_parallel_size > 1`` and 2+ GPUs are available, wraps the
+          resolved backend in a ``DataParallelBackend``.
+        """
         self.model_path = model_path
         self.tokenizer_path = tokenizer_path or model_path
         self.device_info = device_info
@@ -106,7 +148,18 @@ class InferenceEngine:
 
         # ── Create the appropriate backend ──
         registry = ModelRegistry()
-        self._backend: InferenceBackend = registry.create_backend(backend_config)
+
+        # Tier 1 TPS Acceleration: DataParallelBackend for ≥2 GPUs
+        dps = extra.get("data_parallel_size", 0) if extra else 0
+        if dps > 1 and torch.cuda.is_available() and torch.cuda.device_count() >= 2:
+            from benchmark.inference.backends.data_parallel import DataParallelBackend
+            self._backend = DataParallelBackend(backend_config, num_gpus=dps)
+            logger.info(
+                "InferenceEngine: DATA-PARALLEL mode — %d GPUs, independent model copies",
+                dps,
+            )
+        else:
+            self._backend: InferenceBackend = registry.create_backend(backend_config)
 
         logger.info(
             "InferenceEngine: model=%s, backend=%s, type=%s",
@@ -117,32 +170,73 @@ class InferenceEngine:
 
     @property
     def backend(self) -> InferenceBackend:
-        """The underlying inference backend."""
+        """The underlying inference backend instance.
+
+        Returns
+        -------
+        InferenceBackend
+            The backend created during ``__init__`` (may be wrapped in
+            ``DataParallelBackend`` if data-parallel mode is active).
+        """
         return self._backend
 
     @property
     def model(self) -> Optional[nn.Module]:
-        """Raw model (delegated to backend)."""
+        """Raw PyTorch model, delegated to the backend.
+
+        Returns
+        -------
+        Optional[nn.Module]
+            The loaded model, or None if ``load()`` has not been called yet.
+        """
         return self._backend.model
 
     @property
     def tokenizer(self):
-        """Tokenizer (delegated to backend)."""
+        """Tokenizer, delegated to the backend.
+
+        Returns
+        -------
+        PreTrainedTokenizer or Any
+            The loaded tokenizer, or None if ``load()`` has not been called yet.
+            The concrete type depends on the backend (HuggingFace tokenizer,
+            SentencePiece wrapper, etc.).
+        """
         return self._backend.tokenizer
 
     @property
     def devices(self) -> list[torch.device]:
-        """Compute devices (delegated to backend)."""
+        """Compute devices used by the backend.
+
+        Returns
+        -------
+        list[torch.device]
+            List of torch devices the model resides on (e.g. ``[cuda:0, cuda:1]``).
+        """
         return self._backend.devices
 
     @property
     def model_type(self) -> str:
-        """Model architecture type."""
+        """Model architecture type as a string.
+
+        Returns
+        -------
+        str
+            One of the values defined in ``benchmark.config.constants.ModelType``
+            (e.g. ``"autoregressive"``, ``"diffusion"``, ``"nllb"``).
+        """
         return self._backend.model_type.value
 
     @property
     def precision_config(self):
-        """Precision configuration."""
+        """Precision configuration from the backend, if available.
+
+        Returns
+        -------
+        PrecisionConfig or None
+            The backend's precision configuration object, or None if the backend
+            does not expose one.
+        """
         return self._backend.precision_config if hasattr(self._backend, 'precision_config') else None
 
     @property
@@ -157,6 +251,13 @@ class InferenceEngine:
 
     @_configured_batch_size.setter
     def _configured_batch_size(self, value: int) -> None:
+        """Set the warmup/CUDA-graph batch size on the backing backend.
+
+        Parameters
+        ----------
+        value : int
+            Desired batch size for internal warmup runs and CUDA graph capture.
+        """
         self._backend._configured_batch_size = value
 
     # ── Lifecycle ──────────────────────────────────────────────────────
@@ -220,11 +321,44 @@ class InferenceEngine:
     def encode_source(
         self, input_ids: torch.Tensor, attention_mask: torch.Tensor,
     ) -> torch.Tensor:
-        """Encode source text (delegated to backend)."""
+        """Encode source text into a dense representation via the backend.
+
+        Delegates to the backend's ``encode_source`` method, which typically
+        passes input through the model's encoder (without autoregressive decoding).
+
+        Parameters
+        ----------
+        input_ids : torch.Tensor
+            Tokenised input IDs, shape ``(batch_size, seq_len)``.
+        attention_mask : torch.Tensor
+            Attention mask, shape ``(batch_size, seq_len)``.
+
+        Returns
+        -------
+        torch.Tensor
+            Encoded hidden states from the model's encoder.
+
+        Raises
+        ------
+        NotImplementedError
+            If the active backend does not support separate encode/decode
+            (e.g., some decoder-only autoregressive models).
+        """
         return self._backend.encode_source(input_ids, attention_mask)
 
     def get_backend_info(self) -> dict:
-        """Return backend metadata for reports."""
+        """Return backend metadata for reports and observability.
+
+        Returns
+        -------
+        dict
+            Dictionary with the following keys:
+            - ``backend_display_name`` (str): Human-readable backend name.
+            - ``model_type`` (str): Model architecture type.
+            - ``capabilities`` (list[str]): Names of capabilities the backend
+              declares (Flash Attention, KV cache quantisation, etc.).
+            - ``is_loaded`` (bool): Whether ``load()`` has completed.
+        """
         return {
             "backend_display_name": self._backend.display_name,
             "model_type": self._backend.model_type.value,
@@ -237,4 +371,11 @@ class InferenceEngine:
 
     @property
     def display_name(self) -> str:
+        """Human-readable backend display name.
+
+        Returns
+        -------
+        str
+            The ``display_name`` from the underlying backend.
+        """
         return self._backend.display_name

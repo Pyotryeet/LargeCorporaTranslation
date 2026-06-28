@@ -17,8 +17,11 @@ Override parameters
   seed_override         Override random seed
   resume_dir            Checkpoint directory for resume
   no_torch_compile      Disable torch.compile (useful for debugging)
+  safe_mode             Disable experimental/risky optimizations
+  observability_enabled Enable Prometheus metrics exporter
 
 v2.0: Passes backend info to AsyncPipeline for pinned memory decisions.
+v3.7: Added PagedAttention, Continuous batching, data parallelism support.
 """
 
 import logging
@@ -76,7 +79,20 @@ class BenchmarkHarness:
     # Falls back to 9090 when neither is set.
     @staticmethod
     def _resolve_prometheus_port(config) -> int:
-        port = os.environ.get("PROMETHEUS_PORT")
+        """Resolve the Prometheus exporter port from environment or config.
+
+        Checks environment variables (TR_PROMETHEUS_PORT, then PROMETHEUS_PORT as
+        legacy fallback), then falls back to the config field
+        ``benchmark.runtime.prometheus_port``, and finally to 9090.
+
+        Args:
+            config: The :class:`BenchmarkConfig` instance from which the
+                ``prometheus_port`` field is read as a fallback.
+
+        Returns:
+            int: The resolved port number (default 9090).
+        """
+        port = os.environ.get("TR_PROMETHEUS_PORT") or os.environ.get("PROMETHEUS_PORT")
         if port is not None:
             return int(port)
         return getattr(config.runtime, "prometheus_port", 9090) or 9090
@@ -97,6 +113,34 @@ class BenchmarkHarness:
         safe_mode: bool = False,
         observability_enabled: bool = False,
     ):
+        """Initialise the benchmark harness with configuration and run parameters.
+
+        Loads the YAML config, applies observability settings, then calls
+        :meth:`_setup` to create the run directory and configure logging.
+
+        Args:
+            config_path: Path to the YAML configuration file.
+            run_mode: Operational mode controlling which phases execute.
+                One of ``"full"``, ``"quick"``, ``"dry-run"``, ``"warmup-only"``,
+                ``"benchmark-only"``, ``"translate-only"``, or ``"resume"``.
+            batch_size_override: Force a specific batch size (None = auto-tune).
+            duration_override: Override the target duration in seconds
+                (None = use config default). A value of 0 is treated as invalid.
+            seed_override: Override the random seed (None = use config default).
+            resume_dir: Path to a checkpoint directory for resume mode.
+            no_torch_compile: If True, disable ``torch.compile`` (useful for
+                debugging and for backends that do not support compilation).
+            safe_mode: If True, disable experimental/risky optimizations.
+            observability_enabled: If True, patch the config to enable Prometheus
+                metrics and wire the exporter during the run.
+
+        Side effects:
+            - Loads and validates the YAML config from disk.
+            - Creates the run output directory and configures logging via
+              :meth:`_setup`.
+            - Patches ``self.config`` when ``observability_enabled`` is True.
+        """
+
         from benchmark.config.schema import load_config
 
         self.config = load_config(config_path)
@@ -128,6 +172,17 @@ class BenchmarkHarness:
 
     # ── Setup ────────────────────────────────────────────────────────────
     def _setup(self) -> None:
+        """Create the run output directory and initialise logging.
+
+        Generates a timestamped subdirectory under the configured output path,
+        then configures the logging subsystem to write to that directory.
+
+        Side effects:
+            - Creates ``self.run_dir`` on disk (``mkdir -p``).
+            - Calls ``setup_logging``, which configures the root logger for both
+              console and file output.
+            - Logs the harness version header.
+        """
         ts = datetime.now(timezone.utc).strftime("%Y-%m-%d_%H-%M-%S")
         self.run_dir = Path(self.config.data.output_dir) / ts
         self.run_dir.mkdir(parents=True, exist_ok=True)
@@ -141,7 +196,32 @@ class BenchmarkHarness:
 
     # ── Public entrypoint ────────────────────────────────────────────────
     def run(self) -> dict:
-        """Execute the benchmark according to the configured run mode."""
+        """Execute the benchmark according to the configured run mode.
+
+        Orchestrates the full lifecycle: seed setup, backend detection, preflight
+        checks, model loading, batch-size tuning (or override), warmup, and
+        dispatching to the mode-specific run method.
+
+        Returns:
+            dict: A structured report dictionary containing keys ``config``,
+            ``environment``, ``runtime``, and mode-dependent keys such as
+            ``metrics``, ``quality``, and ``extrapolation``.  The exact shape
+            varies by run mode.
+
+        Side effects:
+            - Calls ``detect_backend`` to auto-detect hardware.
+            - Runs preflight checks (may exit early on fatal issues).
+            - Loads the model and tokenizer into GPU/system memory.
+            - Runs batch-size tuning (unless overridden or MPS-safe).
+            - Dispatches to a mode-specific method that runs the actual
+              benchmark, writes reports, and returns the report dict.
+
+        Raises:
+            Various exceptions may propagate from downstream subsystems:
+            ``torch.cuda.OutOfMemoryError``, ``MemoryError``, ``RuntimeError``
+            for hardware failures, and ``FileNotFoundError`` for missing config
+            or model paths.
+        """
         # Apply overrides before detection
         if self.seed_override is not None:
             self.config = self.config.model_copy(update={
@@ -309,6 +389,7 @@ class BenchmarkHarness:
             device_info.backend == "cuda"
             and self.config.model.use_continuous_batching
             and self.config.model.use_paged_attention
+            and not self.safe_mode
         ):
             from benchmark.inference.continuous_batcher import should_use_continuous_batching
             if should_use_continuous_batching(
@@ -323,7 +404,19 @@ class BenchmarkHarness:
 
     # ── Translation loop ─────────────────────────────────────────────────
     def _resolve_duration(self) -> int:
-        """Determine target duration in seconds from run mode and overrides."""
+        """Determine the target translation loop duration in seconds.
+
+        Priority order: (1) ``duration_override`` constructor argument,
+        (2) run-mode-specific defaults (60 s for dry-run, 300 s for quick),
+        (3) ``config.runtime.target_duration_seconds`` from the YAML config.
+
+        Returns:
+            int: Target duration in seconds (always positive).
+
+        Note:
+            An override of 0 is treated as invalid and triggers a warning; the
+            config default is used instead.
+        """
         if self.duration_override is not None and self.duration_override > 0:
             return self.duration_override
         if self.duration_override is not None:
@@ -337,7 +430,21 @@ class BenchmarkHarness:
     def _run_translation_loop(
         self, batch_size: int, env_snapshot: dict, device_info: DeviceInfo,
     ) -> dict:
-        """Translation loop — full, quick, dry-run, translate-only."""
+        """Run the standard (non-continuous-batching) translation loop.
+
+        Thin wrapper that resolves the target duration, runs warmup, then
+        delegates to :meth:`_run_translation_core`.
+
+        Args:
+            batch_size: The resolved batch size (from tuner, override, or config).
+            env_snapshot: Dict of environment metadata (PyTorch version,
+                Python version, GPU info) from ``get_environment_snapshot``.
+            device_info: Detected :class:`DeviceInfo` for the active backend.
+
+        Returns:
+            dict: The benchmark report dictionary produced by
+            :meth:`_run_translation_core`.
+        """
         target_duration = self._resolve_duration()
         self.engine.warmup(batches=10 if self.run_mode == "dry-run" else 20)
         return self._run_translation_core(
@@ -369,9 +476,50 @@ class BenchmarkHarness:
     ) -> dict:
         """Shared translation core — used by both new runs and resume.
 
-        All the heavy translation-loop logic lives here.  ``_run_translation_loop``
-        and ``_run_resume`` are thin wrappers that compute the initial state
-        and then delegate to this method.
+        Contains all the heavy translation-loop logic: data pipeline setup,
+        double-buffered batch prefetch, model translation, metrics collection,
+        heartbeat logging, checkpointing, OOM recovery, signal handling,
+        quality benchmark (optional), and report generation.
+
+        :meth:`_run_translation_loop` and :meth:`_run_resume` are thin wrappers
+        that compute initial state and then delegate to this method.
+
+        Args:
+            batch_size: Number of sequences per batch.
+            target_duration: Target loop duration in seconds.
+            env_snapshot: Dict of environment metadata (PyTorch version,
+                Python version, GPU info).
+            device_info: Detected :class:`DeviceInfo` for the active backend.
+            batches_completed: Initial batch counter (0 for fresh runs; nonzero
+                for resumes).
+            total_tokens: Initial token counter (0 for fresh runs; nonzero for
+                resumes).
+            resume_path: When resuming, the path to the checkpoint directory;
+                ``None`` for a fresh run.
+            resume_base_batches: Number of batches already completed in the
+                previous session (used for reporting "new" batches).
+            loader_seek_doc_id: When resuming, the document ID to seek the data
+                loader to; 0 for a fresh run.
+            extra_runtime_fields: Additional key-value pairs to merge into the
+                ``runtime`` section of the final report.
+
+        Returns:
+            dict: Full benchmark report with keys ``config``, ``environment``,
+            ``runtime``, ``metrics``, ``quality``, ``extrapolation``, and
+            ``filter_stats``.
+
+        Side effects:
+            - Creates and starts the data pipeline (``AsyncPipeline``).
+            - Initialises metrics, checkpointing, signal handlers, and
+              Prometheus exporter via :meth:`_init_translation_infra`.
+            - Writes JSON and Markdown report files to the run directory.
+            - Checkpoints progress periodically and at the end.
+
+        Raises:
+            Various exceptions from downstream subsystems may propagate; OOM
+            errors (CUDA, CPU, MPS) are caught internally and trigger recovery
+            via :meth:`_handle_oom`.  Non-OOM ``RuntimeError`` exceptions are
+            re-raised.
         """
         resume_tag = " (resumed)" if resume_path else ""
 
@@ -516,7 +664,8 @@ class BenchmarkHarness:
                         batches_completed, batch_size, exc,
                     )
                     oom_aborted = self._handle_oom(
-                        batch, loader, timer, batches_completed, total_tokens,
+                        batch, loader, timer, _prefetch_queue,
+                        batches_completed, total_tokens,
                         batch_size,
                     )
                     if oom_aborted:
@@ -628,6 +777,7 @@ class BenchmarkHarness:
                         comet=quality_results.comet.get('system_score'),
                         bertscore=quality_results.bertscore.get('system_score'),
                         comet_kiwi=quality_results.comet_kiwi.get('system_score'),
+                        xcomet=quality_results.xcomet.get('system_score'),
                     )
             else:
                 logger.info("Skipping quality benchmark — reference file not found: %s", ref_path)
@@ -691,9 +841,37 @@ class BenchmarkHarness:
     def _run_continuous_batching_loop(
         self, batch_size: int, env_snapshot: dict, device_info: DeviceInfo,
     ) -> dict:
-        """CUDA continuous batching: dynamically schedules sequences into
-        the GPU batch, replacing completed sequences with waiting ones at
-        every decode step.  Requires --paged-attention --continuous-batching.
+        """CUDA continuous-batching translation loop.
+
+        Dynamically schedules sequences into the GPU batch, replacing completed
+        sequences with waiting ones at every decode step.  Requires
+        ``--paged-attention`` and ``--continuous-batching`` flags.
+
+        Sets up a PagedAttention KV cache pool and a :class:`ContinuousBatcher`
+        that submits individual sequences from the data pipeline and runs
+        decode steps until the duration budget is exhausted.  Completed sequences
+        are logged as individual metric records.
+
+        Args:
+            batch_size: Maximum number of sequences the batcher may hold.
+            env_snapshot: Dict of environment metadata.
+            device_info: Detected :class:`DeviceInfo` for the CUDA backend.
+
+        Returns:
+            dict: Full benchmark report (same shape as :meth:`_run_translation_core`,
+            but with ``runtime.mode`` set to ``"continuous_batching_<mode>"``
+            and no ``quality`` key).
+
+        Side effects:
+            - Creates a :class:`PagedKVCache` pool on the first GPU.
+            - Creates a :class:`ContinuousBatcher` that manages decode scheduling.
+            - Writes JSON and Markdown reports to the run directory.
+            - Flushes remaining sequences in the finally block.
+
+        Raises:
+            OOM errors (CUDA, CPU, MPS) are caught and trigger an abort
+            (draining running sequences).  Non-OOM ``RuntimeError`` exceptions
+            are re-raised.
         """
         from benchmark.inference.continuous_batcher import ContinuousBatcher
         from benchmark.inference.paged_attention import PagedKVCache
@@ -984,6 +1162,25 @@ class BenchmarkHarness:
 
     # ── Benchmark-only ───────────────────────────────────────────────────
     def _run_quality_only(self, env_snapshot: dict) -> dict:
+        """Run only the quality benchmark, skipping translation entirely.
+
+        Used when ``run_mode`` is ``"benchmark-only"``.  Evaluates the loaded
+        model against the reference set and writes a JSON report.
+
+        Args:
+            env_snapshot: Dict of environment metadata to include in the report.
+
+        Returns:
+            dict: Report dictionary with keys ``config``, ``environment``,
+            ``quality``, and ``runtime``.
+
+        Side effects:
+            - Runs :class:`QualityBenchmark` against the reference set.
+            - Writes a JSON report file to the run directory.
+            - Does NOT call :meth:`_init_translation_infra` (no metrics,
+              checkpointing, or signal handling needed).
+        """
+
         logger.info(
             "Benchmark-only mode: running quality evaluation (no translation)"
         )
@@ -1112,16 +1309,46 @@ class BenchmarkHarness:
     _OOM_WARMUP_BATCHES = 3
 
     def _handle_oom(
-        self, batch, loader, timer,
+        self, batch, loader, timer, prefetch_queue,
         batches_completed: int, total_tokens: int,
         batch_size: int,
     ) -> bool:
         """Handle OOM across all backends (CUDA, MPS, CPU).
 
-        Flushes checkpoint with position tracking, cleans up the failed
-        batch from GPU/system memory, halves the batch size, and re-warms.
-        Returns True if the run should abort (batch size cannot be reduced
-        further).
+        Flushes a checkpoint with position tracking, cleans up the failed batch
+        from GPU/system memory, halves the batch size, and re-warms the model.
+
+        Args:
+            batch: The :class:`Batch` that triggered the OOM.  This reference is
+                deleted and garbage-collected inside this method.
+            loader: The :class:`JSONLLoader` instance, used to capture the
+                current data position for the emergency checkpoint.
+            timer: The active :class:`PrecisionTimer` for the run.
+            prefetch_queue: The ``queue.Queue`` used for double-buffered
+                prefetch; stale entries (assembled at the old batch size) are
+                drained to avoid repeat OOMs.
+            batches_completed: Number of batches completed so far.
+            total_tokens: Cumulative token count so far.
+            batch_size: The current (pre-OOM) batch size.
+
+        Returns:
+            bool: ``True`` if the run should abort (batch size reached its
+            minimum and OOM persists); ``False`` if recovery succeeded and the
+            loop can continue with the reduced batch size.
+
+        Side effects:
+            - Writes an emergency checkpoint.
+            - Deletes the failed batch reference and calls ``gc.collect()`` plus
+              ``torch.cuda.empty_cache()`` / ``torch.mps.empty_cache()``.
+            - Drains all stale entries from the prefetch queue.
+            - Updates ``self.engine._configured_batch_size`` and calls
+              ``self.pipeline.update_batch_size(new_batch_size)``.
+            - Re-warms the model with the reduced batch size.
+            - Records an error to Prometheus if enabled.
+
+        Raises:
+            If the recovery warmup itself OOMs, the error is caught and
+            ``True`` is returned rather than propagating the exception.
         """
         if self._prometheus is not None:
             self._prometheus.record_error()
@@ -1146,25 +1373,60 @@ class BenchmarkHarness:
         # Halve the batch size, clamped to minimum.
         new_batch_size = max(batch_size // 2, self._OOM_BATCH_SIZE_MIN)
         if new_batch_size == batch_size:
-            logger.critical(
-                "OOM persists at minimum batch size %d — aborting.",
-                self._OOM_BATCH_SIZE_MIN,
-            )
+            if batch_size == 1:
+                logger.critical(
+                    "OOM at batch size 1 — model is too large for available GPU "
+                    "memory even with minimum batch. Try a smaller model, lower "
+                    "precision (INT8/INT4), or reduce max_input_tokens/max_new_tokens."
+                )
+            else:
+                logger.critical(
+                    "OOM persists at minimum batch size %d — aborting.",
+                    self._OOM_BATCH_SIZE_MIN,
+                )
             return True
 
         logger.warning(
             "Reducing batch size from %d to %d and re-warming.",
             batch_size, new_batch_size,
         )
-        self.engine._configured_batch_size = new_batch_size
-        self.pipeline.update_batch_size(new_batch_size)
-        self.engine.warmup(batches=self._OOM_WARMUP_BATCHES)
+        _drained = 0
+        while True:
+            try:
+                _stale = prefetch_queue.get_nowait()
+                if _stale is not None:
+                    self.pipeline.release_batch(_stale)
+                _drained += 1
+            except queue.Empty:
+                break
+        if _drained:
+            logger.info("Drained %d stale batch(es) from prefetch queue", _drained)
+        try:
+            self.engine._configured_batch_size = new_batch_size
+            self.pipeline.update_batch_size(new_batch_size)
+            self.engine.warmup(batches=self._OOM_WARMUP_BATCHES)
+        except (torch.cuda.OutOfMemoryError, MemoryError, RuntimeError) as e:
+            logger.critical(
+                "OOM during recovery warmup at batch size %d: %s. Aborting.",
+                new_batch_size, e,
+            )
+            return True
         return False
 
     # ── Resume support ────────────────────────────────────────────────────
 
     def _current_data_position(self, loader=None) -> tuple[str, int]:
-        """Return (current_file_name, current_doc_id) for checkpointing."""
+        """Return the current data-loader position for checkpointing.
+
+        Args:
+            loader: A :class:`JSONLLoader` instance, or ``None``.  When ``None``
+                (or when the loader does not expose ``current_position``),
+                returns a sentinel.
+
+        Returns:
+            tuple[str, int]: A ``(current_file_name, current_doc_id)`` pair.
+            Returns ``("", 0)`` if the position is unavailable.
+        """
         if loader is not None and hasattr(loader, 'current_position'):
             return loader.current_position
         # Fallback: pipeline doesn't expose this directly
@@ -1175,9 +1437,24 @@ class BenchmarkHarness:
     ) -> dict:
         """Resume translation from a checkpoint directory.
 
-        Loads the latest checkpoint, restores counters, seeks the data
-        loader, subtracts elapsed time from the duration budget, and
-        delegates to the shared ``_run_translation_core``.
+        Loads the latest checkpoint, restores batch and token counters, seeks
+        the data loader, subtracts previously elapsed time from the duration
+        budget, runs a short warmup, and delegates to :meth:`_run_translation_core`.
+
+        Args:
+            batch_size: The batch size to use (passed through to
+                :meth:`_run_translation_core` without re-tuning).
+            env_snapshot: Dict of environment metadata.
+            device_info: Detected :class:`DeviceInfo` for the active backend.
+
+        Returns:
+            dict: The benchmark report dictionary produced by
+            :meth:`_run_translation_core`, with ``runtime.mode`` set to
+            ``"resume"`` and ``runtime.resumed_from`` set to the checkpoint path.
+
+        Raises:
+            FileNotFoundError: If ``resume_dir`` does not exist.
+            ValueError: If no checkpoint file is found in ``resume_dir``.
         """
         resume_path = Path(self.resume_dir)
         if not resume_path.exists():

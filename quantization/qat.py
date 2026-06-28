@@ -24,6 +24,7 @@ Architecture
 from __future__ import annotations
 
 import logging
+import math
 from typing import Optional
 
 import torch
@@ -34,11 +35,7 @@ logger = logging.getLogger(__name__)
 # ── Constants ──────────────────────────────────────────────────────────────
 
 FP8_E4M3_MAX = 448.0
-
-
 # ── Fake Quantize ──────────────────────────────────────────────────────────
-
-
 class FP8FakeQuantize(torch.autograd.Function):
     """Simulate FP8 E4M3 quantization with Straight-Through Estimator.
 
@@ -55,6 +52,26 @@ class FP8FakeQuantize(torch.autograd.Function):
 
     @staticmethod
     def forward(ctx, x: torch.Tensor, scale: torch.Tensor) -> torch.Tensor:
+        """Fake-quantize input to FP8 E4M3 precision and dequantize.
+
+        Applies: scale → clamp to FP8 range → round to discrete FP8 grid → dequantize.
+        The result is the same shape/dtype as the input but with FP8-level precision loss.
+        Stores the original input and scale on ctx for the backward pass.
+
+        Parameters
+        ----------
+        ctx : torch.autograd.function.FunctionCtx
+            Autograd context for saving tensors needed in backward.
+        x : torch.Tensor
+            Input tensor to fake-quantize.
+        scale : torch.Tensor
+            Per-tensor quantization scale factor.
+
+        Returns
+        -------
+        torch.Tensor
+            Dequantized output tensor, same shape as x.
+        """
         # Scale → quantize → dequantize
         scaled = x * scale
         clamped = torch.clamp(scaled, -FP8_E4M3_MAX, FP8_E4M3_MAX)
@@ -62,20 +79,30 @@ class FP8FakeQuantize(torch.autograd.Function):
         # FP8 E4M3 has 4 exponent bits and 3 mantissa bits → granular
         # quantization that round() approximates for STE purposes.
         quantized = torch.round(clamped)
-        # Save for backward
-        ctx.save_for_backward(x, scale)
-        ctx.clamp_mask = (scaled >= -FP8_E4M3_MAX) & (scaled <= FP8_E4M3_MAX)
         return quantized / scale
 
     @staticmethod
     def backward(ctx, grad_output):
+        """Straight-Through Estimator: pass gradient through unchanged.
+
+        The quantization operation is treated as an identity for gradient purposes.
+        No gradient is computed for the scale parameter.
+
+        Parameters
+        ----------
+        ctx : torch.autograd.function.FunctionCtx
+            Autograd context (unused -- STE ignores saved tensors).
+        grad_output : torch.Tensor
+            Gradient of the loss with respect to the dequantized output.
+
+        Returns
+        -------
+        tuple[torch.Tensor, None]
+            Gradient for x (same as grad_output) and None for scale.
+        """
         # Straight-Through Estimator: gradient passes through unchanged.
         return grad_output, None
-
-
 # ── Fake-Quantized Linear Layer ────────────────────────────────────────────
-
-
 class FakeQuantizedLinear(nn.Module):
     """An nn.Linear that fake-quantizes weights to FP8 during training.
 
@@ -102,6 +129,24 @@ class FakeQuantizedLinear(nn.Module):
         bias: bool = True,
         weight_scale: Optional[float] = None,
     ):
+        """Initialize a fake-quantized linear layer.
+
+        Creates a weight parameter, an optional bias parameter, and a scale buffer.
+        If weight_scale is provided, it is used directly; otherwise it is computed
+        from the weight statistics on the first reset_parameters() call.
+
+        Parameters
+        ----------
+        in_features : int
+            Size of each input sample.
+        out_features : int
+            Size of each output sample.
+        bias : bool, default True
+            If True, adds a learnable bias to the output.
+        weight_scale : float, optional
+            Per-tensor scale for FP8 weight quantization. If None, auto-computed
+            from max(|weight|) / FP8_E4M3_MAX during reset_parameters().
+        """
         super().__init__()
         self.in_features = in_features
         self.out_features = out_features
@@ -115,6 +160,17 @@ class FakeQuantizedLinear(nn.Module):
         self.reset_parameters()
 
     def reset_parameters(self) -> None:
+        """Initialize weight and bias with standard linear layer defaults.
+
+        Weight is initialized with Kaiming uniform. Bias is initialized uniformly
+        bounded by 1/sqrt(fan_in). If weight_scale was not provided at construction,
+        the scale buffer is recomputed from the initialized weight.
+
+        Side effects
+        ------------
+        - Modifies self.weight.data, self.bias.data (if bias exists), and
+          self.weight_scale buffer in-place.
+        """
         nn.init.kaiming_uniform_(self.weight, a=math.sqrt(5))
         if self.bias is not None:
             fan_in, _ = nn.init._calculate_fan_in_and_fan_out(self.weight)
@@ -124,25 +180,61 @@ class FakeQuantizedLinear(nn.Module):
             self._update_scale()
 
     def _update_scale(self) -> None:
-        """Recompute weight scale from current weight statistics."""
+        """Recompute weight scale from current weight statistics.
+
+        Sets self.weight_scale to max(|weight|) / FP8_E4M3_MAX, clamped so that
+        scale is never zero. Executes under torch.no_grad() to avoid contaminating
+        gradients.
+
+        Side effects
+        ------------
+        Modifies self.weight_scale buffer in-place (no grad).
+        """
         with torch.no_grad():
             w_max = self.weight.data.abs().max()
             if w_max > 0:
                 self.weight_scale.fill_(w_max / FP8_E4M3_MAX)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Compute linear transformation with FP8-quantized weights.
+
+        In training mode, the weight scale is updated before each forward pass.
+        Weights are then fake-quantized to FP8 E4M3 precision via FP8FakeQuantize
+        and the standard linear operation is applied.
+
+        Parameters
+        ----------
+        x : torch.Tensor
+            Input tensor of shape (..., in_features).
+
+        Returns
+        -------
+        torch.Tensor
+            Output tensor of shape (..., out_features).
+        """
         # Update scale before fake-quantization (cheap — no grad).
         if self.training:
             self._update_scale()
         # Fake-quantize weight to FP8 precision.
         w_q = FP8FakeQuantize.apply(self.weight, self.weight_scale)
         return nn.functional.linear(x, w_q, self.bias)
-
-
 def make_fake_quantized(linear: nn.Linear) -> FakeQuantizedLinear:
     """Convert a standard nn.Linear to a FakeQuantizedLinear.
 
-    Copies weight and bias from the source layer.
+    Computes the initial FP8 quantization scale from the source layer's max
+    weight magnitude, then copies weight and bias data into a new
+    FakeQuantizedLinear instance.
+
+    Parameters
+    ----------
+    linear : nn.Linear
+        The source linear layer to convert. Must have initialized weight data.
+
+    Returns
+    -------
+    FakeQuantizedLinear
+        A new layer with the same dimensions, weight, and bias as the input,
+        ready for QAT fine-tuning.
     """
     w_max = linear.weight.data.abs().max().item()
     scale = (w_max / FP8_E4M3_MAX) if w_max > 0 else 1.0
@@ -155,18 +247,29 @@ def make_fake_quantized(linear: nn.Linear) -> FakeQuantizedLinear:
     if linear.bias is not None:
         fq.bias.data.copy_(linear.bias.data)
     return fq
-
-
 # ── QAT Prep & Export ──────────────────────────────────────────────────────
-
-
 def prepare_qat(model: nn.Module) -> int:
-    """Replace all nn.Linear layers with :class:`FakeQuantizedLinear`.
+    """Replace all nn.Linear layers with FakeQuantizedLinear for QAT.
 
-    The lm_head is intentionally excluded — FP8 precision loss on the
-    vocabulary projection hurts token probability rankings.
+    Recursively walks the module tree and replaces every nn.Linear with a
+    FakeQuantizedLinear. The ``lm_head`` layer (language modeling head) is
+    intentionally excluded because FP8 precision loss on the vocabulary
+    projection degrades token probability rankings.
 
-    Returns the number of layers replaced.
+    Parameters
+    ----------
+    model : nn.Module
+        The model to prepare for QAT. Modified in-place.
+
+    Returns
+    -------
+    int
+        Number of nn.Linear layers that were replaced.
+
+    Side effects
+    ------------
+    Modifies the model in-place by substituting nn.Linear children with
+    FakeQuantizedLinear instances. Logs the replacement count at INFO level.
     """
     replaced = 0
 
@@ -185,8 +288,6 @@ def prepare_qat(model: nn.Module) -> int:
     _replace(model)
     logger.info("QAT prep: %d layers replaced with FakeQuantizedLinear", replaced)
     return replaced
-
-
 def export_qat_weights(model: nn.Module) -> dict[str, tuple[torch.Tensor, torch.Tensor]]:
     """Extract FP8-quantized weights from a QAT-trained model.
 
@@ -209,6 +310,3 @@ def export_qat_weights(model: nn.Module) -> dict[str, tuple[torch.Tensor, torch.
             )
             weights[n] = (w_fp8, scale)
     return weights
-
-
-import math  # noqa: E402 (used in reset_parameters)

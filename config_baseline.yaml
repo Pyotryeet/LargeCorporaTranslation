@@ -1,0 +1,47 @@
+# =============================================================================
+# Turkish Corpus Translation Benchmark — Baseline 1× GPU Config
+# =============================================================================
+backend: "auto"
+
+model:
+  model_path: "google/translategemma-4b-it"
+  tokenizer_path: ""
+  quantization: "bf16"
+  max_input_tokens: 512
+  max_new_tokens: 512
+
+  temperature: 0.0
+  do_sample: false
+  num_beams: 1
+  dtype: "auto"
+  tensor_parallel_size: 1
+  use_flash_attention: true
+  use_speculative: false
+  speculative_mode: "self"
+  speculative_num_tokens: 3
+  use_paged_attention: false       # Disable PagedAttention
+  use_continuous_batching: false
+  data_parallel_size: 1             # Single GPU
+
+runtime:
+  target_duration_seconds: 120      # Short run for quick stats
+  checkpoint_interval_seconds: 60
+  heartbeat_interval_seconds: 5
+  metrics_sample_rate_hz: 1
+  seed: 42
+  batch_size: 256                 # Try bs=256 directly (skip OOM)
+
+data:
+  input_paths:
+    - "./data/input/*.jsonl.gz"
+  output_dir: "./output"
+  reference_set_path: "./data/references/golden_en_tr.jsonl"
+  prefetch_workers: 8
+  shuffle: true
+  min_chunk_tokens: 10
+  max_garbage_ratio: 0.95
+  chunk_overlap_tokens: 50
+
+extrapolation:
+  total_clearnet_non_tr_tokens: 6230000000000
+  gpu_cost_per_hour_usd: null

@@ -193,12 +193,12 @@ def run_python_model(model_def: dict) -> dict:
             print(f"  Quality error: {e}")
 
     try: engine.close()
-    except: pass
+    except (RuntimeError, AttributeError): pass  # MPS empty_cache is best-effort
     del engine, pipeline, metrics
     gc.collect()
     if is_mps:
         try: torch.mps.empty_cache()
-        except: pass
+        except (RuntimeError, AttributeError): pass  # MPS empty_cache is best-effort
 
     return {
         "model": name, "model_path": path, "backend_type": be_type,
@@ -249,9 +249,17 @@ def run_llama_model(model_def: dict) -> dict:
     print(f"  GGUF: {gguf_path}  ({size_gb:.1f} GB)")
     print(f"{'='*60}")
 
-    # Load references
-    rl = ReferenceLoader(REFERENCE_SET)
-    srcs, refs = rl.load()
+    # Load references — guard against missing file (llama.cpp runs in-process,
+    # so a missing file would crash the entire benchmark).
+    refs = srcs = []
+    if Path(REFERENCE_SET).exists():
+        try:
+            rl = ReferenceLoader(REFERENCE_SET)
+            srcs, refs = rl.load()
+        except Exception as e:
+            print(f"  ⚠ Failed to load references: {e}")
+    else:
+        print(f"  ⚠ Reference set not found: {REFERENCE_SET} — quality scores will be N/A")
     if QUALITY_MAX_REFS and QUALITY_MAX_REFS < len(srcs):
         srcs, refs = srcs[:QUALITY_MAX_REFS], refs[:QUALITY_MAX_REFS]
 
@@ -461,7 +469,7 @@ print('__RESULT_JSON_END__')
         # Memory cleanup
         gc.collect()
         try: torch.mps.empty_cache()
-        except: pass
+        except (RuntimeError, AttributeError): pass  # MPS empty_cache is best-effort
         time.sleep(2)
 
     # ── Phase 2: llama.cpp models ──
@@ -506,7 +514,7 @@ print('__RESULT_JSON_END__')
 
         gc.collect()
         try: torch.mps.empty_cache()
-        except: pass
+        except (RuntimeError, AttributeError): pass  # MPS empty_cache is best-effort
         time.sleep(2)
 
     # ──────────────────────────────────────────────────────────────────────
@@ -572,7 +580,7 @@ print('__RESULT_JSON_END__')
         json.dump(report, f, indent=2, ensure_ascii=False)
     print(f"\n✓ Full report: {out_path}")
 
-    return 0
+    return 1 if fail > 0 else 0
 
 
 if __name__ == "__main__":

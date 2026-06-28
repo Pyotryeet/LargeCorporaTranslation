@@ -48,7 +48,31 @@ def _t_critical_value(alpha: float, df: int) -> float:
 
 
 class ExtrapolationModel:
-    def __init__(self, total_tokens: int, gpu_cost_per_hour: float | None = None):
+    """Estimate corpus-completion time from measured throughput.
+    
+        Takes per-batch TPS samples and total corpus token count,
+        then computes:
+        - Median-based point estimate (robust to skew)
+        - SEM + t-distribution 95% CI
+        - Bootstrap 95% CI (percentile method)
+    
+        Assumes constant throughput (validated over 2.2h on H200).
+        """
+    def __init__(self, total_tokens: int = 6_230_000_000_000, gpu_cost_per_hour: float | None = None):
+        """Initialise the extrapolation model.
+
+        Parameters
+        ----------
+        total_tokens : int
+            Total tokens in the full dataset.  Must be positive.
+        gpu_cost_per_hour : float or None
+            Cost per GPU-hour in USD, or None to skip cost computation.
+
+        Raises
+        ------
+        ValueError
+            If ``total_tokens <= 0``.
+        """
         if total_tokens <= 0:
             raise ValueError(f"total_tokens must be positive, got {total_tokens}")
         self.total_tokens = total_tokens
@@ -85,6 +109,18 @@ class ExtrapolationModel:
                 "gpu_hours": 0,
                 "estimated_cost_usd": None,
                 "relative_uncertainty_pct": 0,
+                "sem_tokens_per_second": 0,
+            }
+        if num_gpus <= 0:
+            return {
+                "error": "num_gpus must be positive",
+                "days_point_estimate": float("inf"),
+                "days_95ci_lower": 0,
+                "days_95ci_upper": 0,
+                "gpu_hours": 0,
+                "estimated_cost_usd": None,
+                "relative_uncertainty_pct": 0,
+                "sem_tokens_per_second": 0,
             }
         if n_batches < 5:
             logger.warning(
@@ -98,9 +134,12 @@ class ExtrapolationModel:
         days = seconds / 86400
         gpu_hours = days * num_gpus * 24
 
-        # Standard error of the mean (not raw std).
+        # Standard error of the mean TPS.
         se_tps = std_tps / math.sqrt(n_batches) if n_batches > 0 else std_tps
-        rel_uncertainty = se_tps / mean_tps if mean_tps > 0 else 0
+        # Relative uncertainty MUST use the same TPS value as the point estimate.
+        # Previously this used se_tps/mean_tps but days came from median_tps,
+        # producing invalid CIs when mean ≠ median (skewed distributions).
+        rel_uncertainty = se_tps / effective_tps if effective_tps > 0 else 0
 
         # Use t-distribution critical value (n-1 degrees of freedom) for
         # samples with n < 30.  Falls back to Normal approximation when

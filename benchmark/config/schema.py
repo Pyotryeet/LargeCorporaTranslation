@@ -1,4 +1,18 @@
-"""Pydantic v2 configuration models with strict validation."""
+"""Pydantic v2 configuration models with strict validation.
+
+Classes:
+    ModelConfig: Per-model inference flags (dtype, beam, speculative, quantization, etc.).
+    RuntimeConfig: Benchmark duration, checkpointing, observability settings.
+    DataConfig: Input paths, preprocessing, shuffle budget, quality reference set.
+    ExtrapolationConfig: Throughput/cost projection parameters.
+    BenchmarkConfig: Frozen root model composing the four sub-configs.
+
+Functions:
+    load_config: Read and validate a YAML config file into a BenchmarkConfig.
+
+All models use model_config = {"extra": "forbid"} so unknown YAML keys
+raise pydantic ValidationError. BenchmarkConfig additionally sets
+frozen=True, preventing field reassignment after construction."""
 
 import glob
 import logging
@@ -18,6 +32,45 @@ logger = logging.getLogger(__name__)
 
 
 class ModelConfig(BaseModel):
+    """Pydantic v2 model for per-model inference configuration.
+
+    Fields:
+        model_path: HuggingFace model ID or local path. Defaults to "google/translategemma-4b-it".
+        tokenizer_path: Path to tokenizer. Defaults to model_path when empty.
+        max_input_tokens: Maximum input token count. Range 1-4096, default 512.
+        max_new_tokens: Maximum generated token count. Range 1-2048, default 512.
+        temperature: Sampling temperature. Range 0.0-2.0, default 0.0 (greedy).
+        do_sample: Enable probabilistic sampling. Default False.
+        num_beams: Beam-search width. Range 1-64, default 1.
+        dtype: Model precision. "auto" lets the backend decide. Can override with
+            "float8_e4m3fn", "bfloat16", "float16", or "float32".
+        tensor_parallel_size: Number of GPUs for tensor parallelism. 0 = auto.
+        use_flash_attention: Enable FlashAttention-2. Default True.
+        backend_type: Inference backend: "auto", "autoregressive", "encoder_decoder",
+            "diffusion", "custom", or "vllm". Default "auto".
+        diffusion_steps: Number of denoising steps for diffusion backends. 8-4096.
+        guidance_scale: Classifier-free guidance scale. 1.0-10.0.
+        noise_schedule: Diffusion noise schedule: "cosine", "linear", or "sqrt".
+        target_length_multiplier: Target-token multiplier for length-predicting diffusion.
+        plugin_name: Name of custom backend plugin when backend_type="custom".
+        plugin_config: Arbitrary key-value settings for the custom plugin.
+        use_speculative: Enable speculative decoding (v3.4).
+        speculative_mode: "self" (self-speculation) or "draft_model".
+        speculative_num_tokens: How many tokens to speculate per step (1-16).
+        speculative_draft_model: HuggingFace ID of the draft model.
+        speculative_num_draft_layers: How many decoder layers to use from draft (0-128).
+        use_paged_attention: Enable PagedAttention KV-cache (CUDA only, v3.5).
+        use_continuous_batching: Enable continuous/dynamic batching (v3.5).
+        quantization: bitsandbytes quantization level: "bf16", "fp16", "int8", or "int4".
+        data_parallel_size: Number of data-parallel replicas across GPUs (v3.7).
+        nllb_source_lang: Source language code for NLLB translation models.
+        nllb_target_lang: Target language code for NLLB translation models.
+
+    Validators:
+        validate_model_config: Enforces consistency rules (see method docstring).
+
+    Model config forbids extra fields; unknown keys in YAML will raise ValidationError.
+    """
     model_config = {"extra": "forbid"}
     model_path: str = Field(default="google/translategemma-4b-it", max_length=500)
     tokenizer_path: str = Field(default="", max_length=500)
@@ -35,7 +88,7 @@ class ModelConfig(BaseModel):
     tensor_parallel_size: int = Field(default=0, ge=0, le=8)
     use_flash_attention: bool = True
     # v3.0: Model-agnostic dispatch.
-    backend_type: Literal["auto", "autoregressive", "encoder_decoder", "diffusion", "custom"] = "auto"
+    backend_type: Literal["auto", "autoregressive", "encoder_decoder", "diffusion", "custom", "vllm"] = "auto"
     # v3.0: Diffusion-specific parameters.
     diffusion_steps: int = Field(default=DEFAULT_DIFFUSION_STEPS, ge=8, le=4096)
     guidance_scale: float = Field(default=DEFAULT_GUIDANCE_SCALE, ge=1.0, le=10.0)
@@ -44,12 +97,6 @@ class ModelConfig(BaseModel):
     # v3.0: Custom plugin name (when backend_type=custom).
     plugin_name: str = ""
     plugin_config: dict[str, Any] = Field(default_factory=dict, description="Custom plugin key-value settings. Values must be JSON-serializable primitives (str, int, float, bool, list, dict) — no arbitrary objects.")
-
-    # v3.3: TensorRT engine optimization (CUDA only).
-    use_tensorrt: bool = False
-    tensorrt_precision: Literal["fp16", "fp8", "int8"] = "fp16"
-    tensorrt_max_batch: int = Field(default=32, ge=1, le=256)
-    tensorrt_cache_dir: str = ""
 
     # v3.4: Speculative decoding (1.5–3× throughput improvement).
     use_speculative: bool = False
@@ -71,12 +118,35 @@ class ModelConfig(BaseModel):
     # v3.6: Model quantization level (for bitsandbytes loading).
     quantization: Literal["bf16", "fp16", "int8", "int4"] = "bf16"
 
+    # v3.7: Data parallelism — replicated copies across GPUs.
+    data_parallel_size: int = Field(default=1, ge=1, le=8)
+
     # v3.6: NLLB encoder-decoder translation parameters.
     nllb_source_lang: str = "eng_Latn"
     nllb_target_lang: str = "tur_Latn"
 
     @model_validator(mode="after")
     def validate_model_config(self):
+        """Validate field-level consistency after model construction.
+
+        Performs these checks:
+            1. Defaults tokenizer_path to model_path if left empty.
+            2. Raises ValueError if do_sample=True with temperature=0.0 (meaningless).
+            3. Logs a warning if diffusion-specific parameters are set on a non-diffusion
+               backend (they will be silently ignored at runtime).
+            4. Raises ValueError if speculative_mode='draft_model' is set without
+               providing a speculative_draft_model path.
+
+        Returns:
+            self: The validated ModelConfig instance.
+
+        Raises:
+            ValueError: On constraint violations described above.
+
+        Side effects:
+            Mutates self.tokenizer_path if it was empty.
+            Logs warnings for misconfigured diffusion params.
+        """
         # 0) Default tokenizer_path to model_path when empty
         if not self.tokenizer_path:
             object.__setattr__(self, "tokenizer_path", self.model_path)
@@ -88,44 +158,7 @@ class ModelConfig(BaseModel):
                 "sampling requires temperature > 0."
             )
 
-        # 2) Diffusion and TensorRT are mutually exclusive
-        if self.backend_type == "diffusion" and self.use_tensorrt:
-            raise ValueError(
-                "backend_type='diffusion' and use_tensorrt=True are mutually exclusive."
-            )
-
-        # 2a) Validate tensorrt_cache_dir when TensorRT is enabled
-        if self.use_tensorrt and self.tensorrt_cache_dir:
-            cache_path = Path(self.tensorrt_cache_dir)
-            if not cache_path.exists():
-                try:
-                    cache_path.mkdir(parents=True, exist_ok=True)
-                    logger.info("Created TensorRT cache directory: %s", cache_path)
-                except OSError as exc:
-                    raise ValueError(
-                        f"tensorrt_cache_dir='{self.tensorrt_cache_dir}' does not exist "
-                        f"and could not be created: {exc}"
-                    ) from exc
-
-        # 3) FP8 TensorRT requires H200/Hopper (SM 9.0+)
-        if self.use_tensorrt and self.tensorrt_precision == "fp8":
-            try:
-                import torch
-                if torch.cuda.is_available() and torch.cuda.is_initialized():
-                    major, minor = torch.cuda.get_device_capability()
-                    if major < 9:
-                        logger.warning(
-                            f"tensorrt_precision='fp8' requires Hopper/H200 (SM 9.0+), "
-                            f"but detected SM {major}.{minor}. FP8 may not be supported."
-                        )
-                else:
-                    logger.debug(
-                        "Skipping FP8 GPU capability check: CUDA is not initialized."
-                    )
-            except (ImportError, RuntimeError, AttributeError) as e:
-                logger.debug("Skipping FP8 GPU capability check: %s", e)
-
-        # 3a) Diffusion params are only meaningful for diffusion backends
+        # 2) Diffusion params are only meaningful for diffusion backends
         if self.backend_type != "diffusion":
             diffusion_defaults = {
                 "diffusion_steps": DEFAULT_DIFFUSION_STEPS,
@@ -158,16 +191,52 @@ class ModelConfig(BaseModel):
 
 
 class RuntimeConfig(BaseModel):
+    """Pydantic v2 model for runtime and benchmarking configuration.
+
+    Fields:
+        target_duration_seconds: How long the benchmark runs. Range 60-86400, default 7200 (2 hr).
+        checkpoint_interval_seconds: Seconds between progress checkpoints. Range 30-3600, default 300.
+        heartbeat_interval_seconds: Seconds between heartbeat log messages. Range 1-120, default 30.
+        metrics_sample_rate_hz: Metrics collection frequency. Range 1-10, default 1.
+        seed: Random seed for reproducibility. Must be non-negative, default 42.
+        batch_size: Inference batch size. 0 means auto-tune. Range 0-32768.
+        observability_enabled: Enable Prometheus observability endpoint. Default False.
+
+    Model config forbids extra fields.
+    """
     model_config = {"extra": "forbid"}
     target_duration_seconds: int = Field(default=7200, ge=60, le=86400)
     checkpoint_interval_seconds: int = Field(default=300, ge=30, le=3600)
     heartbeat_interval_seconds: int = Field(default=30, ge=1, le=120)
     metrics_sample_rate_hz: int = Field(default=1, ge=1, le=10)
     seed: int = Field(default=42, ge=0)
+    batch_size: int = Field(default=0, ge=0, le=32768)  # 0 = auto-tune
     observability_enabled: bool = False
 
 
 class DataConfig(BaseModel):
+    """Pydantic v2 model for data pipeline and quality-benchmark configuration.
+
+    Fields:
+        input_paths: Glob patterns for input data files. Defaults to ["./data/input/*.jsonl.gz"].
+        output_dir: Directory for inference output artifacts. Default "./output".
+        reference_set_path: Path to golden-reference JSONL used for quality scoring.
+        shard_size_mb: Maximum shard size before splitting. Range 10-1024 MB, default 100.
+        prefetch_workers: Number of background data-loader workers. Range 1-16, default 4.
+            Recommend 8 for H200 (64 cores); 4 is conservative (see M3.2, measured 2026-06-24).
+        shuffle: Whether to shuffle input data. Default True.
+        min_chunk_tokens: Minimum token count in a chunk for it to be processed. Default 10.
+        max_garbage_ratio: Maximum ratio of garbage/token noise tolerated. 0.0-1.0, default 0.95.
+        chunk_overlap_tokens: Token overlap between consecutive chunks. Range 0-256, default 50.
+        max_references: Maximum number of references to load from the reference set. None = all.
+        shuffle_max_memory_gb: RAM budget for in-memory shuffle buffer. When the estimated
+            memory exceeds this, falls back to disk-backed external sort. None uses the default
+            SHUFFLE_MEMORY_BUDGET_BYTES constant (2 GiB). Range 0.1-512.
+        shuffle_temp_dir: Directory for external-sort temporary run files. Empty string
+            uses the system temp directory (TMPDIR or /tmp).
+
+    Model config forbids extra fields.
+    """
     model_config = {"extra": "forbid"}
     input_paths: list[str] = Field(default_factory=lambda: ["./data/input/*.jsonl.gz"])
     output_dir: str = "./output"
@@ -191,12 +260,39 @@ class DataConfig(BaseModel):
 
 
 class ExtrapolationConfig(BaseModel):
+    """Pydantic v2 model for cost/throughput extrapolation parameters.
+
+    Fields:
+        total_clearnet_non_tr_tokens: Estimated total clean-web non-Turkish tokens
+            available for processing. Default 6.23 trillion, minimum 1 million.
+        gpu_cost_per_hour_usd: Cloud-equivalent GPU hourly cost (e.g., ~$3.00/GPU-hr
+            for H200 on-demand, see M0.4). None means cost extrapolation is disabled.
+
+    Model config forbids extra fields.
+    """
     model_config = {"extra": "forbid"}
     total_clearnet_non_tr_tokens: int = Field(default=6_230_000_000_000, ge=1_000_000)
     gpu_cost_per_hour_usd: Optional[float] = None  # cloud-equivalent ~$3.00/GPU-hour for H200 on-demand. See M0.4.
 
 
 class BenchmarkConfig(BaseModel):
+    """Pydantic v2 root configuration model combining all sub-configs.
+
+    Fields:
+        backend: Hardware backend to use: "auto" (detect), "cuda", "mps", or "cpu".
+            Default "auto".
+        model: Per-model configuration (ModelConfig). Defaults to a fresh ModelConfig.
+        runtime: Benchmark runtime parameters (RuntimeConfig).
+        data: Data pipeline and quality-eval parameters (DataConfig).
+        extrapolation: Throughput/cost extrapolation parameters (ExtrapolationConfig).
+
+    Both frozen=True and extra="forbid" are set:
+        - Extra keys in YAML will raise ValidationError.
+        - Fields cannot be reassigned after construction (explicit freeze).
+
+    Validators:
+        validate_benchmark_config: Post-construction consistency checks (see method docstring).
+    """
     backend: Literal["auto", "cuda", "mps", "cpu"] = "auto"
     model: ModelConfig = Field(default_factory=ModelConfig)
     runtime: RuntimeConfig = Field(default_factory=RuntimeConfig)
@@ -206,21 +302,25 @@ class BenchmarkConfig(BaseModel):
 
     @model_validator(mode="after")
     def validate_benchmark_config(self):
-        # 1) MPS backend + TensorRT is impossible
-        if self.backend == "mps" and self.model.use_tensorrt:
-            raise ValueError(
-                "backend='mps' is incompatible with model.use_tensorrt=True. "
-                "TensorRT requires NVIDIA CUDA GPUs."
-            )
+        """Validate root-level consistency after all sub-models are built.
 
-        # 2) TensorRT requires CUDA backend
-        if self.model.use_tensorrt and self.backend != "cuda":
-            raise ValueError(
-                f"model.use_tensorrt=True requires backend='cuda', "
-                f"got backend='{self.backend}'."
-            )
+        Performs these checks:
+            1. When data.input_paths contains only local paths (no s3://, gs://, etc.),
+               verifies that at least one file is matched by the glob patterns.
+               Raises ValueError if zero files are found.
+            2. Checks whether data.reference_set_path exists. If missing, logs a warning
+               that quality benchmark will be skipped (but does NOT raise - quality is optional).
 
-        # 3) Ensure data.input_paths resolves to at least one file
+        Returns:
+            self: The validated BenchmarkConfig instance.
+
+        Raises:
+            ValueError: If no local input files are matched by input_paths globs.
+
+        Side effects:
+            Logs warnings for missing reference_set_path.
+        """
+        # 1) Ensure data.input_paths resolves to at least one file
         #    (only for local paths — skip cloud / remote schemes)
         data = self.data
         if data.input_paths:
@@ -253,6 +353,24 @@ class BenchmarkConfig(BaseModel):
 
 
 def load_config(path: str | Path) -> BenchmarkConfig:
+    """Load and validate a BenchmarkConfig from a YAML file.
+
+    Args:
+        path: Path to a YAML configuration file. Accepts str or pathlib.Path.
+
+    Returns:
+        BenchmarkConfig: Validated configuration object. If the file is empty
+        or contains only comments, all defaults are used.
+
+    Raises:
+        FileNotFoundError: If the path does not exist.
+        ValidationError (pydantic): If the YAML contains unknown fields or
+        violates field constraints.
+
+    Side effects:
+        Logs the loaded path at INFO level.
+        Logs a warning and falls back to defaults if the file is empty.
+    """
     path = Path(path)
     if not path.exists():
         raise FileNotFoundError(f"Config file not found: {path}")

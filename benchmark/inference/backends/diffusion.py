@@ -49,6 +49,8 @@ from benchmark.inference.backends.protocol import (
 
 logger = logging.getLogger(__name__)
 
+from benchmark.utils.helpers import local_kwargs as _local_kwargs
+
 # ---------------------------------------------------------------------------
 # Noise schedule utilities
 # ---------------------------------------------------------------------------
@@ -74,20 +76,6 @@ SCHEDULES = {
     "linear": _linear_schedule,
     "sqrt": _sqrt_schedule,
 }
-
-
-def _local_kwargs(path: str) -> dict:
-    """Return ``{"local_files_only": True}`` if *path* is a local file/dir.
-
-    Newer huggingface_hub rejects bare filesystem paths unless
-    ``local_files_only=True`` is passed.  This helper avoids
-    ``HFValidationError`` for models/tokenizers stored on disk.
-    """
-    if os.path.isdir(path) or os.path.isfile(path):
-        return {"local_files_only": True}
-    return {}
-
-
 def _is_diffusiongemma(model_path: str) -> bool:
     """Return True if *model_path* refers to a DiffusionGemma model.
 
@@ -160,7 +148,6 @@ class DiffusionBackend(InferenceBackend):
     ------------
     - TRANSLATE          ✓
     - FORWARD_ENCODE     ✓
-    - CONFIDENCE         ✓
     - CLASSIFIER_FREE    ✓ (batched CFG)
     - ENSEMBLE_READY     ✓
     """
@@ -169,7 +156,6 @@ class DiffusionBackend(InferenceBackend):
     capabilities = (
         ModelCapability.TRANSLATE
         | ModelCapability.FORWARD_ENCODE
-        | ModelCapability.CONFIDENCE
         | ModelCapability.CLASSIFIER_FREE
         | ModelCapability.ENSEMBLE_READY
     )
@@ -426,6 +412,14 @@ class DiffusionBackend(InferenceBackend):
             self.diff_config.min_target_length,
         )
         target_len = min(target_len, self.max_new_tokens)
+        if target_len <= 0:
+            logger.warning(
+                "Diffusion: computed target_len=0 (src_lens=%s, multiplier=%.2f, max_new=%d). "
+                "Clamping to 1 token to avoid empty generation.",
+                src_lens.tolist(), self.diff_config.target_length_multiplier,
+                self.max_new_tokens,
+            )
+            target_len = 1
 
         # ── Step 3: Initialize target sequence ──
         target_ids = self._initialize_target(bs, target_len, device)
@@ -795,8 +789,8 @@ class DiffusionBackend(InferenceBackend):
                     return_dict=True,
                 )
             return outputs.logits
-        except (TypeError, AttributeError):
-            pass
+        except (TypeError, AttributeError) as e:
+            logger.debug("Diffusion: encoder-decoder forward failed (%s), trying decoder-only path", e)
 
         # Try decoder-only path (e.g., GPT-style diffusion with prefix).
         try:
@@ -824,8 +818,15 @@ class DiffusionBackend(InferenceBackend):
                     "hidden states to logits."
                 )
             return outputs.last_hidden_state[:, src_len:, :] @ proj_weight.T
-        except Exception:
+        except Exception as e:
+            logger.warning(
+                "Diffusion: decoder-only forward also failed (%s). "
+                "Falling back to TARGET-ONLY forward — source text is IGNORED, "
+                "output will be random/unrelated to the input. Check model "
+                "configuration and input shapes.", e,
+            )
             # Final fallback: just run with target embeddings only.
+            # This produces GARBAGE — the model receives zero source information.
             with self._fp8_context():
                 outputs = self.model(inputs_embeds=target_embeds, return_dict=True)
             if hasattr(outputs, 'logits'):
@@ -893,7 +894,21 @@ class DiffusionBackend(InferenceBackend):
         input_ids: torch.Tensor,
         attention_mask: torch.Tensor,
     ) -> torch.Tensor:
+        if not self._loaded:
+            raise RuntimeError("Model not loaded — call load() first")
         return self._encode_source(input_ids, attention_mask)
+
+    def close(self) -> None:
+        """Release CUDA graph, cached embeddings, and GPU memory."""
+        self._step_graph = None
+        self._step_graph_inputs = None
+        self._source_cache = {}
+        self._prev_logits = None
+        import gc
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+            torch.cuda.empty_cache()
 
     # ── Target initialization ──────────────────────────────────────────
 

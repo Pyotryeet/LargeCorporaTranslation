@@ -21,6 +21,24 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class ThroughputSnapshot:
+    """Immutable snapshot of throughput and latency at a point in time.
+
+    Captured by ``ThroughputTracker.snapshot()`` for reporting or logging
+    without holding the tracker lock.  All fields are populated by the
+    tracker; consumers should treat this as read-only.
+
+    Attributes:
+        timestamp: Monotonic clock reading (seconds) when the snapshot was taken.
+        tokens_per_second: Rolling throughput over the configured window, rounded
+            to one decimal place.
+        total_tokens: Cumulative tokens recorded since tracker creation.
+        window_seconds: The tracker's configured time window for throughput
+            calculation.
+        p50_latency_ms: Median batch latency in milliseconds, or ``None`` if no
+            latency data has been recorded.
+        p99_latency_ms: 99th-percentile batch latency in milliseconds, or
+            ``None`` if fewer than two data points exist.
+    """
     timestamp: float
     tokens_per_second: float
     total_tokens: int
@@ -30,7 +48,37 @@ class ThroughputSnapshot:
 
 
 class ThroughputTracker:
+    """Rolling-window throughput calculator with O(1) queries.
+
+    Maintains a running token sum and a deque of ``(timestamp, token_count)``
+    events.  Evicts events older than the configured window on every mutation
+    so that ``current()`` is constant-time regardless of window depth.
+
+    Also records per-batch wall-clock latency (from batch acceptance to
+    completion) in a ring buffer for percentile retrieval.
+
+    Thread-safe — all public methods acquire an internal lock.  The internal
+    methods ``_prune``, ``_current_locked``, and ``_latency_percentiles``
+    expect the caller to already hold ``self._lock``.
+
+    Args:
+        window_seconds: Size of the rolling time window in seconds.
+            Must be positive.  Defaults to 60.0.
+
+    Raises:
+        ValueError: If ``window_seconds`` is not positive.
+    """
     def __init__(self, window_seconds: float = 60.0):
+        """Initialize a rolling throughput tracker.
+
+        Args:
+            window_seconds: Size of the rolling time window in seconds.
+                Must be a positive float.  Events older than this are evicted
+                from the window.  Defaults to 60.0.
+
+        Raises:
+            ValueError: If ``window_seconds <= 0``.
+        """
         if window_seconds <= 0:
             raise ValueError(
                 f"window_seconds must be positive, got {window_seconds}"
@@ -80,18 +128,22 @@ class ThroughputTracker:
         if not self._events:
             return 0.0
 
-        # Single event: compute throughput as tokens / effective_span.
+        # Single event: compute throughput as tokens / age.
+        # DO NOT clamp age to window_seconds — that inflates TPS when
+        # the single event is older than the window (e.g., 100 tokens at
+        # t=200s would report 100/60=1.67 tok/s when actual is 0.5).
         if len(self._events) == 1:
             ts, tokens = self._events[0]
             age = now - ts
-            effective_span = age if 0 < age < self.window_seconds else self.window_seconds
-            if effective_span <= 0:
+            if age <= 0:
                 return 0.0
-            return tokens / effective_span
+            return tokens / age
 
         # Multiple events: use the span covered by events (clamped to window).
         span = self._events[-1][0] - self._events[0][0]
-        duration = span if span > 0 else self.window_seconds
+        # Guard against events recorded in rapid succession (same acquire time).
+        # A span of zero would divide by zero; clamp to 0.1s minimum.
+        duration = span if span > 0.1 else 0.1
         if duration <= 0:
             return 0.0
         # When the span exceeds the window, use the window size (pruning ensures
@@ -101,6 +153,23 @@ class ThroughputTracker:
         return self._window_sum / effective_duration
 
     def snapshot(self) -> ThroughputSnapshot:
+        """Capture a throughput and latency snapshot.
+
+        Creates an immutable ``ThroughputSnapshot`` with the current rolling
+        throughput, cumulative token count, window size, and latency percentiles
+        (p50 / p99).
+
+        Thread-safe — acquires ``self._lock``.
+
+        Returns:
+            ThroughputSnapshot: A dataclass instance populated with:
+            - ``timestamp`` — monotonic time of capture.
+            - ``tokens_per_second`` — current rolling throughput, rounded to 1 dp.
+            - ``total_tokens`` — cumulative tokens across all batches.
+            - ``window_seconds`` — the configured window size.
+            - ``p50_latency_ms`` — median batch latency (or ``None``).
+            - ``p99_latency_ms`` — 99th-percentile batch latency (or ``None``).
+        """
         now = time.monotonic()
         with self._lock:
             lat_stats = self._latency_percentiles()
@@ -114,6 +183,25 @@ class ThroughputTracker:
             )
 
     def summary(self) -> dict:
+        """Return a dictionary summary of current tracker state.
+
+        Includes rolling throughput, cumulative token count, window size,
+        event count, and latency percentiles (if available).  Suitable for
+        JSON serialization in logs or monitoring systems.
+
+        Thread-safe — acquires ``self._lock``.
+
+        Returns:
+            dict: Always contains:
+            - ``"rolling_tokens_per_second"`` (float, rounded to 1 dp).
+            - ``"total_tokens_produced"`` (int).
+            - ``"window_seconds"`` (float).
+            - ``"events_in_window"`` (int).
+
+            Conditionally contains (only when latency data exists):
+            - ``"p50_latency_ms"`` (float, rounded to 1 dp).
+            - ``"p99_latency_ms"`` (float, rounded to 1 dp).
+        """
         with self._lock:
             lat_stats = self._latency_percentiles()
             result = {
@@ -137,8 +225,11 @@ class ThroughputTracker:
             return None, None
         sorted_lat = sorted(self._latencies)
         n = len(sorted_lat)
-        p50 = sorted_lat[int(n * 0.50)] if n > 0 else None
-        p99 = sorted_lat[int(n * 0.99)] if n > 1 else sorted_lat[0]
+        p50 = sorted_lat[n // 2] if n > 0 else None
+        # Use ceil-based index for p99 to avoid int(100*0.99)=99 returning
+        # the maximum (index 99 of 100) instead of the true 99th percentile.
+        p99_idx = max(0, int(n * 0.99 + 0.5) - 1) if n > 1 else 0
+        p99 = sorted_lat[p99_idx] if n > 1 else sorted_lat[0]
         return (
             round(p50, 1) if p50 is not None else None,
             round(p99, 1) if p99 is not None else None,

@@ -16,6 +16,21 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class FilterStats:
+    """Tracks chunk filtering statistics across a ChunkFilter lifetime.
+
+    Accumulates counts of total chunks, passed chunks, and rejection
+    counts broken down by reason (too short, garbage, language).
+    Provides derived properties for total rejected and pass rate,
+    plus a serialization method for reporting.
+
+    Attributes:
+        total_chunks: Total number of chunks submitted to the filter.
+        passed: Number of chunks that passed all filter criteria.
+        rejected_too_short: Chunks rejected for being outside the token count range.
+        rejected_garbage: Chunks rejected for exceeding the non-ASCII threshold.
+        rejected_language: Reserved for future language-identification filter.
+    """
+
     total_chunks: int = 0
     passed: int = 0
     rejected_too_short: int = 0
@@ -24,15 +39,33 @@ class FilterStats:
 
     @property
     def rejected(self) -> int:
+        """Total number of rejected chunks across all rejection categories.
+
+        Returns:
+            int: Sum of rejected_too_short, rejected_garbage, and rejected_language.
+        """
         return self.rejected_too_short + self.rejected_garbage + self.rejected_language
 
     @property
     def pass_rate(self) -> float:
+        """Fraction of chunks that passed the filter.
+
+        Returns:
+            float: passed / total_chunks, or 0.0 if no chunks have been processed.
+        """
         if self.total_chunks == 0:
             return 0.0
         return self.passed / self.total_chunks
 
     def to_dict(self) -> dict:
+        """Serialize filter statistics to a dictionary for reporting.
+
+        Returns:
+            dict: Mapping of stat names to their current values. Keys include
+            total_chunks, passed, rejected, rejected_too_short,
+            rejected_garbage, rejected_language, and pass_rate (rounded to
+            4 decimal places).
+        """
         return {
             "total_chunks": self.total_chunks, "passed": self.passed,
             "rejected": self.rejected, "rejected_too_short": self.rejected_too_short,
@@ -53,6 +86,21 @@ class ChunkFilter:
     __slots__ = ("min_tokens", "max_tokens", "max_garbage_ratio", "stats", "_stats_lock")
 
     def __init__(self, min_tokens: int = 10, max_tokens: int = 2048, max_garbage_ratio: float = 0.95):
+        """Initialize the chunk filter.
+
+        Args:
+            min_tokens: Minimum token count a chunk must have to be kept.
+                Default 10.
+            max_tokens: Maximum token count a chunk may have to be kept.
+                Default 2048.
+            max_garbage_ratio: Maximum fraction of non-ASCII bytes allowed
+                before a chunk is considered garbage and rejected.
+                Must be in [0.0, 1.0]. Default 0.95.
+
+        Raises:
+            ValueError: If min_tokens < 0, max_tokens < min_tokens, or
+                max_garbage_ratio is not in [0.0, 1.0].
+        """
         if min_tokens < 0:
             raise ValueError(f"min_tokens must be >= 0, got {min_tokens}")
         if max_tokens < min_tokens:
@@ -70,6 +118,24 @@ class ChunkFilter:
         self._stats_lock = threading.Lock()
 
     def should_keep(self, text: str, token_count: int) -> bool:
+        """Determine whether a text chunk meets all filtering criteria.
+
+        Evaluates the chunk against the token-count range and the
+        non-ASCII garbage threshold. Statistics are updated under a lock
+        so this method is safe to call from multiple threads.
+
+        Args:
+            text: The raw text content of the chunk.
+            token_count: The number of tokens in this chunk (pre-tokenized).
+
+        Returns:
+            bool: True if the chunk passes all filters, False otherwise.
+
+        Side effects:
+            Increments total_chunks, passed, rejected_too_short, or
+            rejected_garbage in self.stats. Logs a debug message when a
+            chunk is rejected for garbage.
+        """
         with self._stats_lock:
             self.stats.total_chunks += 1
         if token_count < self.min_tokens or token_count > self.max_tokens:
@@ -126,4 +192,10 @@ class ChunkFilter:
         return (non_ascii / total) > self.max_garbage_ratio
 
     def reset_stats(self):
+        """Reset all accumulated filter statistics to zero.
+
+        Replaces self.stats with a fresh FilterStats instance.
+        Call this between benchmark runs or dataset passes to ensure
+        statistics reflect only the current run.
+        """
         self.stats = FilterStats()

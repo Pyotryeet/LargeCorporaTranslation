@@ -54,7 +54,7 @@ class TestBackendDetector:
         pytest.importorskip("torch")
         import torch
         if not torch.cuda.is_available():
-            with pytest.raises(RuntimeError, match="CUDA not available"):
+            with pytest.raises(RuntimeError, match="CUDA backend requested but not available."):
                 BackendDetector.detect("cuda")
 
     def test_detect_auto_maps_correctly(self):

@@ -66,14 +66,65 @@ class ActivationCapture:
     """
 
     def __init__(self, model: torch.nn.Module, *, capture_inputs: bool = True):
+        """Initialize the activation capture harness.
+
+        Parameters
+        ----------
+        model : torch.nn.Module
+            The model to capture activations from. Must contain ``nn.Linear`` layers.
+        capture_inputs : bool, keyword-only
+            If True (default), capture the input tensor to each Linear layer.
+            If False, only register hooks without saving tensors (useful for
+            warm-up or debugging).
+
+        Attributes
+        ----------
+        activations : dict[str, list[Tensor]]
+            Mapping from layer name to a list of captured input tensors (one per
+            forward call). Populated after ``start()`` / forward / ``stop()``.
+        _hooks : list[RemovableHandle]
+            Registered forward hooks; cleaned up in ``stop()``.
+
+        Notes
+        -----
+        Tensors are detached but stay on-device during capture. GPU→CPU transfer
+        is deferred to ``stop()`` to avoid per-layer synchronous blocking copies.
+        """
         self.model = model
         self.capture_inputs = capture_inputs
         self.activations: dict[str, list[torch.Tensor]] = {}
         self._hooks: list[torch.utils.hooks.RemovableHandle] = []
 
     def _hook_fn(self, name: str, _module, _input, _output):
+        """Forward hook callback invoked after each Linear layer executes.
+
+        Parameters
+        ----------
+        name : str
+            The fully-qualified module name (e.g. ``model.layers.0.self_attn.q_proj``).
+        _module : nn.Module
+            The Linear module (unused).
+        _input : tuple[Tensor, ...]
+            The input tuple (``_input[0]`` is the activation tensor).
+        _output : Tensor
+            The layer output (unused).
+
+        Side Effects
+        ------------
+        Appends ``_input[0].detach()`` to ``self.activations[name]``.
+        Tensors are detached to avoid holding the computation graph but
+        stay on-device — GPU→CPU transfer is deferred to ``stop()``.
+
+        Notes
+        -----
+        This is a private method intended only as a forward-hook callback.
+        It is never called directly by user code.
+        """
         if self.capture_inputs and _input:
-            self.activations.setdefault(name, []).append(_input[0].detach().cpu())
+            # Detach to avoid holding the compute graph, but keep on device.
+            # GPU→CPU transfer is deferred to stop() to avoid synchronous
+            # per-layer blocking copies during the calibration forward pass.
+            self.activations.setdefault(name, []).append(_input[0].detach())
 
     def start(self) -> None:
         """Register activation-capture hooks on all nn.Linear layers."""
@@ -86,10 +137,14 @@ class ActivationCapture:
                 self._hooks.append(h)
 
     def stop(self) -> None:
-        """Remove all registered hooks."""
+        """Remove all registered hooks and transfer captured activations to CPU."""
         for h in self._hooks:
             h.remove()
         self._hooks.clear()
+        # Deferred GPU→CPU transfer — avoids synchronous per-layer copies
+        # during the calibration forward pass.
+        for name in list(self.activations.keys()):
+            self.activations[name] = [t.cpu() for t in self.activations[name]]
 
     def stacked(self, name: str) -> Optional[torch.Tensor]:
         """Return all captured activations for *name* stacked along dim 0."""
@@ -137,8 +192,17 @@ def compute_smooth_scales(
         if x is None or x.numel() == 0:
             continue
 
-        # Per-channel maximum absolute activation (across the batch dim).
-        x_max = x.abs().max(dim=0).values  # [in_features]
+        # Per-channel maximum absolute activation (across all tokens/batches).
+        # Activations may be 2D [tokens, in_features] or 3D [batch, seq, in_features].
+        #
+        # IMPORTANT: assumes weights are [out_features, in_features] layout
+        # (PyTorch/HF default).  Models loaded with bitsandbytes may have
+        # transposed weights [in_features, out_features]; in that case
+        # max(dim=0) gives [out_features] instead of [in_features] and
+        # the scale dimension is wrong.
+        # Flatten to 2D before max to ensure correct [in_features] output.
+        x_flat = x.reshape(-1, x.shape[-1])  # [total_tokens, in_features]
+        x_max = x_flat.abs().max(dim=0).values  # [in_features]
         # Per-channel maximum absolute weight.
         w_max = w.abs().max(dim=0).values  # [in_features] — for col-major, this is input-dim max
 
@@ -241,6 +305,38 @@ class SmoothQuantCalibrator:
         max_calibration_tokens: int = 2048,
         device: str | torch.device | None = None,
     ):
+        """Initialize a SmoothQuant calibrator.
+
+        Parameters
+        ----------
+        model : torch.nn.Module
+            HuggingFace or PyTorch model containing ``nn.Linear`` layers.
+        tokenizer : PreTrainedTokenizer or callable
+            Tokenizer with a ``__call__`` that accepts a list of strings and
+            returns a dict with ``input_ids`` and ``attention_mask``.
+        alpha : float, keyword-only
+            Migration hyperparameter (default: 0.5). Values closer to 1.0
+            migrate more activation range into weights; values closer to 0.0
+            keep more range in activations.
+        quant_max : float, keyword-only
+            Maximum representable value in the target FP8 format (default:
+            448.0 for E4M3).
+        max_calibration_tokens : int, keyword-only
+            Maximum number of tokens to process during calibration (default:
+            2048). Exceeding this stops the calibration forward pass early.
+        device : str or torch.device or None, keyword-only
+            Device to run calibration on. If None, inferred from the model's
+            first parameter.
+
+        Attributes
+        ----------
+        _scales : dict[str, Tensor]
+            SmoothQuant weight scaling factors (s_j per input channel), exposed
+            via the ``scales`` property.
+        _act_scales : dict[str, Tensor]
+            Inverse activation scaling factors (1/s_j per input channel),
+            exposed via the ``activation_scales`` property.
+        """
         self.model = model
         self.tokenizer = tokenizer
         self.alpha = alpha
@@ -283,38 +379,48 @@ class SmoothQuantCalibrator:
         capture = ActivationCapture(self.model)
         self.model.eval()
 
+        # Guard: empty calibration data produces uncalibrated weights.
+        if not texts:
+            logger.warning(
+                "SmoothQuant calibrate() called with empty texts — no calibration "
+                "data available. Weights will NOT be smoothed. Set "
+                "TR_SKIP_SMOOTHQUANT=1 to skip this step entirely."
+            )
+            return 0
+
         total_tokens = 0
         batch_texts: list[str] = []
 
         capture.start()
-        with torch.no_grad():
-            for text in texts:
-                batch_texts.append(text)
-                # Tokenize batch when it reaches a reasonable size.
-                if len(batch_texts) >= 4 or total_tokens > 0 and len(batch_texts) > 0:
-                    pass  # accumulate
+        try:
+            with torch.no_grad():
+                for text in texts:
+                    batch_texts.append(text)
 
-                if len(batch_texts) >= 8:
+                    if len(batch_texts) >= 8:
+                        encoded = self.tokenizer(
+                            batch_texts, return_tensors="pt", padding=True,
+                            truncation=True, max_length=512,
+                        ).to(self.device)
+                        # CausalLM forward: use input_ids + attention_mask
+                        self.model(input_ids=encoded.input_ids,
+                                   attention_mask=encoded.attention_mask)
+                        total_tokens += encoded.input_ids.numel()
+                        batch_texts.clear()
+
+                    if total_tokens >= self.max_calibration_tokens:
+                        break
+
+                # Drain remaining batch.
+                if batch_texts and total_tokens < self.max_calibration_tokens:
                     encoded = self.tokenizer(
                         batch_texts, return_tensors="pt", padding=True,
                         truncation=True, max_length=512,
                     ).to(self.device)
-                    _ = self.model(**encoded)
-                    total_tokens += encoded.input_ids.numel()
-                    batch_texts.clear()
-
-                if total_tokens >= self.max_calibration_tokens:
-                    break
-
-            # Drain remaining batch.
-            if batch_texts and total_tokens < self.max_calibration_tokens:
-                encoded = self.tokenizer(
-                    batch_texts, return_tensors="pt", padding=True,
-                    truncation=True, max_length=512,
-                ).to(self.device)
-                _ = self.model(**encoded)
-
-        capture.stop()
+                    self.model(input_ids=encoded.input_ids,
+                               attention_mask=encoded.attention_mask)
+        finally:
+            capture.stop()
 
         # Extract weights and activations.
         weights: dict[str, torch.Tensor] = {}
@@ -328,6 +434,13 @@ class SmoothQuantCalibrator:
 
         if not weights:
             logger.warning("SmoothQuant: no Linear layers found in model.")
+            return 0
+        if not activations:
+            logger.warning(
+                "SmoothQuant: no activations captured — calibration data may "
+                "be empty or the model produced no output. Weights will NOT "
+                "be smoothed. Set TR_SKIP_SMOOTHQUANT=1 to suppress."
+            )
             return 0
 
         # Compute scales and smooth weights.

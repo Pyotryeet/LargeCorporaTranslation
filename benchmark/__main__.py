@@ -22,15 +22,15 @@ from pathlib import Path
 from benchmark.utils.version import VERSION
 
 # ── Suppress expected third-party warnings ─────────────────────────────
+# Only suppress truly spurious library deprecation warnings — do NOT
+# suppress warnings that could indicate real problems (CUDA graph issues,
+# invalid generation flags).
 warnings.filterwarnings("ignore", message=".*pynvml.*deprecated.*",
                         category=FutureWarning)
 warnings.filterwarnings("ignore", message=".*pkg_resources.*deprecated.*",
                         category=UserWarning)
-warnings.filterwarnings("ignore", message=".*CUDA Graph is empty.*",
-                        category=UserWarning)
-warnings.filterwarnings("ignore", message=".*generation flags are not valid.*",
-                        category=UserWarning)
 _os.environ.setdefault("TRANSFORMERS_VERBOSITY", "error")
+_os.environ.setdefault("HF_HUB_DOWNLOAD_TIMEOUT", "300")  # prevent infinite hangs on network failure
 
 from benchmark.orchestration.harness import BenchmarkHarness
 
@@ -165,7 +165,7 @@ Examples:
     parser.add_argument("--seed", type=int,
                         help="Override random seed from config")
 
-    # ── v3.6 flags ──
+    # ── v3.9 flags ──
     parser.add_argument("--no-compile", action="store_true",
                         help="Disable torch.compile (useful for debugging)")
     parser.add_argument("--safe-mode", action="store_true",
@@ -197,6 +197,9 @@ Examples:
                              "minimise IOAccelerator pressure (default on, set "
                              "TR_MPS_MEMORY_SAFE=0 to disable)")
 
+    parser.add_argument("--vllm", action="store_true",
+                        help="Use the vLLM optimized inference backend engine")
+
     parser.add_argument("--quantization", choices=["bf16", "fp16", "int8", "int4"], default=None,
                         help="Model quantization level: bf16 (unquantized), int8 (8-bit), "
                              "int4 (4-bit NF4)")
@@ -218,19 +221,11 @@ Examples:
     if args.mps_safe:
         _os.environ["TR_MPS_MEMORY_SAFE"] = "1"
 
-    # ── Enable speculative decoding gate before harness creation ──
-    # The speculative decoding path is gated by TR_ENABLE_EXPERIMENTAL_SPECULATIVE=1
-    # in benchmark/inference/speculative.py:1129.  Without this env var,
-    # create_speculative_decoder() returns None and falls back to standard AR decode,
-    # logging only a warning.  Set it here so --speculative "just works".
-    if args.speculative:
-        _os.environ["TR_ENABLE_EXPERIMENTAL_SPECULATIVE"] = "1"
-
     # ── Inject CLI overrides into config (speculative, paged attention, NLLB, etc.) ──
     _needs_inject = (
         args.speculative or args.paged_attention or args.continuous_batching
         or args.nllb or args.quantization is not None or args.model is not None
-        or args.smoothquant or args.qat
+        or args.qat or args.vllm
     )
     if _needs_inject:
         import yaml
@@ -256,6 +251,9 @@ Examples:
             _model["backend_type"] = "encoder_decoder"
             _model["nllb_source_lang"] = args.nllb_src_lang
             _model["nllb_target_lang"] = args.nllb_tgt_lang
+
+        if args.vllm:
+            _model["backend_type"] = "vllm"
 
         if args.quantization is not None:
             _model["quantization"] = args.quantization
@@ -309,12 +307,6 @@ Examples:
 
     if args.pretokenized_cache_dir:
         _os.environ["TR_PRETOKENIZED_CACHE_DIR"] = args.pretokenized_cache_dir
-
-    # ── SmoothQuant calibration (opt-in) ───────────────────────────────
-    if args.smoothquant:
-        _os.environ["TR_SMOOTHQUANT"] = "1"
-        logger = __import__("logging").getLogger(__name__)
-        logger.info("SmoothQuant calibration enabled (--smoothquant)")
 
     # ── QAT mode — prepare model with FakeQuantizedLinear ───────────────
     if args.qat:

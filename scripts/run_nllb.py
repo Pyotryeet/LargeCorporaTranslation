@@ -41,7 +41,7 @@ for model_id, name in [
         total_in += int(inputs.attention_mask.sum().item())
         with torch.no_grad():
             out = model.generate(**inputs, forced_bos_token_id=tok.convert_tokens_to_ids('tur_Latn'), max_new_tokens=48, num_beams=1)
-        total_out += (out.shape[1] - inputs.input_ids.shape[1]) * len(batch)
+        total_out += out.shape[1] * len(batch)
     torch.cuda.synchronize(); duration = time.time() - start
     tps = total_out / duration
     ips = total_in / duration

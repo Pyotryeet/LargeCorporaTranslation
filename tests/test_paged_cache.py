@@ -193,10 +193,10 @@ class TestPagedLayer:
 
         full_k, full_v = layer.update(new_k, new_v)
 
-        # read() returns all block slots (padded to block_size=16).
-        # 8 prefill + 1 decode → fits in 1 block → returns 16 tokens.
-        assert full_k.shape == (2, 2, 16, 32)
-        assert full_v.shape == (2, 2, 16, 32)
+        # read() trims to actual seq_len (8 prefill + 1 decode = 9 tokens),
+        # not padded to block_size. See PagedKVCache.read():290.
+        assert full_k.shape == (2, 2, 9, 32)
+        assert full_v.shape == (2, 2, 9, 32)
 
         # Sequence lengths updated
         assert setup._seq_lengths[0] == 9
@@ -249,8 +249,8 @@ class TestPagedCache:
         v = torch.randn(2, 2, 1, 32)
 
         full_k, full_v = pc.update(k, v, layer_idx=2)
-        # 8 prefill + 1 decode → 1 block × 16 tokens
-        assert full_k.shape == (2, 2, 16, 32)
+        # read() trims to actual seq_len (8 prefill + 1 decode = 9 tokens)
+        assert full_k.shape == (2, 2, 9, 32)
 
     def test_get_seq_length(self, setup):
         """get_seq_length works through PagedCache."""
@@ -259,7 +259,7 @@ class TestPagedCache:
         k = torch.randn(2, 2, 1, 32)
         v = torch.randn(2, 2, 1, 32)
         pc.update(k, v, layer_idx=0)
-        # 8 prefill + 1 decode → 1 block × 16 tokens
+        # 8 prefill + 1 decode = 9 tokens
         assert pc.get_seq_length(0) == 9
 
     def test_get_max_cache_shape(self, setup):

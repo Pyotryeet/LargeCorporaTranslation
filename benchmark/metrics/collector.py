@@ -1,4 +1,11 @@
-"""Metrics coordinator — starts/stops samplers, aggregates results."""
+"""Metrics coordinator — starts/stops samplers, aggregates results.
+
+Coordinates device (GPU) and system (CPU/RAM) sampling across separate
+background threads with deadline-based scheduling to prevent drift.
+Buffers samples and flushes them to disk in dedicated output directories
+(gpu/, system/, batch/).  Also tracks rolling token throughput and can
+push live metrics to a Prometheus exporter.
+"""
 
 import json
 import logging
@@ -26,7 +33,36 @@ MAX_BUFFER_SIZE: int = MAX_METRICS_BUFFER_SIZE
 
 
 class MetricsCollector:
+    """Coordinates device and system metric sampling, batch logging, and throughput tracking.
+
+    Manages background threads for periodic GPU and system health sampling,
+    with deadline-based scheduling to prevent clock drift.  Aggregates throughput
+    statistics and can optionally push live samples to a Prometheus exporter.
+
+    Parameters:
+        output_dir: Path -- root directory where gpu/, system/, and batch/
+            subdirectories will be created for sample output files.
+        device_info: DeviceInfo -- hardware backend descriptor specifying
+            whether to sample GPU, MPS, or other device metrics.
+        sample_rate_hz: int -- sampling frequency in Hertz (samples per second).
+            Default 1 (one sample per second).
+
+    Side effects:
+        Creates gpu/, system/, and batch/ subdirectories under output_dir
+        on construction.
+    """
+
     def __init__(self, output_dir: Path, device_info: DeviceInfo, sample_rate_hz: int = 1):
+        """Initialise the metrics collector with output directory, device info, and sample rate.
+
+        Parameters:
+            output_dir: Path -- root directory for metric output subdirectories.
+            device_info: DeviceInfo -- hardware backend descriptor (CUDA, MPS, CPU).
+            sample_rate_hz: int -- sampling frequency in Hz (default 1).
+
+        Side effects:
+            Creates gpu/, system/, and batch/ subdirectories under output_dir.
+        """
         self.output_dir = output_dir
         self.device_info = device_info
         self.sample_rate_hz = sample_rate_hz
@@ -82,6 +118,17 @@ class MetricsCollector:
         logger.info("Metrics collection stopped")
 
     def log_batch(self, batch_result) -> None:
+        """Record a completed batch result for throughput tracking and batch logging.
+
+        Parameters:
+            batch_result: BatchResult -- the completed batch containing
+                output_tokens_total and total_latency_ms fields used for
+                throughput calculation.
+
+        Side effects:
+            Appends to the batch log on disk (via BatchLogger.log).
+            Updates the rolling throughput window (via ThroughputTracker.add).
+        """
         self.batch_logger.log(batch_result)
         self.throughput_tracker.add(
             batch_result.output_tokens_total,
@@ -89,20 +136,49 @@ class MetricsCollector:
         )
 
     def get_rolling_throughput(self) -> float:
+        """Return the current rolling throughput in tokens per second.
+
+        Returns:
+            float -- the current throughput averaged over the configured window
+            (default 60 seconds), or 0.0 if no batches have been logged yet.
+        """
         return self.throughput_tracker.current()
 
     def get_summary(self) -> dict:
+        """Return a dictionary summarising all collected metrics.
+
+        Returns:
+            dict with keys:
+                throughput -- dict: per-second and per-batch throughput statistics
+                device_samples -- int: number of device (GPU) samples collected
+                system_samples -- int: number of system (CPU/RAM) samples collected
+                batches_logged -- int: number of batch results logged
+        """
         return {"throughput": self.throughput_tracker.summary(),
                 "device_samples": self.device_sampler.sample_count,
                 "system_samples": self.system_sampler.sample_count,
                 "batches_logged": self.batch_logger.batch_count}
 
     def _device_loop(self) -> None:
-        """Deadline-based sampling — no drift even over multi-hour runs.
+        """Background thread target that samples device metrics at the configured rate.
 
-        Uses ``time.monotonic()`` deadline scheduling.  If a sample takes longer
-        than the interval, the next sleep is shortened (or skipped) to catch up
-        without shifting the entire schedule forward.
+        Uses deadline-based scheduling via ``time.monotonic()`` to prevent clock
+        accumulation drift over long runs.  Sleep duration is shortened (or skipped)
+        when a sample takes longer than the interval, keeping the overall schedule
+        stable.
+
+        If a Prometheus exporter is attached, each sample is pushed live via
+        ``record_device``.
+
+        Parameters:
+            None (reads instance state).
+
+        Side effects:
+            Writes device sample files to disk via ``DeviceSampler.sample()``.
+            Pushes live metrics to Prometheus if an exporter is configured.
+
+        Exceptions:
+            Logged as warnings -- sampling errors do not crash the thread.
         """
         interval = 1.0 / self.sample_rate_hz
         next_deadline = time.monotonic() + interval
@@ -131,6 +207,22 @@ class MetricsCollector:
                 next_deadline = now + interval
 
     def _system_loop(self) -> None:
+        """Background thread target that samples system metrics at the configured rate.
+
+        Uses the same deadline-based scheduling as ``_device_loop`` to prevent
+        clock drift.  Pushes CPU utilisation, RAM usage, and swap usage to
+        Prometheus if an exporter is attached.
+
+        Parameters:
+            None (reads instance state).
+
+        Side effects:
+            Writes system sample files to disk via ``SystemSampler.sample()``.
+            Pushes live metrics to Prometheus if an exporter is configured.
+
+        Exceptions:
+            Logged as warnings -- sampling errors do not crash the thread.
+        """
         interval = 1.0 / self.sample_rate_hz
         next_deadline = time.monotonic() + interval
         while self._running.is_set():

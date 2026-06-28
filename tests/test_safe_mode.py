@@ -21,11 +21,8 @@ class TestSafeMode:
             extra={"safe_mode": True},
         )
         backend = AutoregressiveBackend(config)
-        assert backend._use_cuda_graph is False, "CUDA graph should be disabled in safe mode"
         assert backend._use_paged_attention is False, "PagedAttention should be disabled in safe mode"
-        assert backend._use_fused_kernels is False, "Fused kernels should be disabled in safe mode"
         assert backend._use_quantized_weights is False, "Quantized weights should be disabled in safe mode"
-        assert backend._use_int8_kv_cache is False, "INT8 KV-cache should be disabled in safe mode"
         assert backend._safe_mode is True
 
     def test_normal_mode_keeps_defaults(self):
@@ -40,11 +37,12 @@ class TestSafeMode:
             extra={},
         )
         backend = AutoregressiveBackend(config)
-        assert backend._use_cuda_graph is True, "CUDA graph should be enabled by default"
-        # PagedAttention is hardcoded False until model forward hooks redirect
-        # KV reads from past_key_values to PagedKVCache blocks.
-        assert backend._use_paged_attention is False, "PagedAttention disabled until model hooks in place"
-        assert backend._use_fused_kernels is True, "Fused kernels should be enabled by default"
+        # PagedAttention is now enabled by default on CUDA (extra.get("use_paged_attention", backend_name=="cuda")).
+        # On CPU backend_name, it defaults to False since it's CUDA-only.
+        # The fused_kernels and cuda_graph attributes no longer exist — those features
+        # were permanently removed in commit 19d979f.
+        assert backend._use_paged_attention is False, "PagedAttention disabled on CPU"
+        assert backend._use_quantized_weights is False
 
     def test_safe_mode_does_not_affect_other_config(self):
         """Safe mode only modifies optimization flags, not core config."""
@@ -67,7 +65,7 @@ class TestSafeMode:
         assert backend.max_new_tokens == 256
         assert backend.temperature == 0.3
         # Only optimization flags are forced off.
-        assert backend._use_cuda_graph is False
+        assert backend._use_paged_attention is False
         assert backend._safe_mode is True
 
 
@@ -91,10 +89,13 @@ class TestSafeModeFlagPropagation:
         from benchmark.__main__ import main
 
         source = inspect.getsource(main)
+        # Use the LAST occurrence of "--safe-mode" — the parser argument,
+        # not the docstring example on the first occurrence.
         assert "--safe-mode" in source, (
             "--safe-mode not found in benchmark.__main__.main() parser definition"
         )
-        assert 'action="store_true"' in source.split("--safe-mode")[1][:100], (
+        after_last = source.rsplit("--safe-mode", 1)[1][:300]
+        assert 'action="store_true"' in after_last, (
             "--safe-mode must be a store_true flag"
         )
         # Verify the flag maps to safe_mode= in the harness constructor.

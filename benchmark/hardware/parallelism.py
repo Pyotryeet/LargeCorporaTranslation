@@ -99,6 +99,21 @@ class TensorParallelConfig:
     all_reduce_lm_head: bool = True
 
     def __post_init__(self):
+        """Validate and compute derived fields after dataclass initialization.
+
+        Computed fields
+        ---------------
+        _layers_per_gpu : list[int]
+            Number of transformer layers assigned to each GPU, computed as
+            ``num_layers // tp_size``.
+        _layers_ranges : list[tuple[int, int]]
+            (start, end) layer index ranges for each GPU.
+
+        Raises
+        ------
+        ValueError
+            If ``tp_size < 1`` or ``num_layers`` is not divisible by ``tp_size``.
+        """
         if self.tp_size < 1:
             raise ValueError(f"tp_size must be >= 1, got {self.tp_size}")
         if self.num_layers % self.tp_size != 0:
@@ -119,23 +134,52 @@ class TensorParallelConfig:
 
     @property
     def layers_per_gpu(self) -> List[int]:
-        """Layer count per GPU (backward compat)."""
-        return self._layers_per_gpu
+        """Layer count per GPU (backward compatibility).
+
+        Returns
+        -------
+        list[int]
+            Number of transformer layers owned by each GPU rank.
+        """
 
     @property
     def layer_ranges(self) -> List[tuple]:
-        """(start, end) layer ranges per GPU."""
+        """Layer index ranges assigned to each GPU.
+
+        Returns
+        -------
+        list[tuple[int, int]]
+            List of ``(start, end)`` half-open ranges, one per GPU.
+        """
         return self._layer_ranges
 
     @property
     def ranks(self) -> List[int]:
-        """Return the list of process ranks participating in TP."""
+        """Process ranks participating in tensor parallelism.
+
+        Returns
+        -------
+        list[int]
+            ``[0, 1, ..., tp_size - 1]``.
+        """
         return list(range(self.tp_size))
 
     # --- Layer mapping ---
 
     def get_device_for_layer(self, layer_idx: int) -> int:
-        """Return the GPU rank that owns a given layer."""
+        """Return the GPU rank that owns a given transformer layer.
+
+        Parameters
+        ----------
+        layer_idx : int
+            Zero-based index of the transformer decoder layer.
+
+        Returns
+        -------
+        int
+            Rank of the GPU that holds layer ``layer_idx``.  Falls back to 0
+            if the index does not fall into any configured range.
+        """
         for rank, (start, end) in enumerate(self._layer_ranges):
             if start <= layer_idx < end:
                 return rank
@@ -151,7 +195,19 @@ class TensorParallelConfig:
                 if (i + 1) % (self.local_global_ratio + 1) == 0]
 
     def is_global_attention_layer(self, layer_idx: int) -> bool:
-        """Check if a layer uses global (full-context) attention."""
+        """Check whether a layer uses global (full-context) attention.
+
+        Parameters
+        ----------
+        layer_idx : int
+            Zero-based index of the transformer decoder layer.
+
+        Returns
+        -------
+        bool
+            True if ``(layer_idx + 1)`` is divisible by ``local_global_ratio + 1``
+            (i.e., the layer is a global-attention layer in the 5:1 interleaving pattern).
+        """
         return (layer_idx + 1) % (self.local_global_ratio + 1) == 0
 
     def estimate_kv_cache_mb(
@@ -178,7 +234,18 @@ class TensorParallelConfig:
         return (global_bytes + local_bytes) / (1024 * 1024)
 
     def layer_range_for_rank(self, rank: int) -> slice:
-        """Return the layer index slice assigned to *rank*."""
+        """Return the layer index slice assigned to *rank*.
+
+        Parameters
+        ----------
+        rank : int
+            GPU rank (0 or 1 for tp_size=2).
+
+        Returns
+        -------
+        slice
+            Slice object covering ``(start, end)`` of layers assigned to this rank.
+        """
         start, end = self._layer_ranges[rank]
         return slice(start, end)
 
@@ -189,7 +256,20 @@ class TensorParallelConfig:
 
 
 def _find_module_by_name(model: nn.Module, name: str) -> Optional[nn.Module]:
-    """Resolve a dotted attribute path on *model*, e.g. ``"model.layers"``."""
+    """Resolve a dotted attribute path on *model*.
+
+    Parameters
+    ----------
+    model : nn.Module
+        The root module to search from.
+    name : str
+        Dotted attribute path, e.g. ``"model.layers"``.
+
+    Returns
+    -------
+    nn.Module or None
+        The resolved submodule, or None if any segment in the path is missing.
+    """
     parts = name.split(".")
     obj = model
     for part in parts:
@@ -201,7 +281,20 @@ def _find_module_by_name(model: nn.Module, name: str) -> Optional[nn.Module]:
 
 
 def _maybe_get_attr(model: nn.Module, candidates: List[str]) -> Optional[nn.Module]:
-    """Return the first matching module from *candidates*, or None."""
+    """Return the first matching module from *candidates*, or None.
+
+    Parameters
+    ----------
+    model : nn.Module
+        The root module to search from.
+    candidates : list[str]
+        List of dotted attribute paths to try, in priority order.
+
+    Returns
+    -------
+    nn.Module or None
+        The first successfully resolved submodule, or None if none matched.
+    """
     for name in candidates:
         mod = _find_module_by_name(model, name)
         if mod is not None:
@@ -275,7 +368,19 @@ def ensure_dist_initialized(
 
 
 def _get_distributed_world() -> int:
-    """Return the world size if distributed is initialized, otherwise 1."""
+    """Return the distributed world size if initialized, otherwise 1.
+
+    Returns
+    -------
+    int
+        ``dist.get_world_size()`` when torch.distributed is initialized,
+        otherwise 1 (single-process fallback).
+
+    Side effects
+    ------------
+    Imports ``torch.distributed`` inside the function body (avoiding import
+    errors when the package is not installed).
+    """
     try:
         import torch.distributed as dist
         return dist.get_world_size() if dist.is_initialized() else 1
@@ -284,7 +389,19 @@ def _get_distributed_world() -> int:
 
 
 def _get_distributed_rank() -> int:
-    """Return the local rank if distributed is initialized, otherwise 0."""
+    """Return the local distributed rank if initialized, otherwise 0.
+
+    Returns
+    -------
+    int
+        ``dist.get_rank()`` when torch.distributed is initialized,
+        otherwise 0 (single-process fallback).
+
+    Side effects
+    ------------
+    Imports ``torch.distributed`` inside the function body (avoiding import
+    errors when the package is not installed).
+    """
     try:
         import torch.distributed as dist
         return dist.get_rank() if dist.is_initialized() else 0
@@ -308,11 +425,44 @@ class AllReduceLMHead(nn.Module):
     """
 
     def __init__(self, lm_head: nn.Module, group=None):
+        """Wrap an LM head for logit all-reduction.
+
+        Parameters
+        ----------
+        lm_head : nn.Module
+            The raw LM head module (e.g. ``model.lm_head``).
+        group : dist.ProcessGroup, optional
+            NCCL process group for the all-reduce.  If None, the default
+            distributed group is used.
+        """
         super().__init__()
         self.lm_head = lm_head
         self.group = group
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        """Forward pass with cross-rank logit averaging.
+
+        Parameters
+        ----------
+        hidden_states : torch.Tensor
+            Hidden states from the final transformer layer, shape
+            ``(batch_size, seq_len, hidden_size)``.
+
+        Returns
+        -------
+        torch.Tensor
+            Logits tensor, shape ``(batch_size, seq_len, vocab_size)``.
+            All-reduced via SUM and divided by group size so that the
+            output is identical to single-GPU inference when LM head
+            weights are replicated.
+
+        Caveats
+        -------
+        This is logit-averaging, not weight-sharded TP.  If LM head weights
+        are NOT identical across GPUs (e.g., true sharded tensor parallelism),
+        the averaging produces incorrect results since linear projection
+        does not commute with softmax.
+        """
         logits = self.lm_head(hidden_states)
         if self.group is not None:
             import torch.distributed as dist
@@ -558,27 +708,34 @@ def get_tensor_parallel_config(
     replicate_lm_head: bool = True,
     all_reduce_lm_head: bool = True,
 ) -> TensorParallelConfig:
-    """Create a TensorParallelConfig with the given parameters.
+    """Create a ``TensorParallelConfig`` with sensible defaults.
+
+    Convenience constructor that derives ``tp_size`` from the number of
+    available GPUs (capped at 2).  For more than 2 GPUs the config still
+    produces tp_size=2 (the maximum supported by this module).
 
     Parameters
     ----------
     num_gpus : int
-        Number of available GPUs. tp_size = min(num_gpus, 2).
+        Number of available GPUs.  ``tp_size`` will be ``min(num_gpus, 2)``.
     tp_size : int, optional
-        Explicit TP size override (takes precedence over num_gpus).
+        Explicit TP size override.  Takes precedence over ``num_gpus``.
+        Must be 1 or 2.
     num_layers : int, optional
-        Total transformer layers.  Defaults to GEMMA_3_12B_NUM_LAYERS (48).
-        For other models, pass the actual layer count from model.config.
+        Total transformer layers.  Defaults to ``GEMMA_3_12B_NUM_LAYERS`` (48).
+        For non-Gemma models, pass the actual layer count from ``model.config``.
     replicate_embedding : bool
-        Replicate embeddings on every GPU.
+        Whether to replicate embeddings on every GPU (default True).
     replicate_lm_head : bool
-        Replicate LM head on every GPU.
+        Whether to replicate the LM head on every GPU (default True).
     all_reduce_lm_head : bool
-        All-reduce logits after the LM head forward.
+        Whether to all-reduce logits after the LM head forward (default True).
 
     Returns
     -------
     TensorParallelConfig
+        Configured instance.  When num_gpus < 2, returns a config with
+        ``tp_size=1`` (single-GPU, no sharding).
     """
     if num_layers is None:
         num_layers = GEMMA_3_12B_NUM_LAYERS

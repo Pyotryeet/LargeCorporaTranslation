@@ -1,4 +1,11 @@
-"""Per-batch structured logger."""
+"""Per-batch structured JSONL logger for inference metrics.
+
+Provides ``BatchLogger``, a thread-safe buffered writer that records
+batch generation results (latency, tokens, throughput) to a timestamped
+JSONL file.  The logger auto-flushes when the buffer reaches a
+configurable threshold and handles both v2.0 ``BatchResult`` and v3.0
+``BatchGenerationOutput`` result types transparently.
+"""
 
 import logging
 import threading
@@ -13,7 +20,36 @@ logger = logging.getLogger(__name__)
 
 
 class BatchLogger:
+    """Structured per-batch JSONL logger for inference metrics.
+
+    Buffers batch result entries in memory and flushes them periodically
+    to a timestamped JSONL file.  Provides thread-safe logging via a
+    reentrant lock on the internal buffer.
+
+    Public methods:
+        start()
+            Open the JSONL log file with a UTC timestamped filename.
+        log(batch_result)
+            Serialize a batch result and append it to the in-memory buffer.
+            Auto-flushes when the buffer reaches ``BATCH_FLUSH_INTERVAL``.
+        flush()
+            Force-write the current buffer to disk.  Safe to call from any
+            thread; acquires the buffer lock internally.  On persistent
+            flush failures, oldest entries are dropped once the buffer
+            exceeds ``MAX_METRICS_BUFFER_SIZE`` to prevent unbounded
+            growth.
+    """
+
     def __init__(self, output_dir: Path):
+        """Initialize a BatchLogger that writes into *output_dir*.
+
+        Parameters
+        ----------
+        output_dir : pathlib.Path
+            Directory where the per-run ``batch_metrics_<timestamp>.jsonl``
+            file will be created.  Must exist and be writable; the logger
+            does **not** create the directory.
+        """
         self.output_dir = output_dir
         self.batch_count = 0
         self._log_file: Optional[Path] = None
@@ -22,11 +58,49 @@ class BatchLogger:
         self._buffer_lock = threading.RLock()
 
     def start(self) -> None:
+        """Open the log file, deriving its name from the current UTC timestamp.
+
+        The file is created in ``self.output_dir`` with the name pattern
+        ``batch_metrics_YYYYmmdd_HHMMSS.jsonl``.  This method is idempotent
+        in the sense that :meth:`log` will call it automatically on first
+        use, so calling it explicitly is optional but harmless.
+
+        Side effects
+        ------------
+        - Sets ``self._log_file`` to the newly created ``Path``.
+        - Logs an info-level message with the file path.
+        """
         ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         self._log_file = self.output_dir / f"batch_metrics_{ts}.jsonl"
         logger.info(f"Batch logger -> {self._log_file}")
 
     def log(self, batch_result) -> None:
+        """Serialize *batch_result* and append it to the in-memory buffer.
+
+        Automatically calls :meth:`start` if the log file has not yet been
+        opened.  The method handles both the v2.0 ``BatchResult`` type
+        (``prefill_time_ms`` / ``decode_time_ms`` / ``total_latency_ms``
+        as direct attributes) and the v3.0 ``BatchGenerationOutput`` type
+        (``phase_timings`` dict), extracting timing fields transparently.
+
+        When the buffer reaches ``BATCH_FLUSH_INTERVAL`` entries, the
+        buffer is flushed to disk automatically (under the buffer lock).
+
+        Parameters
+        ----------
+        batch_result : BatchResult or BatchGenerationOutput
+            A batch generation result carrying at least ``batch_id``,
+            ``batch_size``, ``input_tokens_total``, ``output_tokens_total``,
+            and timing fields (either as direct attributes or inside a
+            ``phase_timings`` mapping).  ``tokens_per_second`` may be a
+            callable or a plain float.
+
+        Side effects
+        ------------
+        - Increments ``self.batch_count``.
+        - Appends a JSON line to ``self._buffer``.
+        - May trigger :meth:`_flush_locked` automatically.
+        """
         if not self._log_file:
             self.start()
         now = datetime.now(timezone.utc)
@@ -74,7 +148,25 @@ class BatchLogger:
                 self._flush_locked()
 
     def flush(self) -> None:
-        """Public flush — acquires the buffer lock."""
+        """Force-write the current buffer to the log file.
+
+        Acquires the buffer lock and delegates to :meth:`_flush_locked`.
+        Safe to call from any thread.  A no-op when the buffer is empty
+        or ``start()`` has not been called.
+
+        On flush failure (``OSError``), the buffer is retained so entries
+        are not lost.  If the buffer has grown beyond
+        ``MAX_METRICS_BUFFER_SIZE`` (because of repeated flush failures),
+        the oldest entries are silently dropped to prevent unbounded
+        memory growth, and a warning is emitted.
+
+        Side effects
+        ------------
+        - Under normal operation: writes buffered JSON lines to disk and
+          clears the buffer.
+        - Under persistent failure: may drop oldest entries from the
+          buffer and emit a ``WARNING`` log.
+        """
         if not self._buffer or not self._log_file:
             return
         try:
@@ -94,7 +186,22 @@ class BatchLogger:
                 )
 
     def _flush_locked(self) -> None:
-        """Flush the buffer to disk.  Caller must hold ``self._buffer_lock``."""
+        """Write all buffered JSON lines to disk and clear the buffer.
+
+        **Caller must hold ``self._buffer_lock``** before calling this method.
+        The method is a no-op if the buffer is empty or the log file has not
+        been opened via :meth:`start`.
+
+        Lines are written in append mode (``"a"``) so multiple flushes
+        safely share the same file.  Each buffered string is written as-is
+        followed by a newline separator.
+
+        Raises
+        ------
+        OSError
+            Propagated to the caller (caught by the public :meth:`flush`
+            method, which retains the buffer on failure).
+        """
         if not self._buffer or not self._log_file:
             return
         with open(self._log_file, "a") as f:

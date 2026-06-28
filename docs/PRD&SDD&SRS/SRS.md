@@ -1,30 +1,23 @@
 # Software Requirements Specification (SRS)
 ## Turkish Corpus Translation Benchmark — Feasibility Study
-### (Apple Silicon MPS Development → NVIDIA H200 Production)
 
 ---
 
 | **Document** | Software Requirements Specification |
 |---|---|
 | **Project** | Turkish ClearNet Corpus Translation Benchmark |
-| **Version** | 1.3 |
+| **Version** | 1.4 |
 | **Status** | Implemented |
 | **Author** | — |
 | **Date** | 2026-06-19 |
-| **Revised** | 2026-06-23 |
-| **References** | PRD v3.6 |
+| **Revised** | 2026-06-28 |
+| **References** | PRD v3.7 |
 
 ---
 
-> ⚠️ **Historical spec.** This SRS describes the *requirements* at design time.
+> ℹ️ **Aligned spec.** This SRS has been updated to reflect the *actual, workable optimizations* identified during benchmarking and execution.
 > The authoritative description of what the code *actually does* today is
-> [`ARCHITECTURE.md`](ARCHITECTURE.md). Where they disagree,
-> **ARCHITECTURE is correct.** Several requirements (tensor parallelism across
-> 2 GPUs, CUDA graph decode, TensorRT) were implemented but subsequently gated
-> off or broken — see
-> [ARCHITECTURE §8 Feature Status](ARCHITECTURE.md#8-feature-status-the-truth-table).
-> This document is included for understanding the original requirements; the
-> actual feature wiring lives in ARCHITECTURE.
+> [`ARCHITECTURE.md`](ARCHITECTURE.md). Failed optimizations (TensorRT, vLLM, manual CUDA graphs replaying, FP8 KV-Cache) have been deactivated or marked as such, and the focus is shifted to verified paths: Data Parallelism (DP=2), Pinned-Memory pipeline, Decode Loop Vectorization, and Vocabulary-Pruned / Bilingual Custom Decoder architectures.
 
 ## Revision History
 
@@ -34,6 +27,8 @@
 | 1.1 | 2026-06-21 | Model corrected to Gemma 3 architecture. TranslateGemma 4B added for macOS dev. Tokenizer thread-safety, single-pass shuffle, powermetrics caching, frozen config, single-GPU CUDA support, E2E test suite (20 assertions). Real data integration (FineWeb sample-10BT + OPUS-100). |
 | 1.2 | 2026-06-22 | Dependency versions updated to match v3.3 deployment. Quality metrics updated: BERTScore + COMET-22 + COMET-Kiwi replace BLEU + chrF++ as primary. Resume/checkpoint with position tracking added. Speculative decoding requirement added. orjson added to data pipeline. External sort shuffle added. |
 | 1.3 | 2026-06-23 | v3.6 support: NLLB-200 encoder-decoder backend, model presets registry (11 presets), quantization levels (bf16/fp16/int8/int4), Ministral 3B, Gemma4 QAT (ct/int4/q4_0), DiffusionGemma 26B. --nllb/--model/--quantization/--paged-attention/--continuous-batching CLI flags. Dead code cleanup. |
+| 1.4 | 2026-06-28 | Aligned requirements with actual optimizations: switched parallel execution from tensor-parallel to replicated process Data Parallelism (DP=2) to achieve near-linear 1.97x scaling, added Vocabulary Pruning + Custom decode loop requirements to meet the 200K+ TPS goal, removed FP8 KV cache / TensorRT / vLLM from production specifications, and updated quality metrics to use xCOMET-lite and paired bootstrap significance gates. |
+| 1.5 | 2026-06-28 | Split execution backends into hardware-isolated files (`*_cuda.py` and `*_mps.py`) with transparent delegation proxies in the main directory. Codified distinct roles for MPS (verification, local QA, metric weight calibration) vs CUDA (extreme H200 hot-path performance). |
 
 ---
 
@@ -48,15 +43,14 @@ This SRS defines the complete set of functional and non-functional requirements 
 The System is a **single-node inference benchmark** that supports **two hardware backends**:
 
 - **Development**: Apple Silicon (M1–M4 series) via PyTorch MPS — single-device inference at BF16/FP16.
-- **Production**: 2× NVIDIA H200 GPUs via CUDA — FP8 quantisation with tensor parallelism (TP=2).
+- **Production**: 2× NVIDIA H200 GPUs via CUDA — FP8 precision with data parallelism (DP=2).
+
+To isolate production optimizations from development constraints, the execution backends are split into separate files (`*_cuda.py` and `*_mps.py` variants) under `benchmark/inference/backends/`. The core modules (`autoregressive.py` and `nllb.py`) serve as system-agnostic dispatchers that dynamically delegate execution to the appropriate backend.
 
 The System:
 - Auto-detects the available backend at startup.
-- Loads and serves a translation model (default TranslateGemma 4B;
-  12B for production) for English → Turkish translation via the model-agnostic
-  backend protocol (autoregressive, encoder-decoder/NLLB, diffusion, TensorRT,
-  custom plugin).
-- Streams input text, translates for a fixed 2 h window, collects metrics, and runs a quality benchmark.
+- Loads and serves a translation model (e.g. NLLB-600M, custom Bilingual-240M, or TranslateGemma 4B) for English → Turkish translation via the model-agnostic backend protocol (autoregressive, encoder-decoder, custom plugin).
+- Streams input text, translates, collects metrics, and runs a quality benchmark.
 - Produces a report suitable for extrapolating full-ClearNet translation cost and duration.
 
 ### 1.3 Document Conventions
@@ -81,16 +75,16 @@ The System:
 │  Sample      │                      │   Harness                │                      │  Generator   │
 │  (NVMe/SSD)  │                      │                          │                      │              │
 └──────────────┘                      │  ┌──────────────────┐    │                      └──────┬───────┘
-                                      │  │ TranslateGemma   │    │                             │
-┌──────────────┐    Device metrics    │  │ 12B (FP8/BF16)  │    │   Translated Text          │
-│  pynvml /    │ ◄──────────────────  │  │ CUDA(TP=2) or   │    │ ──────────────────────────►│
-│  MPS monitor │                      │  │ MPS (single dev)│    │                      ┌──────▼───────┐
+                                      │  │ NLLB-600M /      │    │                             │
+┌──────────────┐    Device metrics    │  │ Bilingual-240M   │    │   Translated Text          │
+│  nvidia-ml-py│ ◄──────────────────  │  │ CUDA (DP=2) or   │    │ ──────────────────────────►│
+│  MPS monitor │                      │  │ MPS (single dev) │    │                      ┌──────▼───────┐
 └──────────────┘                      │  └──────────────────┘    │                      │  Final       │
                                       │                          │                      │  Report      │
 ┌──────────────┐    Reference set     │  ┌──────────────────┐    │   Quality Scores      │  (JSON + MD)  │
 │  Golden      │ ◄──────────────────  │  │ Quality          │    │ ──────────────────────►│              │
 │  References  │                      │  │ Benchmark        │    │                      └──────────────┘
-└──────────────┘                      │  │ (BERTS/COMET/chrF│    │
+└──────────────┘                      │  │ (xCOMET/COMET-QE/│    │
                                       │  │  BLEU/chrF++)    │    │
                                       └──────────────────────────┘
 ```
@@ -101,9 +95,8 @@ The System:
 |---|---|---|---|
 | **Backend Detection** | Auto-detect CUDA, MPS, or CPU; select precision and parallelism strategy | ~1 s | Any |
 | **Warm-up** | 10–20 small batches to prime device kernels and clock speeds | ~30 s | Any |
-| **Dry-Run** | Full pipeline for 10 batches; validate all subsystems (smoke test before the 2 h run) | ~5 min | Apple Silicon / H200 |
-| **Translation Run** | Continuous batched inference with full metric logging | 120 min | H200 (primary); Apple Silicon (scaled-down dev-test) |
-| **Quality Benchmark** | Evaluate translation quality on the golden reference set | ~5 min | Any |
+| **Translation Run** | Continuous batched inference with full metric logging | |H200 (primary); Apple Silicon (scaled-down dev-test) |
+| **Quality Benchmark** | Evaluate translation quality | ~5 min | Any |
 | **Report Generation** | Aggregate all logs, compute statistics, produce report | ~1 min | Any |
 
 ---
@@ -114,9 +107,9 @@ The System:
 
 | ID | Requirement | Priority | Verification |
 |---|---|---|---|
-| FR-01 | The System shall auto-detect the available compute backend at startup (`torch.cuda.is_available()`, `torch.backends.mps.is_available()`, CPU fallback) and load TranslateGemma 12B onto the detected device. On CUDA: FP8 via `transformer-engine`. On MPS: BF16 via native PyTorch. The backend shall be logged and included in the report. | P0 | Model loads without error on both backends; `torch.cuda.memory_allocated()` reports ~12 GB per GPU (CUDA) or `torch.mps` reports valid device (MPS). |
-| FR-02 | The System shall adapt parallelism to the backend: **CUDA** — tensor-parallel sharding across exactly 2 GPUs (column/row sharding, NCCL all-reduce); **MPS** — single-device inference (all layers on the one MPS device); **CPU** — single-device (all layers on CPU, for debugging only). | P0 | CUDA: all 28 Gemma layers have parameters resident on each GPU. MPS: model is on `mps:0`. CPU: model is on CPU. Forward pass runs without cross-device copy errors. |
-| FR-03 | The System shall load the Gemma tokeniser (SentencePiece `.model` file) and apply the official chat template for the translation task. | P0 | Tokeniser encodes/decodes round-trip without corruption. |
+| FR-01 | The System shall auto-detect the available compute backend at startup (`torch.cuda.is_available()`, `torch.backends.mps.is_available()`, CPU fallback) and load supported model presets (NLLB models, TranslateGemma 4B, or MADLAD 3B) onto the detected device. On CUDA: FP8 weights. On MPS: BF16 via native PyTorch. The backend shall be logged and included in the report. | P0 | Model loads without error on both backends; `torch.cuda.memory_allocated()` reports valid memory usage per GPU. |
+| FR-02 | The System shall adapt parallelism to the backend: **CUDA** — data-parallel replication (DP=2) across exactly 2 GPUs (independent processing on separate GPUs, zero-overhead scaling); **MPS** — single-device inference (all layers on the one MPS device); **CPU** — single-device (all layers on CPU, for debugging only). | P0 | CUDA: identical model copies run on each GPU, translating independent batch slices. Forward pass runs without cross-device copy errors. |
+| FR-03 | The System shall load the model tokenizer (SentencePiece BPE `.model` file) and verify joint EN-TR vocabulary coverage. | P0 | Tokenizer encodes/decodes round-trip without corruption. |
 | FR-04 | The System shall use the best available attention kernel for each backend: FlashAttention-2 on CUDA, PyTorch native `scaled_dot_product_attention` on MPS. | P1 | Attention kernel is verified via `torch.backends.cuda.flash_sdp_enabled()` (CUDA) or `torch.backends.mps.is_available()` path check (MPS). |
 | FR-05 | The System shall support an automatic batch-size tuner that increases batch size until it approaches OOM, then backs off by 15 % to establish the maximum sustainable batch size. | P1 | Batch-size tuner runs at startup; final batch size is logged. |
 
@@ -125,6 +118,7 @@ The System:
 | ID | Requirement | Priority | Verification |
 |---|---|---|---|
 | FR-06 | The System shall read input text from one or more JSONL files where each line contains a JSON object with at minimum a `"text"` field. | P0 | File is opened and first line is parsed successfully. |
+| FR-06b | The System shall strictly enforce PyArrow and Parquet pre-tokenization. If the pre-tokenized cache is missing at startup, it shall dynamically process the raw input dataset into a model-specific pre-tokenized Parquet file before starting the benchmark, completely bypassing dynamic CPU-bound tokenization during the translation loop. | P0 | Check that no dynamic tokenizer encoding occurs during active benchmark; Parquet file existence checked in ~/.cache/tr_benchmark/pretokenized/. |
 | FR-07 | The System shall chunk input text into segments of at most `max_input_tokens` (configurable, default 512) tokens to avoid exceeding the model's context window. | P0 | No chunk exceeds `max_input_tokens` when tokenised. |
 | FR-08 | The System shall filter out input segments that contain < 10 tokens (too short to be meaningful) or > 95 % non-ASCII garbage characters. | P1 | Filtered segments are counted and logged; throughput calculation excludes them. |
 | FR-09 | The System shall use an async prefetch pipeline with at least 4 worker threads so that tokenisation and data loading do not stall the GPU. | P0 | GPU idle time due to data starvation is < 5 % of total runtime. |
@@ -136,7 +130,7 @@ The System:
 |---|---|---|---|
 | FR-11 | The System shall run a continuous batched inference loop that: (a) dequeues pre-tokenised input batches, (b) runs `model.generate()`, (c) decodes output token IDs to Turkish text, (d) writes output to disk in JSONL format. | P0 | Output file is non-empty after 60 s; all lines are valid JSON. |
 | FR-12 | The System shall produce output JSONL lines containing: `input_text`, `translated_text`, `input_tokens`, `output_tokens`, `latency_ms`, `timestamp_utc`. | P0 | Spot-check 10 lines after run; all fields present and plausible. |
-| FR-13 | The System shall run for exactly `target_duration_seconds` (default 7 200 = 2 h), measured from the completion of warm-up to the last batch completion. Batches in-flight at the 2 h mark shall be allowed to complete ("graceful stop") but no new batches shall be started. | P0 | Actual runtime is within ±60 s of the target. |
+| FR-13 | The System shall run for exactly `target_duration_seconds` (10 mins), measured from the completion of warm-up to the last batch completion. Batches in-flight at the 10 minutes mark shall be allowed to complete ("graceful stop") but no new batches shall be started. | P0 | Actual runtime is within ±60 s of the target. |
 | FR-14 | The System shall log a heartbeat every 10 s with: elapsed time, batches completed, tokens translated so far, current tokens/second. | P0 | Heartbeat lines appear in stdout and the log file. |
 | FR-15 | Generation parameters shall be configurable via a YAML config file and shall default to: `max_new_tokens=512`, `temperature=0.0` (greedy decoding), `do_sample=False`, `num_beams=1`. | P0 | Config is read at startup; parameters are logged in the output. |
 
@@ -156,10 +150,13 @@ The System:
 |---|---|---|---|
 | FR-21 | The System shall load a golden reference set from a JSONL file containing at minimum `source_text` (English) and `reference_translation` (Turkish) fields. | P0 | File is loaded; `len(references) == 1000`. |
 | FR-22 | The System shall translate all 1 000 source sentences using the same model, config, and decoding parameters used in the main run. | P0 | Translation completes for all 1 000 sentences. |
-| FR-23 | The System shall compute **BERTScore** (bert-base-multilingual-cased) against the references as a semantic-level metric. (The original spec listed DeBERTa-xlarge-mnli; the implementation uses bert-base-multilingual-cased — see `quality/metrics_bertscore.py:32`.) | P0 | BERTScore system score is in [0, 1]; formatted to 4 decimals. |
+| FR-23 | The System shall compute **xCOMET-lite** (Unbabel/xcomet-lite) as the primary Tier 1 quality metric (reference-free or reference-based). | P0 | xCOMET-lite system score is formatted to 4 decimals. |
 | FR-24 | The System shall compute **COMET-Kiwi** (reference-free) using the `Unbabel/wmt22-cometkiwi-da` model for quality estimation without reference dependency. | P0 | COMET-Kiwi score is in [0, 1]; formatted to 4 decimals. |
 | FR-25 | The System shall compute **COMET-22** (reference-based) using the `Unbabel/wmt22-comet-da` model, reporting the system score (mean over all segments). | P0 | COMET score is in [0, 1]; formatted to 4 decimals. |
-| FR-26 | The System shall report per-segment COMET scores and flag segments scoring < 0.4 for manual review. | P1 | Low-score segments are listed in the benchmark output. |
+| FR-25b | The System shall compute **MetricX-24** (reference-based quality estimation) score, reporting the system-level score to assess translation quality. | P0 | MetricX-24 score is formatted to 4 decimals. |
+| FR-26 | The System shall run a **paired bootstrap significance test** (with 95% CI) comparing candidate model segments against the baseline model to statistically validate quality differences. | P0 | Output logs show observed difference, CI bounds, and significance indicator. |
+| FR-26b | The System shall execute translation of a designated 50-sentence representative English corpus on the Apple Silicon (MPS) development backend across all candidate models to generate comparative outputs. The candidate translations shall be rated by automated metrics (chrF++, spBLEU, COMET models, and MetricX-24). | P0 | Output logs confirm 50 sentences translated and scored across all presets. |
+| FR-26c | The System shall support human-in-the-loop validation using a blind evaluation webpage. Evaluators shall blindly rate model outputs. Ratings shall be used to softmax-normalize metric weights to generate a single composite quality score (TTQS). Production H200 execution code is subsequently locked and hardened around the highest-scoring model. | P0 | Verified that overall TTQS is calculated using softmax-derived weights from evaluator feedback records. |
 
 ### 3.6 Report Generation
 
@@ -223,7 +220,7 @@ The System:
 | NFR-15 | On H200/Linux: The System shall run inside a Docker container built from a provided `Dockerfile`. | P0 | `docker build && docker run` succeeds on the target H200 node. |
 | NFR-16 | The Docker image shall pin exact versions of all Python packages. | P0 | `Dockerfile` uses `==` constraints, not `>=`. |
 | NFR-17 | The System shall read all configuration from a single YAML file. | P0 | Changing the YAML changes behaviour without rebuilding. |
-| NFR-18 | On Apple Silicon/macOS: The System shall run natively via `pip install -e . && python -m benchmark --config config.yaml` without Docker (macOS Docker does not support GPU passthrough). CUDA-specific dependencies (`transformer-engine`, `nvidia-ml-py`, `flash-attn`) shall be conditionally imported and gracefully skipped when the backend is MPS. | P0 | `pip install -e . && python -m benchmark --config config.yaml --dry-run` succeeds on an M-series Mac with ≥ 32 GB Unified Memory. |
+| NFR-18 | On Apple Silicon/macOS: The System shall run natively via `pip install -e . && python -m benchmark --config config.yaml` without Docker (macOS Docker does not support GPU passthrough). Apple Silicon (MPS) and NVIDIA (CUDA) execution logic shall be structurally isolated into dedicated, platform-specific files (`*_mps.py` vs `*_cuda.py`) with transparent system-agnostic dispatcher facades in the main directory, avoiding environment dependency pollution and allowing target-specific optimization. | P0 | `pip install -e . && python -m benchmark --config config.yaml --dry-run` succeeds on an M-series Mac with ≥ 32 GB Unified Memory. |
 
 ---
 
@@ -292,11 +289,11 @@ The System:
 
 | ID | Constraint |
 |---|---|
-| SC-01 | The System shall operate on: (a) **Apple Silicon Mac** (M1–M4 series, ≥ 32 GB Unified Memory) for development/smoke-testing with MPS backend; (b) **2× NVIDIA H200 GPUs** with NVLink / NVSwitch connectivity for the production 2 h benchmark run. The codebase shall be the same; only the config and hardware differ. |
+| SC-01 | The System shall operate on: (a) **Apple Silicon Mac** (M1–M4 series, ≥ 32 GB Unified Memory) for development/smoke-testing with MPS backend; (b) **2× NVIDIA H200 GPUs** with NVLink / NVSwitch connectivity for the production 2 h benchmark run. Platform execution logic is isolated into target-specific files (`*_mps.py` vs `*_cuda.py`) with system-agnostic facades, sharing identical model presets and data loader schema. |
 | SC-02 | The System shall not require more than 256 GB of system RAM (H200 node) or more than the available Unified Memory minus 4 GB (Apple Silicon). |
 | SC-03 | The System shall not produce more than 500 GB of output data over a single 2 h run. |
 | SC-04 | The System shall be implemented in Python 3.11+ with PyTorch 2.4+ as the primary ML framework. |
-| SC-05 | **CUDA**: FP8 inference shall use the `transformer-engine` library (NVIDIA) or PyTorch's native `torch.ao.float8` with `te.Linear` replacements and `fp8_autocast` context. **MPS**: BF16 inference via native PyTorch; FP8 is not supported on MPS. Conditional imports prevent import errors on either platform. GPU telemetry uses `nvidia-ml-py` (replaces deprecated `pynvml`). |
+| SC-05 | **CUDA**: FP8 inference shall use the `transformer-engine` library (NVIDIA) or PyTorch's native `torch.ao.float8` with `te.Linear` replacements and `fp8_autocast` context (implemented in `*_cuda.py`). **MPS**: BF16 inference via native PyTorch (implemented in `*_mps.py`); FP8 is not supported on MPS. Platform execution files prevent dynamic runtime import errors. GPU telemetry uses `nvidia-ml-py` (replaces deprecated `pynvml`). |
 | SC-06 | The System shall not depend on any paid or proprietary software beyond NVIDIA's freely available CUDA stack (CUDA runtime only; no paid licences). On macOS, the CUDA dependencies are not required. |
 | SC-07 | Network access is not required during the translation run (model weights and data are pre-staged). |
 
@@ -312,7 +309,8 @@ The System:
 | D-03 | HuggingFace Transformers | ≥ 4.47.0 (4.57.6 deployed) |
 | D-07 | SacreBLEU | ≥ 2.4.0 (2.6.0 deployed) |
 | D-08 | COMET (Unbabel) | ≥ 2.2.0 (2.2.7 deployed) |
-| D-12 | TranslateGemma 12B checkpoint | BF16 (MPS) and FP8 (CUDA) variants pre-quantised and verified |
+| D-08b | PyArrow | ≥ 15.0.0 (15.0.2 deployed) — for enforced pre-tokenized cache loading |
+| D-12 | NLLB, TranslateGemma 4B, MADLAD 3B checkpoints | BF16 (MPS) and FP8/BF16 (CUDA) variants pre-quantised and verified |
 | D-13 | ClearNet English sample | ≥ 20 GB uncompressed on local SSD/NVMe |
 | D-14 | Golden reference set | 1 000 EN→TR pairs (1,960 deployed) |
 
@@ -353,6 +351,87 @@ The System:
 | G4 — Measure translation quality | FR-21 through FR-26, NFR-05 |
 | G5 — Produce full-dataset estimate | FR-27 through FR-30 |
 | G6 — Reproducibility | FR-10, NFR-09, NFR-10, NFR-11, NFR-15, NFR-16 |
+
+---
+
+## 10. Performance Verification & Measurement Plan (Merged Plan)
+
+To validate non-functional constraints and obtain empirical constants for production calculations, the system uses a 24-point measurement plan categorized by priority.
+
+### 10.1 Priority Classification
+*   **P0 (Extrapolation & Cost)**: Directly impacts final dataset extrapolation estimates.
+*   **P1 (Memory & Compute Calibration)**: Calibration constants for batch-size tuners, preventing OOM crashes.
+*   **P2 (Throughput & Latency Baselines)**: Individual feature-level speedup/memory gains.
+*   **P3 (Pipeline & Data Constants)**: Queue sizes, I/O rates, and telemetry collection overheads.
+*   **P4 (Quality Targets & Degradation)**: Long-run quality decay and significance thresholds.
+
+### 10.2 The 24 Core Measurements
+
+#### P0 — Extrapolation & Cost
+*   **M0.1 — Sustained Throughput Baseline**: Measures steady-state tokens/sec for each model/backend/precision over a minimum of 1 hour. Target variance (CV) across 3 runs ≤ 5%.
+*   **M0.2 — Tokenization Overhead**: Measures character-per-token and bytes-per-token ratios on ClearNet data. Replaces theoretical constant `BYTES_PER_INPUT_TOKEN = 4.0`.
+*   **M0.3 — Corpus Token Count Validation**: Validates the non-TR fraction of the 6.23T target tokens using language detection sampling.
+*   **M0.4 — Real GPU Cost per Hour**: Cloud provider or amortized hardware costs for H200 instances.
+*   **M0.5 — Throughput Degradation over Time**: Run 4-hour benchmarks to measure slope of TPS over time and calculate max stable extrapolation horizons.
+
+#### P1 — Memory & Compute Calibration
+*   **M1.1 — Actual GPU Memory Budget**: Measures CUDA context, workspace, and model memory overheads to establish safe headrooms.
+*   **M1.2 — KV-Cache Memory per Token**: Computes and allocates dummy caches to verify the actual bytes per token (head_dim × kv_heads × layers × precision).
+*   **M1.3 — Batch-Size Ceiling**: Binary searches optimal batch size for highest throughput rather than just OOM limits.
+*   **M1.4 — torch.compile Memory Overhead**: Records VRAM compilation spikes and steady-state allocations under `mode="reduce-overhead"`.
+*   **M1.5 — TE FP8 Memory & Throughput**: Compares FP8 vs BF16 memory usages and sustained execution speeds.
+
+#### P2 — Throughput & Latency Baselines (Isolation Runs)
+*   **M2.1 — torch.compile Speedup**: Measures Welch t-test significance of compiler vs eager mode.
+*   **M2.2 — Continuous Batching Throughput**: Compares dynamic iteration scheduling vs static batching.
+*   **M2.3 — Speculative Decoding Throughput**: Measures serial speedup factor at `batch_size=1`.
+*   **M2.4 — Flash SDPA Speedup**: Quantifies FlashAttention speed improvement.
+*   **M2.5 — Pinned Memory H2D Speedup**: Times transfers of pinned vs pageable tensors.
+*   **M2.6 — PagedAttention Memory Savings**: Compares block-based allocation vs contiguous pre-allocation memory.
+*   **M2.7 — INT4/INT8 Weight Quantization Speedup**: Measures memory savings and execution speed comparison.
+*   **M2.8 — Utility Speedups**: Measures speed improvements of `orjson`, `pigz`, and vectorized filters.
+
+#### P3 — Pipeline & Data Constants
+*   **M3.1 — Queue Wait Latency**: Times thread block durations in `AsyncPipeline`.
+*   **M3.2 — Parquet Read/Write Speed**: Records disk-bound throughput of PyArrow Parquet files.
+*   **M3.3 — Prometheus Collection Latency**: Measures overhead of telemetry polling.
+*   **M3.4 — Host Memory Leakage**: Monitors RAM usage growth over 2-hour runs.
+
+#### P4 — Quality Targets & Degradation
+*   **M4.1 — FP8 Quality Ceiling**: Calculates quality degradation of FP8 vs BF16 across Golden References.
+*   **M4.2 — Speculative Acceptance Rate**: Tracks percentage of tokens accepted from draft models.
+*   **M4.3 — Morphological Pre-processing Impact**: Measures BLEU gains from CSE segmentations.
+*   **M4.4 — Bootstrap Gate Calibration**: Establishes significance thresholds for paired bootstrap tests.
+
+---
+
+## 11. Implementation & Verification Matrix (Merged Plan)
+
+### 11.1 Priority & Effort Matrix
+
+| Priority | Tier | Optimization | Expected Impact | Implementation Effort | Dependencies |
+|---|---|---|---|---|---|
+| 🔴 P0 | 1 | Data Parallelism (DP=2) | ~2.0× speedup | Low (1-2 days) | None |
+| 🔴 P0 | 2 | Decode Loop Vectorization | ~1.2× speedup | Low (1 day) | None |
+| 🟡 P1 | 3 | PagedAttention (AR Path) | ~1.8× speedup | Medium (2-3 days) | None |
+| 🟡 P1 | 4 | torch.compile Upgrade | ~1.3× speedup | Medium (1-2 days) | PyTorch 2.14+ |
+| 🟢 P2 | 5 | Pipeline Overlap | ~1.1× speedup | Low (1 day) | None |
+
+### 11.2 Verification Commands
+To verify the performance steps and regression boundaries, run the following benchmark commands:
+```bash
+# Baseline Run (1 GPU, bs=512)
+./run.sh --model translategemma-4b-bf16 --batch-size 512 --duration 300
+
+# Tier 1 (Data Parallelism - 2 GPUs)
+./run.sh --model translategemma-4b-bf16 --batch-size 512 --data-parallel 2 --duration 300
+
+# Tier 3 (PagedAttention)
+./run.sh --model translategemma-4b-bf16 --batch-size 2048 --data-parallel 2 --paged-attention --duration 300
+
+# Quality Verification Gate (Mandatory)
+./run.sh --model translategemma-4b-bf16 --benchmark-only --batch-size 64
+```
 
 ---
 

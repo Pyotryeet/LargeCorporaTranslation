@@ -55,9 +55,45 @@ COMET_TARGET_MIN = QUALITY_COMET_TARGET
 
 @dataclass
 class QualityResults:
+    """Aggregated translation quality results from the benchmark.
+
+    Holds scores from all evaluated metrics (neural and n-gram), along
+    with metadata about the benchmark run.  Provides a ``to_dict``
+    serialization method and a ``scores_meet_targets`` property that
+    checks every available score against configured quality targets.
+
+    Attributes
+    ----------
+    comet : dict
+        COMET-22 reference-based neural metric result (keys: ``system_score``,
+        ``segments_scores``, optional ``error``).
+    comet_kiwi : dict
+        COMET-Kiwi reference-free neural metric result (same structure as
+        ``comet``).
+    bertscore : dict
+        BERTScore reference-based neural metric result.
+    metricx : dict
+        MetricX-24 reference-based neural metric result (lower ``system_score``
+        is better).
+    bleu : dict
+        BLEU n-gram overlap score (keys: ``score`` or ``bleu``).
+    chrf : dict
+        chrF++ character + word n-gram overlap score.
+    num_references : int
+        Total number of reference sentence pairs loaded.
+    num_translated : int
+        Number of sentences for which a non-empty translation was produced.
+    duration_seconds : float
+        Wall-clock duration of the full benchmark (translation + metric
+        computation).
+    backend_info : dict
+        Arbitrary metadata about the inference backend (e.g. version, dtype,
+        quantization status).
+    """
     comet: dict = field(default_factory=dict)
     comet_kiwi: dict = field(default_factory=dict)
     bertscore: dict = field(default_factory=dict)
+    xcomet: dict = field(default_factory=dict)
     bleu: dict = field(default_factory=dict)
     chrf: dict = field(default_factory=dict)
     num_references: int = 0
@@ -66,9 +102,23 @@ class QualityResults:
     backend_info: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
+        """Serialize quality results to a plain dictionary.
+
+        Converts all metric dicts and metadata into a JSON-compatible dict
+        suitable for downstream reporting or checkpoint serialization.  The
+        ``duration_seconds`` field is rounded to one decimal place.
+
+        Returns
+        -------
+        dict
+            Flat dictionary with keys for every metric group (``comet``,
+            ``comet_kiwi``, ``bertscore``, ``metricx``, ``bleu``, ``chrf``),
+            as well as ``num_references``, ``num_translated``,
+            ``duration_seconds``, and ``backend_info``.
+        """
         return {"comet": self.comet,
                  "comet_kiwi": self.comet_kiwi, "bertscore": self.bertscore,
-                 "bleu": self.bleu, "chrf": self.chrf,
+                 "xcomet": self.xcomet, "bleu": self.bleu, "chrf": self.chrf,
                  "num_references": self.num_references,
                  "num_translated": self.num_translated,
                  "duration_seconds": round(self.duration_seconds, 1),
@@ -94,7 +144,9 @@ class QualityResults:
             QUALITY_BLEU_TARGET,
             QUALITY_CHRF_TARGET,
             QUALITY_COMET_TARGET,
+            QUALITY_COMET_KIWI_TARGET,
             QUALITY_BERTSORE_TARGET,
+            QUALITY_XCOMET_TARGET,
         )
 
         targets_ok: list[bool] = []
@@ -112,7 +164,12 @@ class QualityResults:
         # COMET-Kiwi (reference-free, when available)
         ck = self.comet_kiwi.get("system_score")
         if ck is not None and isinstance(ck, (int, float)):
-            targets_ok.append(float(ck) >= QUALITY_COMET_TARGET)
+            targets_ok.append(float(ck) >= QUALITY_COMET_KIWI_TARGET)
+
+        # xCOMET-lite (reference-free neural QE, when available)
+        xc = self.xcomet.get("system_score")
+        if xc is not None and isinstance(xc, (int, float)):
+            targets_ok.append(float(xc) >= QUALITY_XCOMET_TARGET)
 
         # BLEU (n-gram overlap, when available)
         bl = self.bleu.get("score") or self.bleu.get("bleu")
@@ -269,6 +326,39 @@ def _compute_metrics_parallel(
     references: list[str],
     sources: list[str],
 ) -> tuple[dict, dict, dict, dict, dict]:
+    """Compute all quality metrics in parallel via a thread pool.
+
+    Dispatches six metric computations (COMET-22, COMET-Kiwi, BERTScore,
+    MetricX-24, BLEU, and chrF++) to separate threads.  Each metric has a
+    per-metric timeout (default 600 s); if a metric times out or raises an
+    exception its result slot is filled with an error dict so that partial
+    results are not discarded.
+
+    Parameters
+    ----------
+    hypotheses : list[str]
+        Model-generated translation strings, one per source sentence.
+    references : list[str]
+        Ground-truth reference translation strings, same length as
+        ``hypotheses``.
+    sources : list[str]
+        Original source-language sentences, same length as
+        ``hypotheses``.
+
+    Returns
+    -------
+    tuple[dict, dict, dict, dict, dict]
+        Six-tuple of result dicts in order: (comet, comet_kiwi,
+        bertscore, metricx, bleu, chrf).  Each dict has at minimum the
+        keys ``system_score``, ``segments_scores``, and optionally
+        ``error`` when the metric failed or timed out.
+
+    Side effects
+    ------------
+    Logs warnings via ``logger.warning`` when an individual metric times
+    out or encounters an exception, but does not propagate the error —
+    the overall benchmark will continue and report partial results.
+    """
     from concurrent.futures import TimeoutError
 
     timeout_per_metric = 600  # seconds — per-metric timeout
@@ -279,14 +369,36 @@ def _compute_metrics_parallel(
         future_comet = pool.submit(compute_comet, sources, hypotheses, references)
         from benchmark.quality.metrics_comet import compute_comet_kiwi
         from benchmark.quality.metrics_bertscore import compute_bertscore
+        from benchmark.quality.metrics_xcomet import compute_xcomet
         future_comet_kiwi = pool.submit(compute_comet_kiwi, sources, hypotheses)
         future_bertscore = pool.submit(compute_bertscore, references, hypotheses)
+        future_xcomet = pool.submit(compute_xcomet, sources, hypotheses)
         future_bleu = pool.submit(compute_bleu, hypotheses, [[r] for r in references])
         future_chrf = pool.submit(compute_chrf, hypotheses, [[r] for r in references])
 
         # Collect results with per-metric timeouts; return partial results
         # when a metric times out rather than losing all metrics.
         def _get_with_timeout(future, name):
+            """Retrieve a future's result with a per-metric timeout.
+
+            If the future does not complete within ``timeout_per_metric`` seconds
+            or raises an exception, returns a stub dict with ``system_score=None``
+            and an ``error`` key so that the overall benchmark is not blocked.
+
+            Parameters
+            ----------
+            future : concurrent.futures.Future
+                The submitted metric computation future.
+            name : str
+                Human-readable metric name for log messages (e.g. "COMET-22").
+
+            Returns
+            -------
+            dict
+                Metric result dict (on success) or error dict with keys
+                ``system_score`` (None), ``error`` (str), and
+                ``segments_scores`` (empty list).
+            """
             try:
                 return future.result(timeout=timeout_per_metric)
             except TimeoutError:
@@ -302,15 +414,25 @@ def _compute_metrics_parallel(
         comet = _get_with_timeout(future_comet, "COMET-22")
         comet_kiwi = _get_with_timeout(future_comet_kiwi, "COMET-Kiwi")
         bertscore = _get_with_timeout(future_bertscore, "BERTScore")
+        xcomet = _get_with_timeout(future_xcomet, "xCOMET-lite")
         bleu = _get_with_timeout(future_bleu, "BLEU")
         chrf = _get_with_timeout(future_chrf, "chrF++")
-    return comet, comet_kiwi, bertscore, bleu, chrf
+    return comet, comet_kiwi, bertscore, xcomet, bleu, chrf
 
 
 class QualityBenchmark:
     """Model-agnostic quality benchmark — works with any InferenceBackend."""
 
     def __init__(self, reference_path: str):
+        """Initialize the quality benchmark with a path to reference data.
+
+        Parameters
+        ----------
+        reference_path : str
+            Filesystem path to a JSON or JSONL file containing source-target
+            translation pairs.  The file format is determined by
+            ``ReferenceLoader``.
+        """
         self.reference_path = reference_path
 
     def run(self, engine, *, max_references: Optional[int] = None) -> QualityResults:
@@ -451,10 +573,9 @@ class QualityBenchmark:
             translate_duration, n,
         )
 
-        # ── Parallel metrics ──
-        logger.info("Computing quality metrics in parallel (COMET | COMET-Kiwi | BERTScore | BLEU | chrF++)...")
+        logger.info("Computing quality metrics in parallel (COMET | COMET-Kiwi | xCOMET-lite | BERTScore | BLEU | chrF++)...")
         metric_start = time.monotonic()
-        comet, comet_kiwi, bertscore, bleu, chrf = _compute_metrics_parallel(hypotheses, references, sources)
+        comet, comet_kiwi, bertscore, xcomet, bleu, chrf = _compute_metrics_parallel(hypotheses, references, sources)
         metric_duration = time.monotonic() - metric_start
         logger.info("All metrics computed in %.1f s (parallel)", metric_duration)
 
@@ -465,6 +586,7 @@ class QualityBenchmark:
 
         results = QualityResults(
             comet=comet, comet_kiwi=comet_kiwi, bertscore=bertscore,
+            xcomet=xcomet,
             bleu=bleu, chrf=chrf,
             num_references=len(references),
             num_translated=len([h for h in hypotheses if h]),
@@ -473,7 +595,8 @@ class QualityBenchmark:
         )
         logger.info("Quality benchmark complete in %.1fs", duration)
         logger.info(
-            "  BERTScore: %s, COMET-22: %s, COMET-Kiwi: %s",
+            "  xCOMET-lite: %s, BERTScore: %s, COMET-22: %s, COMET-Kiwi: %s",
+            xcomet.get('system_score', 'N/A'),
             bertscore.get('system_score', 'N/A'),
             comet.get('system_score', 'N/A'),
             comet_kiwi.get('system_score', 'N/A'),

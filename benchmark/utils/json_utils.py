@@ -73,16 +73,60 @@ class _SanitizingEncoder(json.JSONEncoder):
 
 
 def sanitized_dumps(obj, **kwargs) -> str:
-    """``json.dumps`` equivalent that handles non-finite floats.
+    """Serialize *obj* to a JSON string, replacing non-finite floats.
 
-    All keyword arguments are forwarded to ``json.dumps``.
+    Parameters
+    ----------
+    obj : Any
+        A JSON-serialisable Python object. May contain ``float('inf')``,
+        ``float('-inf')``, or ``float('nan')`` anywhere in the object graph.
+    **kwargs
+        Additional keyword arguments forwarded directly to ``json.dumps``
+        (e.g. ``indent``, ``ensure_ascii``, ``sort_keys``).
+
+    Returns
+    -------
+    str
+        A JSON string where non-finite floats have been replaced:
+        ``inf`` → ``1e308``, ``-inf`` → ``-1e308``, ``nan`` → ``null``.
+
+    Notes
+    -----
+    - Tuples are serialised as JSON arrays. A round-trip through
+      ``json.loads`` will produce ``list`` objects, not ``tuple``.
+    - The conversion is silent; no warning is raised for the
+      tuple-to-list round-trip behaviour or for the non-finite float
+      replacements.
     """
     return json.dumps(obj, cls=_SanitizingEncoder, **kwargs)
 
 
 def sanitized_dump(obj, fp, **kwargs) -> None:
-    """``json.dump`` equivalent that handles non-finite floats.
+    """Write *obj* as JSON to a file-like object, replacing non-finite floats.
 
-    All keyword arguments are forwarded to ``json.dump``.
+    Parameters
+    ----------
+    obj : Any
+        A JSON-serialisable Python object. May contain ``float('inf')``,
+        ``float('-inf')``, or ``float('nan')`` anywhere in the object graph.
+    fp : file-like object
+        A ``.write()``-supporting file-like object (e.g. ``io.StringIO``,
+        a file handle opened in text mode) to which the JSON output will
+        be written.
+    **kwargs
+        Additional keyword arguments forwarded directly to ``json.dump``
+        (e.g. ``indent``, ``ensure_ascii``, ``sort_keys``).
+
+    Returns
+    -------
+    None
+
+    Notes
+    -----
+    - Tuples are serialised as JSON arrays. A round-trip through
+      ``json.load`` will produce ``list`` objects, not ``tuple``.
+    - The conversion is silent; no warning is raised for the
+      tuple-to-list round-trip behaviour or for the non-finite float
+      replacements.
     """
     return json.dump(obj, fp, cls=_SanitizingEncoder, **kwargs)

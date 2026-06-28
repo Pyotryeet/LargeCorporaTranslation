@@ -52,21 +52,24 @@ def main():
     from benchmark.quality.metrics_chrf import compute_chrf
     from sacrebleu import corpus_chrf as _raw_chrf
 
+    chrf_scores: dict[str, float | None] = {}
+    chrfpp_scores: dict[str, float | None] = {}
+
     for mid in model_ids:
         hyps = hyps_by_model[mid]
         refs = [[src] for src in [e["source_text"] for e in data]]
         # chrF (char-only)
         try:
             chrf_result = _raw_chrf(hyps, refs, word_order=0, char_order=4)
-            chrf_score = round(chrf_result.score, 1)
+            chrf_scores[mid] = round(chrf_result.score, 1)
         except Exception:
-            chrf_score = None
+            chrf_scores[mid] = None
         # chrF++ (word+char)
         try:
             chrfpp_result = _raw_chrf(hyps, refs, word_order=2, char_order=4)
-            chrfpp_score = round(chrfpp_result.score, 1)
+            chrfpp_scores[mid] = round(chrfpp_result.score, 1)
         except Exception:
-            chrfpp_score = None
+            chrfpp_scores[mid] = None
         # Per-segment chrF++
         try:
             seg_scores = [round(_raw_chrf([h], [r], word_order=2, char_order=4).score, 1)
@@ -74,34 +77,36 @@ def main():
         except Exception:
             seg_scores = [None] * len(hyps)
 
-        print(f"  {mid}: chrF={chrf_score}, chrF++={chrfpp_score}")
+        print(f"  {mid}: chrF={chrf_scores[mid]}, chrF++={chrfpp_scores[mid]}")
 
         for i in range(len(data)):
             all_metrics.append({
                 "source_id": data[i]["source_id"],
                 "model_id": mid,
-                "chrf": chrf_score if i == 0 else None,
-                "chrf_pp": chrfpp_score if i == 0 else None,
+                "chrf": chrf_scores[mid] if i == 0 else None,
+                "chrf_pp": chrfpp_scores[mid] if i == 0 else None,
                 "chrf_seg": seg_scores[i],
             })
 
     # ── 3 & 4. BLEU / SacreBLEU ─────────────────────────────────────────
     print("\n--- BLEU / SacreBLEU ---")
+    bleu_scores: dict[str, float | None] = {}
     for mid in model_ids:
         hyps = hyps_by_model[mid]
         refs = [[e["source_text"]] for e in data]
         try:
             from benchmark.quality.metrics_bleu import compute_bleu
             bleu_result = compute_bleu(hyps, refs)
-            bleu_score = bleu_result.get("score")
+            bleu_scores[mid] = bleu_result.get("score")
         except Exception as e:
             print(f"  {mid}: BLEU ERROR — {str(e)[:100]}")
-            bleu_score = None
-        if bleu_score is not None:
-            print(f"  {mid}: BLEU={bleu_score:.1f}")
+            bleu_scores[mid] = None
+        if bleu_scores[mid] is not None:
+            print(f"  {mid}: BLEU={bleu_scores[mid]:.1f}")
 
     # ── 5. spBLEU (SentencePiece tokenizer + sacrebleu) ─────────────────
     print("\n--- spBLEU ---")
+    spbleu_scores: dict[str, float | None] = {}
     try:
         from transformers import AutoTokenizer
         sp_tok = AutoTokenizer.from_pretrained("google/translategemma-4b-it")
@@ -115,21 +120,21 @@ def main():
         if sp_tok is not None:
             try:
                 from sacrebleu import corpus_bleu, BLEU
-                # Tokenize with SentencePiece
                 hyp_tok = [" ".join(sp_tok.convert_ids_to_tokens(sp_tok.encode(h, add_special_tokens=False))) for h in hyps]
                 ref_tok = [[" ".join(sp_tok.convert_ids_to_tokens(sp_tok.encode(r[0], add_special_tokens=False)))] for r in refs]
                 spbleu = corpus_bleu(hyp_tok, ref_tok, tokenize="none")
-                spbleu_score = round(spbleu.score, 1)
+                spbleu_scores[mid] = round(spbleu.score, 1)
             except Exception as e:
                 print(f"  {mid}: spBLEU ERROR — {str(e)[:100]}")
-                spbleu_score = None
+                spbleu_scores[mid] = None
         else:
-            spbleu_score = None
-        if spbleu_score is not None:
-            print(f"  {mid}: spBLEU={spbleu_score:.1f}")
+            spbleu_scores[mid] = None
+        if spbleu_scores[mid] is not None:
+            print(f"  {mid}: spBLEU={spbleu_scores[mid]:.1f}")
 
     # ── 6. Morph-BLEU (Turkish suffix stripping) ────────────────────────
     print("\n--- Morph-BLEU ---")
+    morph_scores: dict[str, float | None] = {}
     TR_SUFFIXES = [
         "ler", "lar", "de", "da", "den", "dan", "e", "a", "i", "u", "ü", "ı",
         "in", "un", "ün", "ın", "nin", "nun", "nün", "nın",
@@ -138,7 +143,7 @@ def main():
         "ce", "ca", "çe", "ça", "ki", "kü", "ci", "cı", "cu", "cü",
         "miş", "mış", "muş", "müş", "di", "dı", "du", "dü",
     ]
-    TR_SUFFIXES.sort(key=len, reverse=True)  # longest first
+    TR_SUFFIXES.sort(key=len, reverse=True)
 
     def strip_turkish_suffixes(word):
         lower = word.lower()
@@ -155,12 +160,12 @@ def main():
             hyp_stripped = [" ".join(strip_turkish_suffixes(w) for w in h.split()) for h in hyps]
             ref_stripped = [[" ".join(strip_turkish_suffixes(w) for w in r[0].split())] for r in refs]
             morph_bleu = corpus_bleu(hyp_stripped, ref_stripped, tokenize="intl")
-            morph_score = round(morph_bleu.score, 1)
+            morph_scores[mid] = round(morph_bleu.score, 1)
         except Exception as e:
             print(f"  {mid}: Morph-BLEU ERROR — {str(e)[:100]}")
-            morph_score = None
-        if morph_score is not None:
-            print(f"  {mid}: Morph-BLEU={morph_score:.1f}")
+            morph_scores[mid] = None
+        if morph_scores[mid] is not None:
+            print(f"  {mid}: Morph-BLEU={morph_scores[mid]:.1f}")
 
     # ── 7. BLEURT (bleurt-pytorch) ──────────────────────────────────────
     print("\n--- BLEURT ---")
@@ -298,13 +303,13 @@ def main():
                 "output_tokens": m["output_tokens"],
                 "latency_ms": m["latency_ms"],
                 "metrics": {
-                    "chrf": chrf_score if sid == 0 else None,
-                    "chrf_pp": chrfpp_score if sid == 0 else None,
+                    "chrf": chrf_scores.get(mid) if sid == 0 else None,
+                    "chrf_pp": chrfpp_scores.get(mid) if sid == 0 else None,
                     "chrf_seg": all_metrics[idx].get("chrf_seg") if idx < len(all_metrics) else None,
-                    "bleu": bleu_score if sid == 0 else None,
-                    "sacrbleu": bleu_score if sid == 0 else None,
-                    "spbleu": spbleu_score if sid == 0 else None,
-                    "morph_bleu": morph_score if sid == 0 else None,
+                    "bleu": bleu_scores.get(mid) if sid == 0 else None,
+                    "sacrbleu": bleu_scores.get(mid) if sid == 0 else None,
+                    "spbleu": spbleu_scores.get(mid) if sid == 0 else None,
+                    "morph_bleu": morph_scores.get(mid) if sid == 0 else None,
                     "bleurt": bleurt_scores.get(mid, [None]*len(data))[sid] if mid in bleurt_scores else None,
                     "comet": comet_scores.get(mid),
                     "comet_kiwi": kiwi_scores.get(mid),

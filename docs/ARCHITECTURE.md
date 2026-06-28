@@ -1,12 +1,12 @@
 # Architecture — TR Corpus Translation Benchmark
 
 > **Purpose:** The reality-grounded description of how this codebase actually runs.
-> **Status:** Engineering reality — current as of v3.6 (June 2026).
+> **Status:** Engineering reality — current as of v3.8 (June 2026).
 > **Audience:** Engineers and LLM coding agents working on this repo.
 >
 > ⚠️ **Read this before editing `benchmark/inference/` or `benchmark/hardware/`.**
 > This is the single source of truth for what is wired vs. gated. The older
-> `PRD.md`/`SRS.md` describe design *intent*; this document describes *current
+> `PRD%26SDD%26SRS/PRD.md` / `PRD%26SDD%26SRS/SRS.md` describe design *intent*; this document describes *current
 > reality*. Where they disagree, **this document is correct.**
 
 ---
@@ -31,7 +31,7 @@ This benchmark answers one question: *how many days to translate ~6.23T English
 tokens into Turkish on 2× NVIDIA H200, at academic quality?*
 
 It is **model-agnostic**: one pipeline drives autoregressive (AR), encoder-decoder
-(NLLB), diffusion, TensorRT, and custom-plugin backends through a single
+(NLLB), diffusion, and custom-plugin backends through a single
 `InferenceBackend` protocol, then measures throughput, extrapolates to
 corpus-completion time, and scores quality.
 
@@ -48,6 +48,10 @@ loop with HuggingFace `past_key_values`**, accelerated only by:
 - **`torch.compile(mode="default")`** on PyTorch 2.12–2.13, or
   **`torch.compile(mode="reduce-overhead")`** on PyTorch 2.14+
   (cudagraph_trees KV-cache bug persists through 2.12.1).
+
+Additionally, two advanced optimizations have been integrated:
+- **FlashAttention-3** (Method 5) — Hopper-optimized attention kernels (SM90 WGMMA/TMA), auto-dispatched by PyTorch SDPA on CUDA, active when `flash-attn-3` is installed and `--use-flash-attention` is set.
+- **vLLM Engine Integration** (Method 6) Replaces the manual Python generate loop with the high-performance vLLM engine, automatically binding all available GPUs via tensor parallelism, activated via `--vllm` or `backend_type: vllm`.
 
 Almost every other "optimization" is **built but gated off** — hardcoded `False`,
 commented out, env-gated, safety-gated, or captured-but-never-replayed. The
@@ -86,7 +90,7 @@ python -m benchmark --config config.yaml
         │     checkpoint every checkpoint_interval_seconds (default 300s)
         │   finally: stop metrics, flush, save final checkpoint
         ├─ QualityBenchmark.run(engine)  (skipped for translate-only / signal-killed / OOM-aborted)
-        │     quality/benchmark.py:328  → BERTScore ‖ COMET-22 ‖ COMET-Kiwi ‖ BLEU ‖ chrF++
+        │     quality/benchmark.py:328  → BERTScore ‖ COMET-22 ‖ COMET-Kiwi ‖ MetricX-24 ‖ BLEU ‖ chrF++
         └─ Reports: MetricsAggregator → ExtrapolationModel → JSON + Markdown
 ```
 
@@ -130,7 +134,7 @@ never call `model.generate()` or backend-specific methods directly.
 `BatchGenerationOutput` (`protocol.py:111`): `batch_id, generations[],
 batch_size, input_tokens_total, output_tokens_total, total_latency_ms,
 phase_timings`. Backends diverge in `phase_timings` (AR: `prefill_ms/decode_ms`;
-NLLB: empty; diffusion: `encode_ms/denoise_ms`; TRT: `{"engine":"tensorrt"}`).
+NLLB: empty; diffusion: `encode_ms/denoise_ms`).
 
 **Contract for new backends** (see also `docs/DEVELOPMENT.md`):
 
@@ -148,21 +152,18 @@ NLLB: empty; diffusion: `encode_ms/denoise_ms`; TRT: `{"engine":"tensorrt"}`).
 `ModelRegistry.create_backend` (`inference/backends/registry.py:171`) dispatches
 in this fixed priority order:
 
-0. **TensorRT upgrade** (`registry.py:190`) — only on CUDA. `TensorRTBackend.create()`
-   returns `None` (→ AR fallback) unless an engine can be built/loaded. In practice
-   this almost always falls back (see TRT status in §8).
-1. **Explicit override** (`registry.py:215`) — `extra["backend_type"]` (except
-   `"auto"`), validated against `ModelType`.
-2. **Auto-detect** (`registry.py:227`) via `_detect_model_type(model_path)`:
+1. **Explicit override** (`registry.py:214`) — `extra["backend_type"]` (except
+   `"auto"`), validated against `ModelType`. Specifically supports `"vllm"` to target the new high-performance `VLLMBackend`.
+2. **Auto-detect** (`registry.py:226`) via `_detect_model_type(model_path)`:
    - name contains `nllb`/`madlad` → `ENCODER_DECODER`
    - name matches a `DIFFUSION_KEYWORDS` (`llada, dream, mdlm, e2d2, bd3lm, diffusiongemma, …`, `constants.py:125`)
    - local `config.json` `model_type`/`architectures`/diffusion config keys
    - HF Hub `config.json` (same signals; `trust_remote_code=False`, 3 retries)
    - else `AUTOREGRESSIVE`
-3. **Custom plugin** (`registry.py:234`) — `PluginRegistry.lookup()`; first plugin
+3. **Custom plugin** (`registry.py:233`) — `PluginRegistry.lookup()`; first plugin
    whose `detect(model_path)` is True. (Discovery is gated behind
    `TR_ALLOW_UNTRUSTED_PLUGINS=1`; see `custom_plugin.py`.)
-4. **Fallback** → `AutoregressiveBackend`.
+4. **Fallback** → `AutoregressiveBackend` (including NLLB auto-detection).
 
 Auto-detection results are cached in a 100-entry FIFO cache (`registry.py:54`).
 
@@ -172,15 +173,15 @@ Auto-detection results are cached in a 100-entry FIFO cache (`registry.py:54`).
 
 ### 5.1 AutoregressiveBackend (`inference/backends/autoregressive.py`)
 
-The primary backend. `model_type = AUTOREGRESSIVE`; capabilities
-`TRANSLATE | FORWARD_ENCODE | CONFIDENCE | QUANTIZABLE_KV | SPECULATIVE | ENSEMBLE_READY`.
+A system-agnostic dispatcher wrapper. At runtime, it detects the compute hardware and delegates all execution to either `AutoregressiveCUDABackend` (`autoregressive_cuda.py`) or `AutoregressiveMPSBackend` (`autoregressive_mps.py`) via transparent delegation (`__getattr__`/`__setattr__`).
 
-**`load()` (`:644`) actually does:**
+The underlying implementation subclasses have `model_type = AUTOREGRESSIVE`; capabilities `TRANSLATE | FORWARD_ENCODE | QUANTIZABLE_KV | SPECULATIVE | ENSEMBLE_READY`.
 
-1. Devices (`cuda:{i}` / `mps` / `cpu`), NCCL P2P enable on CUDA. **cudaMallocAsync
-   is disabled** (commented out, `:654` — incompatible with `torch.compile`).
+**`load()` actually does:**
+
+1. Devices (`cuda:{i}` / `mps` / `cpu`), NCCL P2P enable on CUDA. **cudaMallocAsync enabled when safe** (active when `torch.compile` mode is NOT `reduce-overhead`, at `autoregressive_cuda.py:806`).
 2. Tokenizer via `AutoTokenizer`, left padding, Gemma-4-QAT list-tokenizer fix.
-3. Flash + mem-efficient SDPA on CUDA.
+3. Flash + mem-efficient SDPA on CUDA. Under Hopper architecture, checks for `flash-attn` package version 3 to enable Hopper-optimized FlashAttention-3.
 4. Model load: QAT/Gemma-4/Q4_0 → `_try_load_qat_model`; else `_load_standard_model`
    (single-GPU fast path when model < 10% of one GPU's memory; else
    `device_map="auto"`).
@@ -188,17 +189,16 @@ The primary backend. `model_type = AUTOREGRESSIVE`; capabilities
    `StaticFP8Linear` replaces nn.Linear with weights stored in FP8 E4M3.
    Dequantized on-chip at forward time — zero per-token overhead, 2× memory
    bandwidth.  TE fused kernel attempted first; static is the fallback.
-6. **Fused-kernel injection is hardcoded `if False:`** (`:761`) — dead.
-7. `torch.compile` (CUDA only; skipped on MPS/CPU/safe-mode). Version-gated:
+6. `torch.compile` (CUDA only; skipped on MPS/CPU/safe-mode). Version-gated:
    **< 2.12** → skipped (eager). **2.12–2.13** → `mode="default"` (inductor fusion,
    no cudagraph_trees — warmup takes 30s but decode is stable).
    **≥ 2.14** → `mode="reduce-overhead"` (frame-level CUDA graphs).
-   `_apply_extreme_compile:1167`.
+   `_apply_extreme_compile` in `autoregressive_cuda.py:1080`.
    **Measured (no-compile, PyTorch 2.12.1): 1,650 tok/s** (4B, bs=32, 1×H200).
-8. JIT kernel precompile (only the non-functional Metal RMSNorm is live; see §8).
-9. PagedAttention init — **never runs** (`_use_paged_attention` hardcoded `False`, `:596`).
-10. INT8 KV-cache object — **constructed but never read/written** (`:1184`).
-11. Speculative decoder — **only if `TR_ENABLE_EXPERIMENTAL_SPECULATIVE=1`**.
+7. JIT kernel precompile — 🗑 REMOVED v3.7.
+8. PagedAttention init — **opt-in** via `--paged-attention` (reads `extra.get("use_paged_attention", False)` at `autoregressive_cuda.py:539`).
+9. FP8 KV-cache — **removed** (empirically showed 0% speedup for NLLB-600M / TranslateGemma 4B; cast/dequant overhead exactly cancelled bandwidth savings at these model sizes).
+10. Speculative decoder — **opt-in** via `use_speculative=True` config flag or `--speculative` CLI. No env var required.
 
 **`translate_batch` (`:1369`):** if speculative decoder is active, delegates
 entirely to it (`:1385`); else async H2D on a transfer stream (CUDA), then
@@ -219,14 +219,17 @@ entirely to it (`:1385`); else async H2D on a transfer stream (CUDA), then
 
 ### 5.2 NLLBBackend (`inference/backends/nllb.py`)
 
-`model_type = ENCODER_DECODER`; capabilities `TRANSLATE | FORWARD_ENCODE | ENSEMBLE_READY`.
+A system-agnostic dispatcher wrapper. At runtime, it detects the compute hardware and delegates all execution to either `NLLBCUDABackend` (`nllb_cuda.py`) or `NLLBMPSBackend` (`nllb_mps.py`) via transparent delegation (`__getattr__`/`__setattr__`).
+
+The underlying implementation subclasses have `model_type = ENCODER_DECODER`; capabilities `TRANSLATE | FORWARD_ENCODE | ENSEMBLE_READY`.
 
 Encoder-decoder (NLLB-200 / M2M100 / MADLAD). `translate_batch` (`:381`) runs
 `model.generate(input_ids, attention_mask, forced_bos_token_id=tgt_lang,
 num_beams=…)`; `input_tokens_total` correctly uses `attention_mask.sum()` (the
 padding bug was fixed here in commit `ffa707b`). `torch.compile(reduce-overhead)`
-on CUDA. `forced_bos_token_id` from `tgt_lang` (default `tur_Latn`); falls back to
-`None` if unresolved (may produce wrong-language output).
+on CUDA. `forced_bos_token_id`
+from `tgt_lang` (default `tur_Latn`); falls back to `None` if unresolved (may produce
+wrong-language output).
 
 ### 5.3 DiffusionBackend (`inference/backends/diffusion.py`)
 
@@ -265,6 +268,23 @@ Drop a `.py` defining a `CustomModelPlugin` subclass in
 run with full process privileges — no sandbox). Explicit `register_plugin()` bypasses
 the gate.
 
+### 5.6 vLLMBackend (`inference/backends/vllm.py`)
+
+`model_type = AUTOREGRESSIVE` (represented as `ModelType.VLLM` for internal engine dispatch). Bypasses manual Python prefill/decode generation loops in favor of the optimized vLLM engine.
+
+> ⚠️ **Status: Gated / Disabled due to CUDA version conflicts.**
+> Recent vLLM wheels distributed via pip are compiled for CUDA 13.x by default, which introduces a dependency crash (`ImportError: libcudart.so.13: cannot open shared object file: No such file or directory`) when run on hosts with CUDA 12.x drivers (like the current H200 host setup). Because of this, vLLM has been uninstalled to avoid dependency conflicts, and the backend is gated off.
+
+**`load()` actually does:**
+1. Resolves all available CUDA devices and initializes the `vllm.LLM` engine with tensor parallelism equal to the device count (`tensor_parallel_size = device_count`).
+2. Binds sampling arguments (temperature, max_new_tokens) to `SamplingParams`.
+3. Reserves up to `90%` of GPU memory (default) for block allocation.
+
+**`translate_batch` actually does:**
+1. Invokes generation using `self.llm.generate()` passing raw text inputs.
+2. Measures processing wall time and packages results into `BatchGenerationOutput`.
+3. Bypasses the harness warm-up phase, as vLLM handles engine-level warmup and memory profiling internally during setup.
+
 ---
 
 ## 6. Module Map
@@ -272,13 +292,14 @@ the gate.
 | Subsystem | Key files |
 |---|---|
 | **Entry / orchestration** | `benchmark/__main__.py` · `orchestration/harness.py` · `orchestration/checkpoint.py` · `orchestration/signals.py` |
-| **Inference engine** | `inference/engine.py` · `inference/backends/{protocol,registry,autoregressive,nllb,diffusion,tensorrt_backend,custom_plugin}.py` · `inference/sampling.py` |
-| **Inference optimizations** | `inference/speculative.py` · `inference/paged_attention.py` · `inference/continuous_batcher.py` · `inference/batch_assembly.py` · `inference/batch_tuner.py` |
-| **Hardware** | `hardware/backend.py` · `hardware/precision.py` · `hardware/jit_compiler.py` · `hardware/fused_ops.py` · `hardware/triton_kernels_fused.py` · `hardware/kv_cache_quant.py` · `hardware/parallelism.py` · `hardware/trt_builder.py` · `hardware/cuda_graphs.py` |
-| **Data pipeline** | `data/loader.py` · `data/chunker.py` · `data/filters.py` · `data/pipeline.py` · `data/parallel_gz.py` |
+| **Inference engine** | `inference/engine.py` · `inference/backends/{protocol,registry,autoregressive,nllb,vllm,diffusion,custom_plugin}.py` · `inference/sampling.py` |
+| **Inference optimizations** | `inference/speculative.py` · `inference/paged_attention.py` · `inference/continuous_batcher.py` · `inference/batch_tuner.py` |
+| **Hardware** | `hardware/backend.py` · `hardware/precision.py` · `hardware/parallelism.py` · `hardware/architecture.py` |
+| **Quantization** | `quantization/smoothquant.py` (default on CUDA) · `quantization/qat.py` |
+| **Data pipeline** | `data/loader.py` · `data/chunker.py` · `data/filters.py` · `data/pipeline.py` · `data/pretokenizer.py` · `data/parallel_gz.py` |
 | **Quality** | `quality/benchmark.py` · `quality/{metrics_bertscore,metrics_comet,metrics_bleu,metrics_chrf,references}.py` |
 | **Metrics** | `metrics/collector.py` · `metrics/throughput.py` · `metrics/gpu_sampler.py` · `metrics/system_sampler.py` · `metrics/batch_logger.py` |
-| **Observability** | `observability/prometheus_metrics.py` · `observability/perf_regression.py` (unwired) |
+| **Observability** | `observability/prometheus_metrics.py` |
 | **Reporting** | `reporting/aggregator.py` · `reporting/extrapolation.py` · `reporting/degradation.py` · `reporting/json_report.py` · `reporting/markdown_report.py` |
 | **Config** | `config/schema.py` · `config/capability.py` · `config/constants.py` · `config/model_presets.py` |
 
@@ -289,22 +310,21 @@ the gate.
 A subtle point that explains much of the doc-vs-reality confusion: there are
 **two parallel, decoupled optimization stacks** that do not share state.
 
-- **Stack A — the AR backend's own features** (`autoregressive.py`): owns
-  `_paged_kv`, `_graph_pool`, `_spec_decoder`, `_kv_quant_cache`. Of these, only
-  `_spec_decoder` can ever be live (and only under an env gate). `_paged_kv` is
-  hardcoded off; `_graph_pool` is captured but never replayed; `_kv_quant_cache`
-  is constructed but never read/written. The README's "paged KV is allocated with
-  a no-op converter; not fed to the model forward" is **true for Stack A**.
+- **Stack A — the AR backend** (`autoregressive.py`): owns `_paged_kv` (opt-in
+  via config), `_spec_decoder` (active when `use_speculative=True`), FP8
+  (static weight-only, dequant-on-read), `torch.compile` (mode=default on
+  PT≥2.12), `cudaMallocAsync` (active when compile≠reduce-overhead), and
+  Flash SDPA. In v3.7, five previously-dead Stack A features were permanently
+  deleted: CUDA graph capture, fused Triton kernels, JIT CUDA/Metal kernels,
+  INT8 KV-cache quantization, and TensorRT.
 
-- **Stack B — the harness-owned ContinuousBatcher path** (`harness.py:680` +
+- **Stack B — the harness-owned ContinuousBatcher path** (`harness.py` +
   `continuous_batcher.py` + `paged_attention.py`): the batcher builds its **own**
   `PagedKVCache` and a `PagedCache` (`DynamicCache`-compatibility shim) and passes
-  it as `past_key_values` to `engine.model(...)` directly (`continuous_batcher.py:651`).
-  **This is the only place where paged KV is genuinely fed to a model forward.**
-  Gated behind `--continuous-batching --paged-attention` (CUDA) + batch size ≥ 2.
-
-So "PagedAttention" is simultaneously dead (Stack A) and real (Stack B) depending
-on which path you mean.
+  it as `past_key_values` to `engine.model(...)` directly. **This is the only place
+  where paged KV is fed to a model forward.** Gated behind `--continuous-batching
+  --paged-attention` (CUDA). CB skips `torch.compile` because PagedCache.update()
+  is not Dynamo-traceable.
 
 ---
 
@@ -317,41 +337,45 @@ on which path you mean.
 
 | # | Feature | Status | How to activate | Evidence | Notes |
 |---|---|---|---|---|---|
-| 1 | `torch.compile` | ⚠️ | on by default (CUDA); version-gated | `autoregressive.py:1167` | **< 2.12** → skipped (eager). **2.12–2.13** → `mode="default"` (stable, warmup 30s). **≥ 2.14** → `mode="reduce-overhead"`. No-compile baseline 1,650 tok/s (2.12.1, 4B, bs=32). |
-| 2 | Static FP8 weight quantization | ✅ | on by default (CUDA); `TR_SKIP_FP8=1` to disable | `autoregressive.py:762` | `StaticFP8Linear` — weights in FP8 E4M3, dequantized on-chip at forward time. Zero per-token overhead. 2× memory bandwidth vs BF16. lm_head excluded. TE fused kernel attempted first (best perf); static as fallback. |
-| 2b | Pre-tokenized Parquet cache | ✅ | automatic (checks `~/.cache/tr_benchmark/pretokenized/`) | `benchmark/data/pretokenizer.py` | +60% TPS on AR models. 198K chunks cached. `--pretokenize` to create, auto-detected thereafter. |
-| 3 | Flash + mem-efficient SDPA | ✅ | CUDA default | `autoregressive.py:695` | — measured 2026-06-24: 1.17-1.23× overall throughput for 4B model. Attention-only speedup is higher (likely 2-4×) but attention is ~20-30% of total compute for 4B. See M2.4. |
-| 4 | CUDA Graph decode | ⚠️ | — (deprecated) | `hardware/cuda_graphs.py:3` (FutureWarning on import); capture at `autoregressive.py:1339`; **never replayed** in `_extreme_decode:1548` | Captured graph excludes `past_key_values` as a static input → replay would feed zero-context garbage. Capture cost is paid, benefit never collected. |
-| 5 | Fused Triton kernels (RMSNorm, SwiGLU) | 💀 | — | injection hardcoded `if False:` (`autoregressive.py:761`) | Triton fused ops only work inside `torch.compile`; crash in eager (commit `804c0a6`). |
-| 6 | JIT CUDA C++ kernels (QKV+RoPE, SwiGLU) | ⚠️ | — | sources set to `None` ("architecturally broken"), `jit_compiler.py:126,131` | Disabled 2026-06-23. |
-| 7 | JIT Metal RMSNorm | ⚠️ | MPS | `jit_compiler.py:139` source exists, but `_make_metal_wrapper:529` returns inputs unchanged (non-functional) | Falls back to eager PyTorch. |
-| 8 | cudaMallocAsync | ⚠️ | — (disabled) | commented out `autoregressive.py:654`; `_malloc_async_active=False:607` | Incompatible with `torch.compile` `cudagraph_trees` in PyTorch 2.6. |
-| 9 | INT8 KV-cache quantization | 💀 | — | `_kv_quant_cache` constructed `autoregressive.py:1184`, never `.update()`/`.get()`-ed | Module docstring now honestly states "pure eager PyTorch — no Triton or Metal kernels exist" and "never wired into the decode loop." |
-| 10 | Speculative decoding | 🔬 | `--speculative` **and** `TR_ENABLE_EXPERIMENTAL_SPECULATIVE=1` | `speculative.py:1129` (env gate); `autoregressive.py:1385` (delegation) | Greedy-only, serial per-sequence. — measured 2026-06-24 on 4B: 25 tok/s at bs=1 (SLOWER than non-spec 62 tok/s), 38% acceptance. 8-layer draft + 34-layer full verify overhead exceeds gain at 4B depth. May benefit 48+ layer models (12B/27B). See M2.3. **2026-06-24 fix:** model introspection updated for Gemma3 multimodal (`language_model.*` nesting). Dual-RoPE detection via `inspect.signature` on first decoder layer. Verify runs full L layers (not L−D). Draft-model mode silently tolerates tokenizer mismatch. |
-| 11 | Batched CFG (diffusion) | ✅ | `guidance_scale > 1.0` | `diffusion.py:536` | cond+uncond in one forward. |
+| 1 | `torch.compile` | ⚠️ | on by default (CUDA); version-gated | `autoregressive_cuda.py:1080` | **< 2.12** → skipped (eager). **2.12–2.13** → `mode="default"` (stable, warmup 30s). **≥ 2.14** → `mode="reduce-overhead"`. No-compile baseline 1,650 tok/s (2.12.1, 4B, bs=32). |
+| 2 | Static FP8 weight quantization | ✅ | on by default (CUDA); `TR_SKIP_FP8=1` to disable | `autoregressive_cuda.py:1767` | `StaticFP8Linear` — weights in FP8 E4M3, dequantized on-chip at forward time. Zero per-token overhead. 2× memory bandwidth vs BF16. lm_head excluded. TE fused kernel attempted first (best perf); static as fallback. |
+| 2b | SmoothQuant FP8 calibration | ✅ | auto on CUDA (`TR_SKIP_SMOOTHQUANT=1` to skip) | `autoregressive_cuda.py:710` | Calibrates before static FP8 to migrate activation outliers into weights. 238 Linear layers smoothed at alpha=0.50. |
+| 2c | Pre-tokenized Parquet cache | ✅ ENFORCED | Enforced (`~/.cache/tr_benchmark/pretokenized/`) | `data/pretokenizer.py` | Strictly required in v3.8. Bypasses dynamic tokenization. Compiled dynamically at startup if cache is missing. |
+| 3 | Flash + mem-efficient SDPA | ✅ | CUDA default | `autoregressive_cuda.py:637` | 1.17-1.23× throughput. Attention-only speedup higher but attention ~20-30% of compute for 4B. |
+| 3b | FlashAttention-3 | 🔬 | `--use-flash-attention` (with `flash-attn-3` package installed) | `autoregressive_cuda.py:643` | Hopper-optimized FlashAttention-3 kernels (WGMMA/TMA) wired on SM90 GPUs (H100/H200). Auto-detects FA3 package and GPU arch; falls back to standard Flash SDPA on non-Hopper. |
+| 4 | CUDA Graph manual capture | 🗑 REMOVED v3.7 | — | `cuda_graphs.py` (389L) deleted in commit `19d979f` | Past-key-values can't be a static input. `torch.compile` handles internal graph capture correctly. |
+| 5 | Fused Triton kernels | 🗑 REMOVED v3.7 | — | `fused_ops.py` (303L) + `triton_kernels_fused.py` (238L) deleted in `19d979f` | Crashed outside inductor graphs ("cpu tensor?" pointer error). `torch.compile` fuses kernels internally. |
+| 6 | JIT CUDA C++ kernels | 🗑 REMOVED v3.7 | — | `jit_compiler.py` (678L) deleted in `926855e` | Both kernel sources were `None`. Metal wrapper returned inputs unchanged. |
+| 7 | JIT Metal RMSNorm | 🗑 REMOVED v3.7 | — | Deleted with `jit_compiler.py` | Was a no-op (`return inputs[0]`). |
+| 8 | cudaMallocAsync | ✅ | automatic when compile≠reduce-overhead | `autoregressive_cuda.py:750` | Enabled when `_compile_uses_graphs=False`. Stream-ordered allocation, zero-fragmentation. PT 2.12: compile uses `mode=default` (safe). |
+| 9 | INT8 KV-cache quantization | 🗑 REMOVED v3.7 | — | `kv_cache_quant.py` (289L) deleted in `7b1ef87` | Unnecessary on H200 (141 GB, 4B model uses ~8 GB). |
+| 10 | Speculative decoding | 🔬 | `--speculative` (no env var needed) | `speculative.py`; `autoregressive_cuda.py:766` | **v3.7:** Env gate removed. Verify runs **layers[D:L]** (not full model) — ~25% compute savings. Greedy-only, per-sequence. 8 draft / 26 verify layers for Gemma 34-layer. K=3. |
+| 11 | Batched CFG (diffusion) | ✅ | `guidance_scale > 1.0` | `diffusion.py` | cond+uncond in one forward. |
 | 12 | Fast-dLLM caching (diffusion) | 🟡 | — (stats-only) | `diffusion.py:709` | Counts hits but always falls through to full forward. |
 | 13 | CUDA-graph denoising (diffusion) | 🟡 | `use_cuda_graph_for_step=True` (default False) | `diffusion.py:632` | |
-| 14 | TensorRT backend | ⚠️ | — (safety-gated to refuse decode) | `tensorrt_backend.py:334` raises unless `allow_trt_decode_without_kv_cache`; `trt_builder.py:394,633` broken on TRT 11.x | No KV passthrough → corrupted output. Falls back to AR. |
-| 15 | Capability Registry | ✅ | Automatic in `load()` | `autoregressive.py:639-642`; `config/capability.py` | 14 features tracked with verified `ActivationState` (ACTIVE/INERT/BROKEN/UNKNOWN). Logs `active_vs_total()` and `reg.report_text()` at startup. Single source of truth for what's on the hot path — supersedes old manual log lines. |
+| 14 | TensorRT backend | 🗑 REMOVED v3.7 | — | `tensorrt_backend.py` (459L) + `trt_builder.py` (727L) deleted | No KV-cache passthrough → corrupted decode. Safety-gated to raise RuntimeError. Broken on TRT 10+. |
+| 15 | Capability Registry | ✅ | Automatic in `load()` | `autoregressive_cuda.py:847`; `config/capability.py` | 14 features tracked with verified `ActivationState` (ACTIVE/INERT/BROKEN/UNKNOWN). Calls `reg.report_text()` at startup. Single source of truth for what's on the hot path — supersedes old manual log lines. |
+| 15b | vLLM Engine Integration | ⚠️ Disabled | `--vllm` CLI flag or `backend_type: vllm` in config | `vllm.py`, `registry.py` | Disabled due to CUDA version conflicts. Standard vLLM wheels compile for CUDA 13.x by default, which causes a dynamic link error (`libcudart.so.13 not found`) on CUDA 12.x hosts (like the H200 host setup). |
 
 ### Memory / KV
 
 | # | Feature | Status | How to activate | Evidence | Notes |
 |---|---|---|---|---|---|
-| 16 | PagedAttention (AR path) | 💀 | — | `_use_paged_attention` hardcoded `False`, `autoregressive.py:596`; `_convert_to_paged` doesn't exist (comments only) | AR attention reads HF `past_key_values`, so paged blocks would be dead memory. |
-| 17 | PagedAttention (ContinuousBatcher path) | ✅ (gated) | `--continuous-batching --paged-attention` (CUDA) + batch ≥ 2 | `harness.py:680`; `paged_attention.py` `PagedCache` shim fed at `continuous_batcher.py:651` | The only real paged-KV→forward integration. — measured 2026-06-24: 60-87.5% KV memory savings for variable-length workloads, 0% for fixed-length. Validates and exceeds the 40-70% claim. Savings come from not pre-allocating max_seq_len. See M2.6. |
-| 18 | Continuous batching | ✅ (gated) | `--continuous-batching --paged-attention` (CUDA) + batch ≥ **2** | `continuous_batcher.py:100` (`MIN_BATCH_SIZE_FOR_CONTINUOUS=2`); `harness.py:299` | Production-quality chunked-prefill scheduler. **Note: the real threshold is 2, not 8 as old docs claim.** |
-| 19 | Pinned-memory pipeline | ✅ | CUDA | `data/pipeline.py:68` (`_should_pin = torch.cuda.is_available()`) | Disabled on MPS (unified memory). — measured 2026-06-24: 2.1× H2D speedup, ~6.6 GB/s effective bandwidth. See M2.5. |
-| 20 | INT4/INT8 weight quantization | ✅ | `--quantization int8|int4` / QAT presets | `autoregressive.py:412` (QAT), bitsandbytes | Separate axis from FP8 compute. — measured 2026-06-24: 41% memory savings (matches ~2× smaller). BUT throughput is 3.7× slower (213 vs 792 tok/s) — counterproductive on H200 unless VRAM-constrained. See M2.7. |
+| 16 | PagedAttention (AR path) | 🟡 GATED | `--paged-attention` (CUDA) | `autoregressive_cuda.py:539`: `extra.get("use_paged_attention", False)` | Opt-in via config flag. Writes prefill KV into paged blocks, passes PagedCache as past_key_values. Opt-in because block pool is sized for CB (8192 blocks × 16 tokens), not large static batches. |
+| 17 | PagedAttention (ContinuousBatcher path) | ✅ (gated) | `--continuous-batching --paged-attention` (CUDA) | `continuous_batcher.py:945`; `paged_attention.py` `PagedCache` shim | Production-quality chunked-prefill scheduler. 8192-block pool on H200. CB skips torch.compile (PagedCache non-Dynamo-traceable). |
+| 18 | Continuous batching | ✅ (gated) | `--continuous-batching --paged-attention` (CUDA) + batch ≥ **2** | `continuous_batcher.py:100` (`MIN_BATCH_SIZE_FOR_CONTINUOUS=2`); `harness.py:311` | Production-quality chunked-prefill scheduler. **Note: the real threshold is 2, not 8 as old docs claim.** |
+| 19 | Pinned-memory pipeline | ✅ | CUDA | `data/pipeline.py:183` (`_use_pinned = (backend == "cuda")`) | Disabled on MPS (unified memory). — measured 2026-06-24: 2.1× H2D speedup, ~6.6 GB/s effective bandwidth. See M2.5. |
+| 20 | INT4/INT8 weight quantization | ✅ (gated) | `--quantization int8|int4` / QAT presets | `autoregressive_cuda.py:540` (`extra.get("use_quantized_weights", False)`), bitsandbytes | Separate axis from FP8 compute. — measured 2026-06-24: 41% memory savings (matches ~2× smaller). BUT throughput is 3.7× slower (213 vs 792 tok/s) — counterproductive on H200 unless VRAM-constrained. See M2.7. |
+| 20b | FP8 KV-Cache Quantization | 🗑 **REMOVED** | — | `kv_cache_quant_fp8.py` deleted | Empirically showed **0% speedup** for NLLB-600M and TranslateGemma 4B. The 24 KB/token KV-cache fits comfortably in HBM3e even at bs=2048; cast+dequant overhead exactly cancels bandwidth savings. Only viable for 7B+ models with deep sequences. |
 
 ### Parallelism
 
 | # | Feature | Status | How to activate | Evidence | Notes |
 |---|---|---|---|---|---|
-| 21 | `device_map="auto"` multi-GPU | ✅ | 2 GPUs, model exceeds single-GPU fast-path threshold | `autoregressive.py:907` | HF/accelerate pipeline parallelism. |
-| 22 | Single-GPU fast path | ✅ | model < 10% of one GPU's memory | `autoregressive.py:919` | **Bypasses multi-GPU for every model this benchmark actually runs** (4B/12B on 141GB H200). |
-| 23 | Tensor parallelism (`apply_tensor_parallelism`) | 💀 | — | defined `hardware/parallelism.py:238`, **never called**; re-exported only | Hardcoded to Gemma-3-12B constants; layer-mismatch path crashes on read-only `@property` assignment. The "2×H200 TP=2" story is effectively inactive. `ensure_dist_initialized()` (public API at `parallelism.py:217`) auto-detects `torchrun` env vars but is not yet wired into any hot path. |
-| 24 | NCCL P2P enable | ✅ | CUDA | `autoregressive.py:168` | Runs even for 1 GPU (early-returns). |
+| 21 | `device_map="auto"` multi-GPU | ✅ | 2 GPUs, model exceeds single-GPU fast-path threshold | `autoregressive_cuda.py:990` | HF/accelerate pipeline parallelism. |
+| 22 | Single-GPU fast path | ✅ | model < 10% of one GPU's memory | `autoregressive_cuda.py:1004` | **Bypasses multi-GPU for every model this benchmark actually runs** (4B/12B on 141GB H200). |
+| 23 | Tensor parallelism (`apply_tensor_parallelism`) | 💀 | — | defined `hardware/parallelism.py:330`, **never called**; re-exported only | Hardcoded to Gemma-3-12B constants; layer-mismatch path crashes on read-only `@property` assignment. The "2×H200 TP=2" story is effectively inactive. `ensure_dist_initialized()` (public API at `parallelism.py:217`) auto-detects `torchrun` env vars but is not yet wired into any hot path. |
+| 24 | NCCL P2P enable | ✅ | CUDA | `autoregressive_cuda.py:127` | Runs even for 1 GPU (early-returns). |
 
 ### Data / tokenization
 
@@ -373,11 +397,11 @@ on which path you mean.
 | 33 | COMET-22 | ✅ | `quality/metrics_comet.py:181` | `Unbabel/wmt22-comet-da`; instance-level tokenizer patch (was class-level — fixed). |
 | 34 | COMET-Kiwi | ✅ | `quality/metrics_comet.py:232` | Reference-free. |
 | 35 | BLEU + chrF++ | ✅ | `quality/benchmark.py:283-284` | **Wired** (old README's "stubs" claim is false). chrF++ uses `char_order=4` for Turkish morphology. |
-| 36 | Parallel metric computation | ✅ | `quality/benchmark.py:266` | 3-worker pool for 5 metrics — "wall=max" is approximate. |
-| 37 | Prometheus exporter | ✅ | `observability/prometheus_metrics.py` | 20+ metrics, all quality gauges now populated. `harness.py:625-626` passes `bleu=quality_results.bleu.get('score')` and `chrf=quality_results.chrf.get('score')`. |
+| 36 | Parallel metric computation | ✅ | `quality/benchmark.py:284` | 3-worker pool for 6 metrics (COMET-22, COMET-Kiwi, BERTScore, MetricX-24, BLEU, chrF++). |
+| 37 | Prometheus exporter | ✅ | `observability/prometheus_metrics.py` | 21 metrics, all quality gauges populated. `harness.py:655-662` passes BLEU, chrF, COMET, BERTScore, COMET-Kiwi, and MetricX scores. |
 | 38 | Rolling TPS gauge | ✅ | Prometheus exporter | `observability/prometheus_metrics.py` | `throughput_rolling` gauge with 60s deque window. `snapshot()` uses rolling TPS instead of histogram mean. Safe for 15-60s scrape intervals. |
 | 39 | "6 alerts" | 💀 | — | **No alerting code exists** — alerting is external (Grafana) only. |
-| 40 | Performance regression (Welch t-test) | 💀 | `observability/perf_regression.py` | Implemented but **zero callers** — not wired into any run/CI path. Dashboard (`dashboard.py`), server (`server.py`), and nsight profiler (`nsight_profiler.py`) removed 2026-06-24; only the stat test remains. |
+| 40 | Performance regression (Welch t-test) | 🗑 REMOVED v3.7 | — | `perf_regression.py` (471L) deleted in `19d979f` | Implemented but never wired. Removed with 4 other dead modules. |
 | 41 | Nsight profiler | 🗑 REMOVED | — | `observability/nsight_profiler.py` deleted 2026-06-24 (405 lines). Module was never wired into generation paths. |
 | 42 | Ensemble translation | 🗑 REMOVED | — | `quality/ensemble.py` deleted 2026-06-24 (210 lines). Never imported outside its own module. |
 | 43 | Confidence estimation | 🗑 REMOVED | — | `quality/confidence.py` deleted 2026-06-24 (218 lines). Never imported outside its own module. |
@@ -385,9 +409,10 @@ on which path you mean.
 | 45 | Checkpoint / resume | ✅ | `orchestration/checkpoint.py` | Atomic rename; file+doc_id position tracking. |
 | 46 | O(1) rolling throughput | ✅ | `metrics/throughput.py` | p50/p99 latency percentiles now populated — `MetricsCollector.log_batch` passes `latency_ms=batch_result.total_latency_ms`. |
 
-**Honest summary:** of the ~46 features above, the ones materially affecting
-production throughput are #1, #2, #3, #16, #21/22, #19, and (opt-in) #10, #17, #18.
-The rest are wired-but-not-helping, gated off, broken, or dead.
+**Honest summary:** of the ~41 active features, the ones materially affecting
+production throughput are #1, #2, #2b, #3, #8, #21/22, #19, and (opt-in) #10, #16, #17, #18.
+Five previously-dead modules (#4, #5, #6, #7, #14, #40 — ~3,600 lines) were permanently
+deleted in v3.7.
 
 ---
 
@@ -395,7 +420,7 @@ The rest are wired-but-not-helping, gated off, broken, or dead.
 
 Carry these forward when editing. (Cross-listed from `docs/AI_CODING_ANTIPATTERNS.md`.)
 
-1. ~~AR/TRT `input_tokens` counts padding~~ → **FIXED 2026-06-24.** `autoregressive.py` `_assemble_output` and `tensorrt_backend.py` `_assemble_output` now use `attention_mask.sum().item()` to count real tokens. NLLB was fixed in `ffa707b`; AR/TRT followed.
+1. ~~AR/TRT `input_tokens` counts padding~~ → **FIXED v3.6.** `_assemble_output` uses `attention_mask.sum().item()`. TRT backend removed v3.7.
 2. **`precision_config.uses_fp8` lies under `--safe-mode`** — config says FP8,
    runtime runs BF16.
 3. **BERTScore target-check is harsher than siblings** — a `None`/error result →
@@ -410,11 +435,9 @@ Carry these forward when editing. (Cross-listed from `docs/AI_CODING_ANTIPATTERN
 7. **`parallelism.py` hardcoded to Gemma-3-12B constants**; the layer-mismatch
    branch assigns to read-only `@property` fields (would crash) — latent because
    `apply_tensor_parallelism` is never called.
-8. **Draft-model speculative decoding silently tolerates tokenizer mismatch**
-   (warns only).
-9. ~~Chunker drops the final <10-token tail~~ → **FIXED 2026-06-24.** Tail-chunk minimum lowered from 10 tokens to 1 token in `chunker.py`. Only truly empty (0-token) chunks are now skipped.
-10. **`perf_regression._save_raw` is non-atomic** — a crash mid-write silently
-    destroys the baseline (load returns `[]` → auto-re-establish). Latent (unwired).
+8. ~~Draft-model speculative silently tolerates tokenizer mismatch~~ → **FIXED v3.7.** Now raises `ValueError`.
+9. ~~Chunker drops the final <10-token tail~~ → **FIXED v3.6.**
+10. ~~`perf_regression._save_raw` non-atomic~~ → **REMOVED v3.7.** Module deleted with 4 other dead modules.
 
 ---
 

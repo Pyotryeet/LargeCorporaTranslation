@@ -297,24 +297,28 @@ class TestQualityBenchmarkInstantiation:
 
         results = QualityResults(
             bleu={"score": 30.0},
-            chrF={"score": 58.0},
+            chrf={"score": 58.0},
             comet={"system_score": 0.78},
+            metricx={"system_score": 0.8},
             num_references=10,
             num_translated=10,
         )
         assert results.bleu["score"] == 30.0
-        assert results.chrF["score"] == 58.0
+        assert results.chrf["score"] == 58.0
         assert results.comet["system_score"] == 0.78
+        assert results.metricx["system_score"] == 0.8
         d = results.to_dict()
         assert d["num_references"] == 10
+        assert d["metricx"]["system_score"] == 0.8
 
     def test_scores_meet_targets_true(self):
         from benchmark.quality.benchmark import QualityResults
 
         results = QualityResults(
             bleu={"score": 30.0},
-            chrF={"score": 60.0},
+            chrf={"score": 60.0},
             comet={"system_score": 0.80},
+            metricx={"system_score": 0.5},
         )
         assert results.scores_meet_targets is True
 
@@ -323,8 +327,9 @@ class TestQualityBenchmarkInstantiation:
 
         results = QualityResults(
             bleu={"score": 10.0},
-            chrF={"score": 30.0},
+            chrf={"score": 30.0},
             comet={"system_score": 0.50},
+            metricx={"system_score": 4.5},
         )
         assert results.scores_meet_targets is False
 
@@ -334,10 +339,12 @@ class TestQualityBenchmarkInstantiation:
             QUALITY_BLEU_TARGET,
             QUALITY_CHRF_TARGET,
             QUALITY_COMET_TARGET,
+            QUALITY_METRICX_TARGET,
         )
         assert QUALITY_BLEU_TARGET == 25
         assert QUALITY_CHRF_TARGET == 54
         assert QUALITY_COMET_TARGET == 0.72
+        assert QUALITY_METRICX_TARGET == 1.5
 
 
 # ── Requirement 8: sacrebleu tokenize="13a" handles Turkish text ───────────
@@ -572,7 +579,7 @@ class TestMetricsParallel:
         ref_sample = references[:n]
         hyp_sample = ref_sample[:]  # perfect match for high scores
 
-        bleu, chrf, comet_result = _compute_metrics_parallel(
+        comet_result, comet_kiwi, bertscore, metricx, bleu, chrf = _compute_metrics_parallel(
             hyp_sample, ref_sample, src_sample,
         )
 
@@ -580,8 +587,9 @@ class TestMetricsParallel:
         assert bleu["score"] >= 90.0, f"BLEU too low for perfect match: {bleu['score']}"
         assert "score" in chrf
         assert chrf["score"] >= 90.0, f"chrF++ too low for perfect match: {chrf['score']}"
-        # COMET may be None if not installed — that's fine
+        # COMET / MetricX may be None if not installed — that's fine
         assert "system_score" in comet_result or "error" in comet_result
+        assert "system_score" in metricx or "error" in metricx
 
 
 # ── Edge cases ─────────────────────────────────────────────────────────────

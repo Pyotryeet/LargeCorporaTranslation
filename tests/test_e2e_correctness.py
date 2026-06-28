@@ -180,11 +180,8 @@ class TestSafeModeCorrectness:
             extra={"safe_mode": True},
         )
         backend = AutoregressiveBackend(config)
-        assert backend._use_cuda_graph is False
         assert backend._use_paged_attention is False
         assert backend._use_quantized_weights is False
-        assert backend._use_int8_kv_cache is False
-        assert backend._use_fused_kernels is False
 
 
 # ═══════════════════════════════════════════════════════════════════════════

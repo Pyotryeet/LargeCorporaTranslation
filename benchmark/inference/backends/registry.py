@@ -1,11 +1,10 @@
 """Model registry — auto-detection, dispatch, and lifecycle management (v3.0).
 
 Discovers the right ``InferenceBackend`` for a given model based on:
-1. TensorRT engine — if use_tensorrt=true (CUDA-only, optional).
-2. Explicit backend override in config (``model.backend_type: "diffusion"``).
-3. Model architecture auto-detection (checks model config for diffusion markers).
-4. Custom plugin registration (user-provided ``CustomModelPlugin``).
-5. Fallback to autoregressive (safe default for any HF causal LM).
+1. Explicit backend override in config (``model.backend_type: "diffusion"``).
+2. Model architecture auto-detection (checks model config for diffusion markers).
+3. Custom plugin registration (user-provided ``CustomModelPlugin``).
+4. Fallback to autoregressive (safe default for any HF causal LM).
 
 Auto-detection heuristics
 --------------------------
@@ -55,16 +54,65 @@ class _FIFOCache(dict):
     """A bounded dict that evicts the oldest entries (insertion-order, FIFO).
 
     NOTE: Despite the common pattern, this is NOT an LRU cache — it uses
-    insertion order, not access order, for eviction.  Renamed from
+    insertion order, not access order, for eviction. Renamed from
     _LRUCache to reflect actual behaviour.
+
+    Parameters
+    ----------
+    max_size : int, default=100
+        Maximum number of entries before FIFO eviction begins.
+
+    Returns
+    -------
+    None
+        Initializes an empty dict with bounded capacity.
+
+    Side Effects
+    ------------
+    - __setitem__ evicts the oldest key when capacity is exceeded.
+    - __delitem__ removes the key from the internal insertion-order list.
     """
 
     def __init__(self, max_size: int = 100):
+        """Initialize the bounded FIFO cache.
+
+        Parameters
+        ----------
+        max_size : int, default=100
+            Maximum number of entries before the oldest is evicted on insertion.
+
+        Returns
+        -------
+        None
+            Initializes the cache with empty storage and an empty order list.
+        """
         self.max_size = max_size
         self._order: list[str] = []
         super().__init__()
 
     def __setitem__(self, key, value):
+        """Set a key-value pair, evicting the oldest entry if at capacity.
+
+        If the key already exists, its insertion position is updated to the end
+        (refreshing its FIFO order). If the cache is at capacity, the oldest key
+        (by insertion order) is evicted before the new entry is inserted.
+
+        Parameters
+        ----------
+        key : hashable
+            The dictionary key.
+        value : any
+            The value to associate with the key.
+
+        Returns
+        -------
+        None
+
+        Side Effects
+        ------------
+        - May evict the oldest key if the cache is full.
+        - Reorders the key's position in the FIFO order list.
+        """
         if key in self:
             self._order.remove(key)
         elif len(self._order) >= self.max_size:
@@ -74,6 +122,26 @@ class _FIFOCache(dict):
         super().__setitem__(key, value)
 
     def __delitem__(self, key):
+        """Delete a key from the cache and remove it from the FIFO order.
+
+        Parameters
+        ----------
+        key : hashable
+            The key to delete.
+
+        Returns
+        -------
+        None
+
+        Raises
+        ------
+        KeyError
+            If the key does not exist in the cache.
+
+        Side Effects
+        ------------
+        - Removes the key from the internal insertion-order list.
+        """
         self._order.remove(key)
         super().__delitem__(key)
 
@@ -105,7 +173,21 @@ _DIFFUSION_CONFIG_KEYS = (
 
 
 def clear_config_cache() -> None:
-    """Clear all cached HuggingFace model configs."""
+    """Clear all cached HuggingFace model configs.
+
+    Removes all entries from the module-level _CONFIG_CACHE and resets the
+    FIFO order list. Subsequent calls to _detect_model_type will re-fetch
+    configs from disk or network.
+
+    Returns
+    -------
+    None
+
+    Side Effects
+    ------------
+    Mutates the module-level _FIFOCache instance by clearing both the dict
+    contents and the internal order list.
+    """
     _CONFIG_CACHE.clear()
     _CONFIG_CACHE._order.clear()
 
@@ -115,6 +197,21 @@ class ModelRegistry:
 
     Spring-loaded pattern: each ``create_backend()`` call returns a
     fully-configured backend instance ready for ``.load()``.
+
+    On construction, lazily registers built-in backend implementations
+    (autoregressive, diffusion, NLLB, vLLM) if their modules are importable.
+    Custom plugins are discovered through PluginRegistry at dispatch time,
+    not at construction.
+
+    Parameters
+    ----------
+    None
+        Takes no constructor arguments.
+
+    Attributes
+    ----------
+    _backends : dict[ModelType, type[InferenceBackend]]
+        Mapping from ModelType enum variant to backend class.
     """
 
     def __init__(self):
@@ -124,7 +221,22 @@ class ModelRegistry:
         self._register_builtin()
 
     def _register_builtin(self) -> None:
-        """Register the built-in backend implementations."""
+        """Register the built-in backend implementations.
+
+        Attempts to import and register AutoregressiveBackend, DiffusionBackend,
+        NLLBBackend, and VLLMBackend. Import failures are silently ignored — each
+        backend is optional and its absence does not prevent the registry from
+        operating with the remaining backends.
+
+        Returns
+        -------
+        None
+
+        Side Effects
+        ------------
+        Populates self._backends with ModelType-to-backend-class mappings for
+        each successfully imported module.
+        """
         try:
             from benchmark.inference.backends.autoregressive import AutoregressiveBackend
             self._backends[ModelType.AUTOREGRESSIVE] = AutoregressiveBackend
@@ -143,6 +255,12 @@ class ModelRegistry:
         except ImportError:
             pass
 
+        try:
+            from benchmark.inference.backends.vllm import VLLMBackend
+            self._backends[ModelType.VLLM] = VLLMBackend
+        except ImportError:
+            pass
+
         # Custom backends are discovered via PluginRegistry, not here.
 
     def register(self, model_type: ModelType, backend_cls: type[InferenceBackend]) -> None:
@@ -153,9 +271,23 @@ class ModelRegistry:
         Parameters
         ----------
         model_type : ModelType
-            The model architecture category.
+            The model architecture category this backend handles.
         backend_cls : type[InferenceBackend]
             A concrete subclass of InferenceBackend.
+
+        Returns
+        -------
+        None
+
+        Raises
+        ------
+        TypeError
+            If backend_cls is not a subclass of InferenceBackend.
+
+        Side Effects
+        ------------
+        - Inserts or overwrites the backend class in self._backends.
+        - Logs an info-level message with the backend display name and model type.
         """
         if not issubclass(backend_cls, InferenceBackend):
             raise TypeError(
@@ -172,45 +304,28 @@ class ModelRegistry:
         """Create the appropriate backend for the given configuration.
 
         Dispatch order:
-        0. TensorRT — if use_tensorrt=true in config (CUDA-only, experimental).
         1. Explicit ``backend_type`` in ``config.extra``.
         2. Auto-detect from model architecture.
         3. Custom plugin lookup.
         4. Fallback to autoregressive.
 
-        TensorRT is tried as an upgrade to the AR path. If TensorRT is
-        unavailable or engine build fails, falls back gracefully to the
-        extreme-optimized AutoregressiveBackend.
+        Parameters
+        ----------
+        config : BackendConfig
+            The benchmark configuration, including model_path and optional
+            ``backend_type`` override in config.extra.
 
         Returns
         -------
         InferenceBackend
-            A concrete backend instance (not yet loaded).
+            A concrete backend instance (not yet loaded — caller must call .load()).
+
+        Raises
+        ------
+        RuntimeError
+            If no backend is available for the detected model type and the
+            autoregressive fallback is also unavailable.
         """
-        # ── 0. TensorRT upgrade (v3.3) ──
-        trt_cfg = config.extra.get("tensorrt", {})
-        use_trt = config.extra.get("use_tensorrt", False) or bool(trt_cfg)
-
-        if use_trt and torch.cuda.is_available():
-            try:
-                from benchmark.inference.backends.tensorrt_backend import TensorRTBackend
-                trt_backend = TensorRTBackend.create(config)
-                if trt_backend is not None:
-                    logger.info(
-                        "TensorRT engine ready — using TensorRTBackend "
-                        "(precision=%s)", trt_cfg.get("precision", "fp16"),
-                    )
-                    return trt_backend
-                else:
-                    logger.info(
-                        "TensorRT unavailable — falling back to AutoregressiveBackend"
-                    )
-            except Exception as e:
-                logger.info(
-                    "TensorRT backend creation failed (%s) — "
-                    "falling back to AutoregressiveBackend", e,
-                )
-
         # ── 1. Explicit override (skip "auto" — it means auto-detect) ──
         explicit = config.extra.get("backend_type")
         if explicit and explicit != "auto":
@@ -253,19 +368,41 @@ class ModelRegistry:
     def _detect_model_type(self, model_path: str) -> ModelType:
         """Auto-detect the model architecture from the model path or config.
 
-        Heuristics:
-        - Check model name for diffusion keywords.
-        - If it's a local path, check model config.
-        - For HuggingFace Hub IDs, try to fetch the config.
-        - Default to AUTOREGRESSIVE.
+        Heuristics (checked in order):
+        1. Name-based: check for NLLB/MADLAD-400 keywords in the model path.
+        2. Name-based: check for diffusion keywords (from DIFFUSION_KEYWORDS).
+        3. Local path: read config.json, check model_type field, architectures
+           list, and diffusion-specific config keys.
+        4. HuggingFace Hub: fetch config via AutoConfig.from_pretrained() and
+           apply the same checks as the local path.
+        5. Default fallback: ModelType.AUTOREGRESSIVE.
 
         Results are cached in _CONFIG_CACHE keyed by
-        ``f"__model_type__{model_path}"`` to avoid repeated network I/O
-        and local JSON parsing on every call.
+        ``f"__model_type__{model_path}"`` to avoid repeated network I/O and
+        local JSON parsing on every call.
+
+        Parameters
+        ----------
+        model_path : str
+            A local filesystem path to a model directory, or a HuggingFace Hub
+            model ID (e.g., "facebook/nllb-200-distilled-600M").
 
         Returns
         -------
         ModelType
+            The detected model architecture category.
+
+        Side Effects
+        ------------
+        - Populates _CONFIG_CACHE with the detection result and any intermediate
+          config fetches (local JSON parsing, HF config).
+        - Logs at debug level on detection failures; logs at error level if
+          network is unavailable during HF config fetch.
+
+        Exceptions Caught
+        -----------------
+        - OSError: network unavailable during HF config fetch (logged and skipped).
+        - Any Exception during config-based detection (logged at debug level).
         """
         cache_key = f"__model_type__{model_path}"
         if cache_key in _CONFIG_CACHE:
@@ -390,8 +527,27 @@ class ModelRegistry:
     def _get_hf_config(self, model_id: str) -> Optional[dict]:
         """Fetch model config from HuggingFace Hub (cached).
 
-        Retries up to 3 times with exponential backoff to handle transient
-        network failures.
+        Retries up to 3 times with exponential backoff (1s, 2s, 4s) to handle
+        transient network failures. Remote code execution is disabled
+        (trust_remote_code=False).
+
+        Parameters
+        ----------
+        model_id : str
+            A HuggingFace Hub model ID (e.g., "facebook/nllb-200-distilled-600M").
+
+        Returns
+        -------
+        Optional[dict]
+            The model configuration as a dictionary if successfully fetched, or
+            None if all attempts fail.
+
+        Side Effects
+        ------------
+        - Populates _CONFIG_CACHE with the fetched config dict on success.
+        - Logs debug messages on retries and failures.
+        - Makes a network call to HuggingFace Hub (up to 3 attempts with
+          exponential backoff).
         """
         if model_id in _CONFIG_CACHE:
             return _CONFIG_CACHE[model_id]
@@ -427,7 +583,31 @@ class ModelRegistry:
         return None
 
     def list_available_backends(self) -> list[dict]:
-        """Return metadata about all registered backends."""
+        """Return metadata about all registered backends, including custom plugins.
+
+        Enumerates all built-in backends (keyed by ModelType) plus any custom
+        plugins discovered via PluginRegistry. Capabilities are reported as a
+        list of single-bit flag names (compound convenience flags like
+        FULL_TRANSLATION are excluded to avoid duplicates).
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        list[dict]
+            A list of dictionaries, each containing:
+            - model_type (str): The model architecture category.
+            - display_name (str): Human-readable backend name.
+            - capabilities (list[str]): Names of supported ModelCapability flags.
+            - class (str): The backend class name or "CustomPlugin".
+
+        Side Effects
+        ------------
+        - May import PluginRegistry (benign ImportError if unavailable).
+        - Does not mutate any instance or module state.
+        """
         result = []
         # Only iterate over single-bit (power-of-two) capability flags,
         # skipping compound convenience flags like FULL_TRANSLATION and

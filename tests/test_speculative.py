@@ -105,7 +105,10 @@ def _make_tiny_model_and_tokenizer(real_tokenizer):
             mlp_out = self.mlp(hidden_states)
             hidden_states = residual + mlp_out
             if use_cache:
-                return hidden_states, (hidden_states,)
+                # Return proper (key, value) tuple format expected by
+                # _safe_crop_kv and real HF models. Both are the hidden
+                # state for this tiny test model (no real attention keys).
+                return hidden_states, (hidden_states.clone(), hidden_states.clone())
             return hidden_states,
 
     class TinyModel(nn.Module):
@@ -464,7 +467,7 @@ class TestSelfSpeculativeDecoder:
         assert "verify_ms" in gen.phase_timings
         assert "acceptance_rate" in gen.phase_timings
         assert "method" in result.phase_timings
-        assert result.phase_timings["method"] == "self_speculative"
+        assert result.phase_timings["method"] == "self_speculative_layers_d_to_l"
 
     def test_auto_draft_layers(self, tiny_model_and_tokenizer):
         """num_draft_layers=0 computes total//4."""

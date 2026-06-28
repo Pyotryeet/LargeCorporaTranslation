@@ -1,10 +1,10 @@
 # ---------------------------------------------------------------------------
-# Turkish Corpus Translation Benchmark — Makefile v3.6
+# Turkish Corpus Translation Benchmark — Makefile v3.9
 # ---------------------------------------------------------------------------
 # Usage:
 #   make help              Show this help
 #   make setup             One-command full environment setup
-#   make setup-quick       Minimal dev setup (skip TRT, skip model DL)
+#   make setup-quick       Minimal dev setup (skip model DL)
 #   make test              Run unit tests
 #   make lint              Run linter
 #   make format            Run formatter
@@ -12,10 +12,7 @@
 #   make run-quick         5-minute evaluation
 #   make run-dry           Smoke test (60s)
 #   make run-diffusion     Diffusion model benchmark
-#   make run-tensorrt      TensorRT-accelerated benchmark (CUDA only)
-#   make precompile        Pre-compile JIT kernels + TRT engines
 #   make docker-build      Build Docker image
-#   make docker-build-trt  Build Docker image with TensorRT layer
 #   make docker-run        Run in Docker
 #   make dashboard         Launch observability dashboard
 #   make clean             Clean all artifacts + caches
@@ -25,10 +22,9 @@ PYTHON := python3.11
 
 .PHONY: help setup setup-quick setup-full \
         test test-safe lint format \
-        run run-safe run-quick run-dry run-diffusion run-tensorrt \
+        run run-safe run-quick run-dry run-diffusion \
         run-obs run-h200 run-macos \
-        precompile \
-        docker-build docker-build-trt docker-run \
+        docker-build docker-run \
         dashboard \
         clean clean-all
 
@@ -86,34 +82,28 @@ run-dry: ## Smoke test (60s)
 run-diffusion: ## Diffusion model benchmark
 	bash run.sh --diffusion --quick
 
-run-tensorrt: ## TensorRT-accelerated (CUDA only)
-	bash run.sh --tensorrt --full
-
 run-obs: ## Full benchmark with observability dashboard
 	bash run.sh --full --observability
 
 run-h200: ## H200-compatible production run (uses run.sh)
-	bash run.sh --full --tensorrt
+	bash run.sh --full
 
 run-macos: ## macOS-compatible run (uses run.sh)
 	bash run.sh --full
-
-precompile: ## Pre-compile JIT kernels + TRT engines
-	bash run.sh --precompile
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Docker
 # ═══════════════════════════════════════════════════════════════════════════
 
 docker-build: ## Build Docker image
-	docker build -t tr-benchmark:3.6 .
+	docker build -t tr-benchmark:3.9 .
 
 docker-run: ## Run benchmark in Docker
 	docker run --rm \
 	  --gpus '"device=0,1"' \
 	  --ipc=host --ulimit memlock=-1 \
 	  -v $$(pwd)/data:/data \
-	  tr-benchmark:3.6 --config /data/config.yaml
+	  tr-benchmark:3.9 --config /data/config.yaml
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Observability

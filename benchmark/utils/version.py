@@ -8,7 +8,7 @@ from typing import Any
 
 import torch
 
-VERSION = "3.6"
+VERSION = "3.9"
 
 # Canonical PEP 396 attribute — equivalent to VERSION (kept for compatibility).
 __version__ = VERSION
@@ -48,6 +48,46 @@ def get_model_fingerprint(model_path: str) -> str | None:
 
 
 def get_environment_snapshot(model_path: str | None = None) -> dict[str, Any]:
+    """Build a reproducible dictionary snapshot of the runtime environment.
+
+    Collects Python version, platform info, PyTorch/Transformers versions,
+    CUDA and MPS availability, and optionally a model fingerprint.  The
+    result is designed to be serialized alongside benchmark results so every
+    measurement is traceable.
+
+    Args:
+        model_path: Optional path to a local model directory or a HuggingFace
+            Hub model ID.  When provided, a ``model_fingerprint`` key is
+            included in the returned snapshot (see
+            :func:`get_model_fingerprint`).
+
+    Returns:
+        A ``dict[str, Any]`` with the following keys:
+
+        * ``python_version`` — e.g. ``"3.12.4"``
+        * ``platform`` — result of :func:`platform.platform`
+        * ``pytorch_version`` — :attr:`torch.__version__`
+        * ``transformers_version`` — :attr:`transformers.__version__` or
+          ``"not installed"``
+        * ``cuda_available`` — ``True`` / ``False``
+        * ``mps_available`` — ``True`` / ``False``
+        * ``model_fingerprint`` — present only when *model_path* is not None
+          and the path exists locally as a directory containing
+          ``config.json``, OR when *model_path* is a remote/non-local string
+          (e.g. a Hub ID).  ``None`` when *model_path* points to a local
+          directory that does not contain ``config.json``.
+        * ``cuda_version`` — present only when CUDA is available
+        * ``gpu_count`` — present only when CUDA is available
+        * ``gpu_names`` — present only when CUDA is available
+
+    Raises:
+        No exceptions are raised directly.  Missing optional dependencies
+        (e.g. Transformers) are handled silently with a fallback string.
+
+    Side effects:
+        None.  This function is pure (reads system attributes and optionally
+        the filesystem).
+    """
     snapshot: dict[str, Any] = {"python_version": sys.version.split()[0], "platform": platform.platform(),
                 "pytorch_version": torch.__version__, "transformers_version": TRANSFORMERS_VERSION,
                 "cuda_available": torch.cuda.is_available(), "mps_available": torch.backends.mps.is_available()}

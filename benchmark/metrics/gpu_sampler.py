@@ -1,11 +1,17 @@
-"""Backend-normalised device sampler — CUDA via pynvml, MPS via IOKit/psutil.
+"""Backend-normalised device sampler -- CUDA via pynvml, MPS via IOKit/psutil.
 
 Produces identical JSON schema regardless of backend.
 
+Features:
+- CUDA sampling uses batched NVML calls to reduce per-sample overhead.
+- MPS sampling uses ``powermetrics`` via ``subprocess`` with a caching layer
+  to avoid 5-second hangs on every sample when the tool requires sudo.
+- CPU backend provides basic utilization/memory via psutil.
+- All samples are buffered in-memory and flushed to JSONL on a configurable
+  interval to amortize I/O cost.
+
 v2.0: MPS sampling uses IOKit via ``subprocess`` with a short timeout and
-cached availability flag to avoid 5-second hangs on every sample when
-powermetrics requires sudo.  CUDA sampling uses batched NVML calls to
-reduce per-sample overhead.
+cached availability flag.
 """
 
 import logging
@@ -113,6 +119,19 @@ a threading primitive at module import time."""
 
 
 def _get_pm_cache_lock() -> threading.Lock:
+    """Return the module-level lock protecting ``_pm_cache``, creating it lazily.
+
+    Uses a double-check pattern with a module-level ``_pm_cache_lock`` variable.
+    On first call, a ``threading.Lock`` is allocated and stored. Subsequent
+    calls return the same lock instance.
+
+    Returns:
+        A ``threading.Lock`` instance shared across all callers.
+
+    Note:
+        This avoids creating a threading primitive at module import time, which
+        could interfere with fork-based multiprocessing or threaded imports.
+    """
     global _pm_cache_lock
     if _pm_cache_lock is None:
         _pm_cache_lock = threading.Lock()
@@ -233,21 +252,85 @@ def _get_powermetrics_value(keyword: str) -> float | None:
 
 @dataclass
 class DeviceSample:
+    """A single point-in-time snapshot of device metrics across all available GPUs.
+
+    This dataclass is the unified output format regardless of backend (CUDA, MPS, CPU).
+
+    Attributes:
+        timestamp: ISO 8601 UTC timestamp with millisecond precision
+            (e.g. ``\"2026-06-28T14:30:05.123Z\"``).
+        elapsed_s: Seconds elapsed since the sampler's ``start()`` call.
+        backend: The backend identifier string (``\"cuda\"``, ``\"mps\"``, or ``\"cpu\"``).
+        devices: List of per-device metric dictionaries. Each dict contains keys such as
+            ``id``, ``util_pct``, ``mem_used_mib``, ``mem_total_mib``, ``temp_c``,
+            ``power_w``, ``sm_clock_mhz``, ``mem_clock_mhz``, and optionally ``error``
+            if a particular device could not be sampled.
+
+    Methods:
+        to_json: Serialize the entire sample to a JSON string using
+            ``sanitized_dumps(asdict(self), ensure_ascii=False)``.
+    """
     timestamp: str
     elapsed_s: float
     backend: str
     devices: list[dict]
 
     def to_json(self) -> str:
+        """Serialize this DeviceSample to a compact JSON string.
+
+        Returns:
+            A JSON string representation of all fields, produced via
+            ``sanitized_dumps(asdict(self), ensure_ascii=False)``. Unicode characters
+            are preserved (not escaped).
+        """
         return sanitized_dumps(asdict(self), ensure_ascii=False)
 
 
 class DeviceSampler:
+    """Periodic device-metric sampler producing JSONL log files.
+
+    Dispatches to CUDA (NVML), MPS (IOKit/powermetrics), or CPU (psutil) backends
+    based on the ``DeviceInfo`` passed at construction. Samples are buffered in
+    memory and flushed to disk in batches (configurable via ``METRICS_FLUSH_INTERVAL``).
+
+    Class-level state:
+        _powermetrics_ok: Cached availability flag for ``powermetrics``, shared
+            across all instances to avoid re-probing.
+
+    Args:
+        device_info: Backend and device-count descriptor from hardware discovery.
+        output_dir: Directory where ``device_metrics_<timestamp>.jsonl`` files
+            are written.
+        sample_rate_hz: Target sampling frequency in Hz (used for interval-based
+            pacing; the sampler itself does not sleep -- pacing is the caller's
+            responsibility). Defaults to ``DEFAULT_SAMPLE_RATE_HZ``.
+
+    Raises:
+        No explicit exceptions at construction. NVML init failures are logged and
+        disable CUDA sampling gracefully (per-device entries will contain an
+        ``\"error\"`` key).
+    """
     # Cache powermetrics availability — probing once at startup avoids
     # 5-second timeouts on every sample when the tool is unavailable.
     _powermetrics_ok: bool | None = None
 
     def __init__(self, device_info: DeviceInfo, output_dir: Path, sample_rate_hz: int = DEFAULT_SAMPLE_RATE_HZ):
+        """Initialise the device sampler.
+
+        Args:
+            device_info: ``DeviceInfo`` instance describing the active backend and
+                the number of devices.
+            output_dir: Parent directory for JSONL log files.
+            sample_rate_hz: Target sample rate in samples per second. Controls the
+                pacing interval in the calling loop; the sampler itself does not
+                enforce timing. Defaults to ``DEFAULT_SAMPLE_RATE_HZ``.
+
+        Side effects:
+            - If the backend is CUDA, lazily imports pynvml (or nvidia_ml_py) and
+              calls ``nvmlInit()``. On failure, disables CUDA sampling.
+            - If the backend is MPS, probes ``powermetrics`` availability once
+              (class-level cache) by running a short subprocess.
+        """
         self.device_info = device_info
         self.output_dir = output_dir
         self.sample_rate_hz = sample_rate_hz
@@ -274,12 +357,45 @@ class DeviceSampler:
             DeviceSampler._powermetrics_ok = _probe_powermetrics()
 
     def start(self, start_time: float) -> None:
+        """Begin a sampling session and open the output log file.
+
+        Must be called once before ``sample()``. Creates a JSONL file named
+        ``device_metrics_<UTC_timestamp>.jsonl`` inside ``self.output_dir``.
+
+        Args:
+            start_time: ``time.monotonic()`` value representing the benchmark
+                start instant. Used to compute ``elapsed_s`` in every sample.
+
+        Side effects:
+            Sets ``self._start_time`` and ``self._log_file``. Log messages
+            are emitted for initialization tracking.
+        """
         self._start_time = start_time
         ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         self._log_file = self.output_dir / f"device_metrics_{ts}.jsonl"
         logger.info(f"Device sampler -> {self._log_file}")
 
     def sample(self) -> Optional[DeviceSample]:
+        """Take one snapshot of device metrics and buffer it for later flush.
+
+        Dispatches to ``_sample_cuda``, ``_sample_mps``, or ``_sample_cpu`` based on
+        the backend. The resulting ``DeviceSample`` is appended to the in-memory
+        buffer. When the buffer reaches ``METRICS_FLUSH_INTERVAL`` entries, an
+        immediate flush to disk is triggered.
+
+        Returns:
+            A ``DeviceSample`` with the current timestamp and per-device metrics,
+            or ``None`` if ``start()`` has not been called yet (``_start_time`` is
+            ``None``).
+
+        Side effects:
+            - Increments ``self.sample_count``.
+            - Appends to the internal ``_buffer`` list.
+            - May call ``_flush_locked()`` if the buffer is full.
+
+        Note:
+            This method acquires ``self._buffer_lock`` to protect the buffer.
+        """
         if self._start_time is None:
             return None
         elapsed = time.monotonic() - self._start_time
@@ -328,6 +444,21 @@ class DeviceSampler:
         self._buffer.clear()
 
     def _sample_cuda(self) -> list[dict]:
+        """Sample all CUDA GPUs via NVML and return per-device metric dicts.
+
+        For each device index, collects utilization, memory (used/total MiB),
+        temperature (C), power (W), and SM/memory clock (MHz). Individual NVML
+        calls that fail are wrapped in ``_safe`` and return ``None`` for that
+        field; catastrophic failures (NVMLError, RuntimeError) on a device produce
+        an ``{\"id\": i, \"error\": ...}`` entry.
+
+        Returns:
+            A list of dictionaries, one per device in ``device_info.num_devices``.
+            Each dict has keys: ``id``, ``util_pct``, ``mem_used_mib``,
+            ``mem_total_mib``, ``temp_c``, ``power_w``, ``sm_clock_mhz``,
+            ``mem_clock_mhz``. If pynvml is not available at all, all entries
+            contain ``\"error\": \"pynvml not available\"``.
+        """
         if not self._has_pynvml:
             return [{"id": i, "error": "pynvml not available"} for i in range(self.device_info.num_devices)]
         _pymod = self._pynvml
@@ -348,6 +479,24 @@ class DeviceSampler:
         return devices
 
     def _sample_mps(self) -> list[dict]:
+        """Sample the Apple Silicon GPU via psutil and powermetrics.
+
+        On Apple Silicon, unified memory means process RSS approximates GPU memory
+        usage -- the Metal driver, MPS allocator, and model weights all draw from
+        the same physical pool. GPU utilization and power are retrieved from
+        ``_mps_gpu_metrics`` (powermetrics cache). Temperature is read via
+        ``_mps_temp`` (psutil sensors).
+
+        Returns:
+            A single-element list with one dict containing: ``id`` (always 0),
+            ``util_pct``, ``mem_used_mib``, ``mem_total_mib``, ``temp_c``,
+            ``power_w``, ``sm_clock_mhz`` (``None`` -- not obtainable via MPS),
+            ``mem_clock_mhz`` (``None`` -- not obtainable via MPS).
+
+        Note:
+            ``psutil`` is imported lazily inside this method to avoid an import
+            cost on CUDA-only deployments.
+        """
         import psutil
         proc = psutil.Process()
         # On Apple Silicon unified memory, process RSS is the closest
@@ -358,16 +507,29 @@ class DeviceSampler:
         # misleadingly high number.
         mem_total = psutil.virtual_memory().total
         mem_used = proc.memory_info().rss
+        _gpu_util, _gpu_power = self._mps_gpu_metrics()
         return [{"id": 0,
-                 "util_pct": self._mps_gpu_metrics()[0],
+                 "util_pct": _gpu_util,
                  "mem_used_mib": int(mem_used / (1024 * 1024)),
                  "mem_total_mib": int(mem_total / (1024 * 1024)),
                  "temp_c": self._mps_temp(),
-                 "power_w": self._mps_gpu_metrics()[1],
+                 "power_w": _gpu_power,
                  "sm_clock_mhz": None,
                  "mem_clock_mhz": None}]
 
     def _sample_cpu(self) -> list[dict]:
+        """Sample CPU-wide utilization and memory via psutil.
+
+        Returns:
+            A single-element list with one dict containing: ``id`` (always 0),
+            ``util_pct`` (``psutil.cpu_percent(interval=None)``), ``mem_used_mib``,
+            ``mem_total_mib``, ``temp_c`` (``None``), ``power_w`` (``None``),
+            ``sm_clock_mhz`` (``None``), ``mem_clock_mhz`` (``None``).
+
+        Note:
+            ``psutil`` is imported lazily inside this method to avoid an import
+            cost on GPU-only deployments.
+        """
         import psutil
         mem = psutil.virtual_memory()
         return [{"id": 0, "util_pct": float(psutil.cpu_percent(interval=None)),
@@ -385,6 +547,21 @@ class DeviceSampler:
         return _get_powermetrics_value("GPU Active Residency"), _get_powermetrics_value("GPU Power")
 
     def _mps_temp(self):
+        """Read the SoC / GPU die temperature via ``psutil.sensors_temperatures()``.
+
+        Iterates over all temperature sensor groups provided by psutil and returns
+        the ``current`` value from the first available entry. On Apple Silicon, this
+        typically corresponds to the SoC die temperature, which is the closest
+        proxy for GPU junction temperature.
+
+        Returns:
+            The temperature in degrees Celsius as a ``float``, or ``None`` if
+            no sensor data is available or psutil raises an error
+            (``AttributeError``, ``OSError``, ``RuntimeError``).
+
+        Note:
+            ``psutil`` is imported lazily inside this method.
+        """
         try:
             import psutil
             temps = psutil.sensors_temperatures()
@@ -398,8 +575,26 @@ class DeviceSampler:
 
     @staticmethod
     def _safe(func, *args):
+        """Call ``func(*args)`` and return its result, or ``None`` on any recoverable error.
+
+        Static method. Wraps NVML calls that may fail transiently (e.g. a GPU that
+        powered off mid-sample). Never suppresses system-critical exceptions
+        (``MemoryError``, ``SystemError``, ``KeyboardInterrupt``) -- those are
+        re-raised immediately.
+
+        Args:
+            func: The callable to invoke (typically an NVML API function).
+            *args: Positional arguments forwarded to ``func``.
+
+        Returns:
+            The return value of ``func(*args)`` on success, or ``None`` if any
+            non-critical ``Exception`` is raised. A debug-level log message is
+            emitted on failure.
+        """
         try:
             return func(*args)
+        except (MemoryError, SystemError, KeyboardInterrupt):
+            raise  # never suppress system-critical errors
         except Exception as e:
             logger.debug(
                 "NVML call %s(%s) failed: %s",
@@ -419,13 +614,32 @@ class DeviceSampler:
             return None
         return raw / 1000.0
 
+    def close(self) -> None:
+        """Explicitly stop sampling and shutdown NVML.
+
+        Call this before the object is garbage-collected.
+        ``__del__`` is not guaranteed to run (cyclic references, GC timing).
+        """
+        self.flush()
+        if self.device_info.backend == "cuda" and self._has_pynvml and self._pynvml is not None:
+            try:
+                self._pynvml.nvmlShutdown()
+            except self._pynvml.NVMLError:
+                pass
+
     def __del__(self):
+        """Finalizer: attempt to flush buffered samples and shut down NVML.
+
+        Wraps ``self.close()`` in a blanket ``except Exception`` because
+        ``__del__`` must never raise (Python 3.8+ ignores exceptions from
+        finalizers but logs a warning).
+
+        Note:
+            ``__del__`` is not guaranteed to run (cyclic references, GC timing).
+            Callers should explicitly invoke ``close()`` before the object goes
+            out of scope.
+        """
         try:
-            self.flush()
-            if self.device_info.backend == "cuda" and self._has_pynvml and self._pynvml is not None:
-                try:
-                    self._pynvml.nvmlShutdown()
-                except self._pynvml.NVMLError:
-                    pass
+            self.close()
         except Exception:
             pass

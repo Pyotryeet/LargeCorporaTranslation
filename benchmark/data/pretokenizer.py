@@ -143,6 +143,35 @@ def get_cache_key(
 
 @dataclass
 class CacheEntry:
+    """A single entry in the pre-tokenization cache manifest.
+
+    Stores metadata about a cached pre-tokenized Parquet file: the cache key,
+    model/pipeline configuration that produced it, chunk count, file size, and
+    timestamps for creation and last access (used for LRU eviction).
+
+    Attributes
+    ----------
+    cache_key : str
+        The 16-char hex cache key used as the Parquet filename.
+    model_path : str
+        HuggingFace model ID used during tokenization.
+    max_input_tokens : int
+        Maximum token length passed to the chunker.
+    overlap_tokens : int
+        Sliding-window overlap passed to the chunker.
+    min_chunk_tokens : int
+        Minimum token threshold used by ChunkFilter.
+    max_garbage_ratio : float
+        Maximum garbage-character ratio allowed by ChunkFilter.
+    num_chunks : int
+        Number of chunks stored in the Parquet file.
+    file_size_bytes : int
+        Size of the Parquet file on disk in bytes.
+    created_at : float
+        POSIX timestamp of when the cache entry was first created.
+    last_accessed : float
+        POSIX timestamp of the most recent cache hit; used for LRU eviction.
+    """
     cache_key: str
     model_path: str
     max_input_tokens: int
@@ -234,6 +263,33 @@ class PreTokenizer:
         input_paths: list[str] | None = None,
         cache_dir: Path | None = None,
     ):
+        """Initialize a PreTokenizer with model, tokenizer, and pipeline parameters.
+
+        Parameters
+        ----------
+        model_path : str
+            HuggingFace model ID. Used in the cache key.
+        tokenizer : PreTrainedTokenizerBase
+            Tokenizer instance. Must already be loaded (not a string ID).
+        max_input_tokens : int
+            Chunker max_input_tokens. Default 512.
+        overlap_tokens : int
+            Chunker overlap_tokens. Default 50.
+        min_chunk_tokens : int
+            ChunkFilter min_tokens. Default 10.
+        max_garbage_ratio : float
+            ChunkFilter max_garbage_ratio. Default 0.95.
+        input_paths : list[str] | None
+            Glob patterns for input files. Defaults to ["./data/input/*.jsonl.gz"].
+        cache_dir : Path | None
+            Directory for pre-tokenized Parquet output. Defaults to
+            ``~/.cache/tr_benchmark/pretokenized/``.
+
+        Raises
+        ------
+        ImportError
+            If ``pyarrow`` is not installed.
+        """
         if not HAS_PARQUET:
             raise ImportError("pyarrow is required for pre-tokenization — pip install pyarrow")
 
@@ -248,6 +304,19 @@ class PreTokenizer:
 
     @property
     def cache_key(self) -> str:
+        """Lazily-computed 16-char hex cache key for this PreTokenizer configuration.
+
+        Returns
+        -------
+        str
+            A deterministic cache key derived from the model path, tokenizer
+            vocabulary, chunking/filtering parameters, and input file set.
+
+        Caveats
+        -------
+        The key is computed once on first access and memoized. Any mutation to
+        configuration attributes after the first access will not be reflected.
+        """
         if not hasattr(self, "_cache_key"):
             self._cache_key = get_cache_key(
                 self.model_path, self.tokenizer,
@@ -259,12 +328,21 @@ class PreTokenizer:
 
     @property
     def parquet_path(self) -> Path:
+        """Full filesystem path to the pre-tokenized Parquet file.
+
+        Returns
+        -------
+        Path
+            ``<cache_dir>/<cache_key>.parquet``.
+        """
         return self.cache_dir / f"{self.cache_key}.parquet"
 
     def run(self, force: bool = False) -> int:
         """Run pre-tokenization.  Returns the number of chunks written.
 
         If *force* is False and a valid cache exists, this is a no-op.
+        Uses a lockfile to prevent two concurrent processes from writing
+        to the same Parquet file (which would produce a corrupted cache).
         """
         self.cache_dir.mkdir(parents=True, exist_ok=True)
 
@@ -272,6 +350,40 @@ class PreTokenizer:
             logger.info("Pre-tokenized cache exists: %s", self.parquet_path)
             pf = pq.ParquetFile(self.parquet_path)
             return pf.metadata.num_rows
+
+        # ── Acquire lockfile to prevent concurrent writes ──
+        import fcntl
+        lock_path = self.cache_dir / f".{self.cache_key}.lock"
+        try:
+            lock_fd = open(lock_path, "w")
+            try:
+                fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except (IOError, OSError):
+                # Another process is building the cache.  Wait for it to
+                # finish, then re-check.
+                logger.info(
+                    "Pre-tokenized cache is being built by another process — "
+                    "waiting for lock at %s", lock_path,
+                )
+                lock_fd.close()
+                with open(lock_path, "r") as wait_fd:
+                    fcntl.flock(wait_fd.fileno(), fcntl.LOCK_EX)  # blocking wait
+                if self.parquet_path.exists():
+                    pf = pq.ParquetFile(self.parquet_path)
+                    return pf.metadata.num_rows
+                # The other process failed — we'll rebuild below.
+                logger.warning(
+                    "Lock released but no cache found at %s — rebuilding.",
+                    self.parquet_path,
+                )
+                # Re-acquire lock for building
+                lock_fd = open(lock_path, "w")
+                fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX)
+            self._lock_fd = lock_fd  # held until process exits (crash-safe)
+        except (ImportError, AttributeError):
+            # fcntl not available (Windows) — skip locking, accept the race.
+            logger.debug("flock not available — skipping pretokenizer lock (race possible)")
+            self._lock_fd = None
 
         logger.info(
             "Pre-tokenizing: model=%s max_tok=%d overlap=%d → %s",
@@ -373,6 +485,20 @@ class PreTokenizedLoader:
     """
 
     def __init__(self, parquet_path: Path):
+        """Open a pre-tokenized Parquet file for reading.
+
+        Parameters
+        ----------
+        parquet_path : Path
+            Path to the Parquet file created by :class:`PreTokenizer`.
+
+        Raises
+        ------
+        ImportError
+            If ``pyarrow`` is not installed.
+        FileNotFoundError
+            If *parquet_path* does not exist on disk.
+        """
         if not HAS_PARQUET:
             raise ImportError("pyarrow is required — pip install pyarrow")
         self.parquet_path = Path(parquet_path)
@@ -383,6 +509,13 @@ class PreTokenizedLoader:
 
     @property
     def total_chunks(self) -> int:
+        """Total number of chunks stored in the pre-tokenized file.
+
+        Returns
+        -------
+        int
+            Row count from Parquet metadata (cheap, no data read).
+        """
         return self._total_chunks
 
     def iter_chunks(self) -> Iterator[tuple[str, list[int], int]]:

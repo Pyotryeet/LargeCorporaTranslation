@@ -22,7 +22,8 @@ MODEL_KEY="${1:-UD-IQ2_M}"
 PORT="${2:-8080}"
 HOST="${3:-0.0.0.0}"
 
-MODEL_DIR="${HOME}/models/GLM-5.2-GGUF/${MODEL_KEY}"
+LLAMA_MODEL_ROOT="${LLAMA_MODEL_ROOT:-${HOME}/models/GLM-5.2-GGUF}"
+MODEL_DIR="${LLAMA_MODEL_ROOT}/${MODEL_KEY}"
 # Try the standard filename pattern first, then fall back to glob
 MODEL_FILE="${MODEL_DIR}/GLM-5.2-${MODEL_KEY}-00001-of-00006.gguf"
 
@@ -43,7 +44,7 @@ if [ ! -f "${MODEL_FILE}" ]; then
 fi
 
 # ── GPU detection ────────────────────────────────────────────
-GPU_COUNT="?"
+GPU_COUNT=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null || wc -l || echo 0)
 CTX_SIZE=1048576
 GPU_LAYERS=99
 BATCH_SIZE=2048

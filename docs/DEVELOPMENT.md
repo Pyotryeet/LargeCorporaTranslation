@@ -1,7 +1,7 @@
 # Development Guide
 
 > **Purpose:** How to develop on, extend, and contribute to this codebase.
-> **Status:** Current as of v3.6.
+> **Status:** Current as of v3.7.
 > **Audience:** Engineers and LLM coding agents.
 
 ---
@@ -43,12 +43,12 @@ H200Research/
 ├── benchmark/                 # the package (entry: benchmark/__main__.py)
 │   ├── config/                # schema.py (Pydantic v2) · constants.py · model_presets.py
 │   ├── data/                  # loader · chunker · filters · pipeline · parallel_gz
-│   ├── hardware/              # backend detect · precision · JIT · fused_ops · kv_cache_quant · parallelism · trt_builder · cuda_graphs
+│   ├── hardware/              # backend detect · precision · parallelism · architecture
 │   ├── inference/             # engine · backends/ · speculative · paged_attention · continuous_batcher · batch_* · sampling
 │   ├── metrics/               # collector · throughput · gpu_sampler · system_sampler · batch_logger
-│   ├── observability/         # prometheus · server · dashboard · perf_regression · nsight
+│   ├── observability/         # prometheus_metrics
 │   ├── orchestration/         # harness · checkpoint · signals
-│   ├── quality/               # benchmark · metrics_{bertscore,comet,bleu,chrf} · references · confidence · ensemble
+│   ├── quality/               # benchmark · metrics_{bertscore,comet,bleu,chrf} · references
 │   ├── reporting/             # aggregator · extrapolation · json_report · markdown_report
 │   └── utils/                 # env_check · logging_setup · timer · version · json_utils · print_summary
 ├── quantization/              # static FP8 pipeline (smoothquant · qat · static_fp8)
@@ -122,9 +122,9 @@ of conftest fixtures — it wastes memory and diverges.
 4. **Initialize `self._configured_batch_size` in `__init__`** — the engine reads
    it via a property with *no default* (`engine.py:148`); a missing attribute is a
    bug, not a fallback.
-5. Register it (either in `ModelRegistry._register_builtin`, or via the plugin
-   system below).
-6. Return `BatchGenerationOutput`; compute `input_tokens_total` from
+5. **Separate CUDA and MPS implementations**: Following the v3.8 design pattern, split backend code into separate files (e.g. `yourbackend_cuda.py` and `yourbackend_mps.py`) and keep a dispatcher class in the main file (e.g. `yourbackend.py`) that uses `__getattr__` and `__setattr__` delegation proxies to route to the correct class at load time.
+6. Register the dispatcher in `ModelRegistry._register_builtin` (or via the plugin system below).
+7. Return `BatchGenerationOutput`; compute `input_tokens_total` from
    `attention_mask.sum()` (not padded length — see [§6](#6-coding-conventions)).
 
 ### 5.2 Add a custom plugin
@@ -178,7 +178,7 @@ These conventions exist because violating them has caused real bugs here (see
 ### Measured constants (replace guesses)
 
 These constants have been replaced with H200 measurements (June 2026).
-See `docs/MEASUREMENT_PLAN.md` for methodology and raw data.
+See COMPILATION_GUIDE.md for measured baselines.
 
 | Constant | Before (guess) | After (measured) | Source |
 |---|---|---|---|
@@ -205,7 +205,7 @@ See `docs/MEASUREMENT_PLAN.md` for methodology and raw data.
 - **torch 2.6.0+cu124** — still works but compile auto-skipped (cudagraph_trees bug).
 - **PyTorch built-in SDPA** — `F.scaled_dot_product_attention` handles all attention.
 - **FP8**: not working on pip venvs (TE cuBLASLt crash); TR_SKIP_FP8=1 is the default.
-  See [`FP8_TE_CUDA_ISSUES.md`](FP8_TE_CUDA_ISSUES.md).
+
 - **Pre-tokenization**: `--pretokenize` once per model; cache auto-detected thereafter (+60% TPS).
 - **TE FP8** — source-build required: `pip install 'transformer-engine[pytorch]' --no-build-isolation` with CPATH set. −40% TPS for 4B models.
 - **torch.compile** — works but minimal gain (<1%) for 4B. More benefit at 12B+.
