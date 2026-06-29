@@ -269,15 +269,7 @@ class BenchmarkHarness:
             },
             "plugin_name": model_cfg.plugin_name,
             "plugin_config": model_cfg.plugin_config,
-            # v3.3: TensorRT engine optimization.
-            "use_tensorrt": model_cfg.use_tensorrt,
-            "tensorrt": {
-                "precision": model_cfg.tensorrt_precision,
-                "max_batch": model_cfg.tensorrt_max_batch,
-                "cache_dir": model_cfg.tensorrt_cache_dir or "",
-                "force_rebuild": False,
-            },
-            # v3.3: safe mode disables experimental/risky optimizations.
+            # v3.9: safe mode disables experimental/risky optimizations.
             "safe_mode": self.safe_mode,
             # v3.4: Speculative decoding.
             "use_speculative": model_cfg.use_speculative,
