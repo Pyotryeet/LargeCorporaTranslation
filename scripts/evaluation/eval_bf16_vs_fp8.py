@@ -58,15 +58,18 @@ DEVICE = "cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.i
 DTYPE = torch.bfloat16 if DEVICE in ("mps", "cuda") else torch.float32
 
 def load_references():
-    refs = []
+    """Load references as a dict keyed by source_text for proper alignment."""
+    ref_map = {}
     with open(REF_FILE, encoding="utf-8") as f:
         for line in f:
             try:
                 obj = json.loads(line.strip())
+                src = obj.get("source_text", "").strip()
                 r = obj.get("reference_translation", "")
-                if r: refs.append(r)
+                if src and r:
+                    ref_map[src] = r
             except Exception: pass
-    return refs
+    return ref_map
 
 def compute_spbleu(hyps, refs):
     import sacrebleu
@@ -102,8 +105,12 @@ def main():
     print(f"Starting comparison evaluation on device: {DEVICE}...")
     with open(INFILE) as f:
         sentences = json.load(f)
-    refs = load_references()
+    ref_map = load_references()
     sources = [s["text"] for s in sentences]
+    # Build aligned refs list matching source order
+    refs = [ref_map.get(s.strip(), "") for s in sources]
+    n_matched = sum(1 for r in refs if r)
+    print(f"  Refs matched: {n_matched}/{len(sources)}")
     
     results = [] # list of dicts for CSV export
     translations_log = [] # detailed log of translations
@@ -227,27 +234,36 @@ def main():
                     torch.mps.empty_cache()
                 gc.collect()
 
-                # 3. Compute Metrics
+                # 3. Compute Metrics — only use matched source-reference pairs
                 print("Computing metrics...")
                 from benchmark.quality.metrics_comet import compute_comet, compute_comet_kiwi
                 from benchmark.quality.metrics_metricx import compute_metricx
                 from benchmark.quality.metrics_bertscore import compute_bertscore
                 import sacrebleu
 
-                # COMET-Kiwi
+                # Build matched triplets
+                m_src, m_hyp, m_ref = [], [], []
+                for s, h, r in zip(sources, hyps, refs):
+                    if r:
+                        m_src.append(s)
+                        m_hyp.append(h)
+                        m_ref.append(r)
+                print(f"  Using {len(m_ref)}/{len(sources)} matched pairs")
+
+                # COMET-Kiwi (reference-free, uses all)
                 kiwi = compute_comet_kiwi(sources, hyps).get("system_score")
                 # COMET-22
-                comet = compute_comet(sources, hyps, refs).get("system_score")
+                comet = compute_comet(m_src, m_hyp, m_ref).get("system_score")
                 # MetricX-24
-                metricx = compute_metricx(sources, hyps, refs).get("system_score")
+                metricx = compute_metricx(m_src, m_hyp, m_ref).get("system_score")
                 # BERTScore
-                bert = compute_bertscore(refs, hyps).get("system_score")
+                bert = compute_bertscore(m_ref, m_hyp).get("system_score")
                 # chrF++
-                chrf = round(sacrebleu.corpus_chrf(hyps, [refs], word_order=2).score, 1)
+                chrf = round(sacrebleu.corpus_chrf(m_hyp, [m_ref], word_order=2).score, 1)
                 # spBLEU
-                spbleu = compute_spbleu(hyps, refs)
+                spbleu = compute_spbleu(m_hyp, m_ref)
                 # Morph-BLEU
-                morph_bleu = compute_morph_bleu(hyps, refs)
+                morph_bleu = compute_morph_bleu(m_hyp, m_ref)
 
                 # Append to CSV results
                 results.append({

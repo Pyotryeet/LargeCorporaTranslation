@@ -61,19 +61,22 @@ sys.path.insert(0, str(ROOT))
 
 
 def load_references():
+    """Load references as a dict keyed by source_text for proper alignment."""
     if REF_FILE.exists():
-        refs = []
+        ref_map = {}
         with open(REF_FILE, encoding="utf-8") as f:
             for line in f:
                 try:
                     obj = json.loads(line.strip())
+                    src = obj.get("source_text", "").strip()
                     r = obj.get("reference_translation", "")
-                    if r: refs.append(r)
+                    if src and r:
+                        ref_map[src] = r
                 except Exception: pass
-        if refs:
-            print(f"References: {len(refs)} from {REF_FILE}")
-            return refs
-    return []
+        if ref_map:
+            print(f"References: {len(ref_map)} from {REF_FILE}")
+            return ref_map
+    return {}
 
 
 def compute_spbleu(hyps, refs):
@@ -128,10 +131,19 @@ def main():
     sources = [e["source_text"] for e in translations]
     hyps = {mid: [e["models"][mid]["text"] for e in translations]
             for mid in model_ids}
-    refs = load_references()
-    has_refs = refs and len(refs) == len(sources)
+    ref_map = load_references()
 
-    print(f"Sources: {len(sources)}  Models: {len(model_ids)}  Refs: {len(refs)}")
+    # Align references to translations by source text, not positional index
+    refs = []
+    for src in sources:
+        refs.append(ref_map.get(src.strip(), ""))
+    has_refs = ref_map and all(r for r in refs)
+    n_matched = sum(1 for r in refs if r)
+    n_missing = len(refs) - n_matched
+
+    print(f"Sources: {len(sources)}  Models: {len(model_ids)}  Refs matched: {n_matched}  Missing: {n_missing}")
+    if n_missing > 0:
+        print(f"  WARNING: {n_missing} source(s) have no matching reference — reference-based metrics will use only matched pairs")
     print()
 
     from benchmark.quality.metrics_comet import compute_comet_kiwi, compute_comet
@@ -150,14 +162,24 @@ def main():
         except Exception as e:
             print(f"  COMET-Kiwi:    ERROR — {e}")
 
-        if not has_refs:
-            print("  (reference-based metrics skipped — no references)")
+        # Build aligned triplets — only include pairs with a valid reference
+        matched_src, matched_hyp, matched_ref = [], [], []
+        for s, hyp, r in zip(sources, h, refs):
+            if r:  # non-empty reference exists for this source
+                matched_src.append(s)
+                matched_hyp.append(hyp)
+                matched_ref.append(r)
+
+        if not matched_ref:
+            print("  (reference-based metrics skipped — no matching references)")
             metrics_list.append(result)
             continue
 
+        print(f"  Using {len(matched_ref)}/{len(sources)} matched source-reference pairs")
+
         # 2. COMET-22 — reference-based
         try:
-            comet = compute_comet(sources, h, refs)
+            comet = compute_comet(matched_src, matched_hyp, matched_ref)
             result["metrics"]["comet"] = comet.get("system_score")
             print(f"  COMET-22:      {comet.get('system_score', 'N/A')}")
         except Exception as e:
@@ -166,10 +188,9 @@ def main():
         # 3. MetricX-24 — reference-based neural MQM error (lower=better)
         try:
             from benchmark.quality.metrics_metricx import compute_metricx
-            # MetricX-24 requires all STRING inputs — ensure no None/bytes
-            clean_src = [str(s) for s in sources]
-            clean_hyp = [str(hyp) for hyp in h]
-            clean_ref = [str(r) for r in refs]
+            clean_src = [str(s) for s in matched_src]
+            clean_hyp = [str(hyp) for hyp in matched_hyp]
+            clean_ref = [str(r) for r in matched_ref]
             mx = compute_metricx(clean_src, clean_hyp, clean_ref)
             result["metrics"]["metricx_24"] = mx.get("system_score")
             print(f"  MetricX-24:    {mx.get('system_score', 'N/A')}")
@@ -179,7 +200,7 @@ def main():
         # 4. BERTScore — reference-based
         try:
             from benchmark.quality.metrics_bertscore import compute_bertscore
-            b = compute_bertscore(refs, h)
+            b = compute_bertscore(matched_ref, matched_hyp)
             result["metrics"]["bertscore"] = b.get("system_score")
             print(f"  BERTScore:     {b.get('system_score', 'N/A')}")
         except Exception as e:
@@ -188,7 +209,7 @@ def main():
         # 5. chrF++ — character+word n-gram
         try:
             from benchmark.quality.metrics_chrf import compute_chrf
-            c = compute_chrf(h, [[r] for r in refs])
+            c = compute_chrf(matched_hyp, [[r] for r in matched_ref])
             result["metrics"]["chrf"] = c.get("score")
             print(f"  chrF++:        {c.get('score', 'N/A')}")
         except Exception as e:
@@ -196,7 +217,7 @@ def main():
 
         # 6. spBLEU — SentencePiece-tokenized BLEU
         try:
-            sp = compute_spbleu(h, refs)
+            sp = compute_spbleu(matched_hyp, matched_ref)
             result["metrics"]["spbleu"] = sp.get("score")
             print(f"  spBLEU:        {sp.get('score', 'N/A')}")
         except Exception as e:
@@ -204,7 +225,7 @@ def main():
 
         # 7. Morph-BLEU — Turkish suffix-stripped BLEU
         try:
-            mb = compute_morph_bleu(h, refs)
+            mb = compute_morph_bleu(matched_hyp, matched_ref)
             result["metrics"]["morph_bleu"] = mb.get("score")
             print(f"  Morph-BLEU:    {mb.get('score', 'N/A')}")
         except Exception as e:
