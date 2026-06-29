@@ -76,6 +76,27 @@ EXPERIMENTS = [
         "flash": True,
         "description": "FP8 + torch.compile + Flash SDPA (all optimizations)",
     },
+    {
+        "label": "fp8_no_flash",
+        "fp8": True,
+        "compile": False,
+        "flash": False,
+        "description": "FP8 + eager attention (isolate FP8 without Flash SDPA)",
+    },
+    {
+        "label": "compile_no_flash",
+        "fp8": False,
+        "compile": True,
+        "flash": False,
+        "description": "torch.compile + eager attention (isolate compile without Flash SDPA)",
+    },
+    {
+        "label": "fp8_compile_no_flash",
+        "fp8": True,
+        "compile": True,
+        "flash": False,
+        "description": "FP8 + torch.compile, Flash SDPA off (all opts except flash)",
+    },
 ]
 
 GPU_COUNTS = [1, 2]
