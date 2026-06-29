@@ -497,6 +497,17 @@ class StaticFP8Linear(torch.nn.Module):
         else:
             self.bias = None
         
+        # Copy hooks from the original linear module to preserve device placement/alignment hooks (e.g., Hugging Face accelerate)
+        self._forward_hooks = linear._forward_hooks
+        self._forward_pre_hooks = linear._forward_pre_hooks
+        self._backward_hooks = linear._backward_hooks
+        self._backward_pre_hooks = linear._backward_pre_hooks
+
+        # Copy HF accelerate specific attributes if they exist
+        for attr in ["_hf_hook", "hf_device_map"]:
+            if hasattr(linear, attr):
+                setattr(self, attr, getattr(linear, attr))
+
         # Cache for dequantized weight to bypass PyTorch runtime casting overhead during decoding
         self._cached_weight = None
         self._cached_dtype = None
