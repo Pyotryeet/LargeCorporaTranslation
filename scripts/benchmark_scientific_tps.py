@@ -9,6 +9,9 @@ Runs a matrix of controlled experiments on H200 GPUs:
     - torch.compile (reduce-overhead mode)
     - Flash SDPA (scaled_dot_product_attention)
     - Data parallelism (dp=1 vs dp=2)
+    - Speculative decoding (K=3, self-speculative)
+    - PagedAttention KV-cache
+    - Continuous batching
 
   Models:
     NLLB-600M, NLLB-1.3B, NLLB-3.3B, MADLAD-3B, TranslateGemma-4B
@@ -21,7 +24,7 @@ Output: data/output/scientific_tps_matrix.csv
 Usage:
     python3 scripts/benchmark_scientific_tps.py
 """
-import json, csv, os, sys, gc, time, tempfile, atexit
+import json, csv, os, sys, gc, time, tempfile, atexit, subprocess
 from pathlib import Path
 from datetime import datetime, timezone
 
@@ -232,7 +235,6 @@ def _build_config(
         },
         "runtime": {
             "target_duration_seconds": DURATION_SECONDS,
-            "batch_size": 16 if experiment.get("continuous", False) else 0, # Force batch size >= 2 for continuous batching
             "checkpoint_interval_seconds": 300,
             "heartbeat_interval_seconds": 30,
             "metrics_sample_rate_hz": 1,
@@ -254,15 +256,6 @@ def _build_config(
     }
 
     return cfg
-
-
-def _find_latest_report(output_base: Path) -> Path | None:
-    """Find the newest benchmark_report.json under the output directory."""
-    reports = sorted(output_base.glob("**/report/benchmark_report.json"))
-    if not reports:
-        return None
-    # Return the most recently modified one
-    return max(reports, key=lambda p: p.stat().st_mtime)
 
 
 def run_experiment(
@@ -289,17 +282,11 @@ def run_experiment(
     env = os.environ.copy()
     env["CUDA_VISIBLE_DEVICES"] = ",".join(str(i) for i in range(num_gpus))
 
-    # FP8/SmoothQuant control:
-    # The autoregressive backend applies FP8 by default on CUDA.
-    # The NLLB backend does NOT have built-in FP8 — we skip FP8 env vars
-    # for enc-dec models and instead apply FP8 manually via a wrapper.
-    # For all backends, TR_SKIP_FP8=1 / TR_SKIP_SMOOTHQUANT=1 disables them.
+    # FP8/SmoothQuant control
     if experiment["fp8"]:
-        # Enable FP8 + SmoothQuant (default behavior on CUDA, don't skip)
         env.pop("TR_SKIP_FP8", None)
         env.pop("TR_SKIP_SMOOTHQUANT", None)
     else:
-        # Disable FP8 + SmoothQuant
         env["TR_SKIP_FP8"] = "1"
         env["TR_SKIP_SMOOTHQUANT"] = "1"
 
@@ -314,19 +301,13 @@ def run_experiment(
     if not experiment["compile"]:
         cmd.append("--no-compile")
 
+    if experiment.get("continuous"):
+        # Force batch size override on the CLI to ensure continuous batching runs
+        cmd.extend(["--batch-size", "16"])
+
     # For NLLB/MADLAD, tell the CLI it's an encoder-decoder model
     if model_type in ("nllb", "madlad"):
         cmd.append("--nllb")
-
-    if experiment["fp8"] and model_type in ("nllb", "madlad"):
-        # The NLLB CUDA backend does NOT have built-in FP8/SmoothQuant.
-        # We use the --smoothquant flag + env vars to signal intent,
-        # but the actual FP8 application happens only in the autoregressive
-        # backend. For NLLB, FP8 is not natively supported through the
-        # benchmark harness — log a note and let it run as BF16.
-        # The env vars above will be ignored by the NLLB backend.
-        print(f"  NOTE: FP8 for {model_type} runs through autoregressive_cuda backend")
-        print(f"        (NLLB CUDA backend does not have native FP8 support)")
 
     print(f"  CMD: {' '.join(cmd)}")
     print(f"  FP8={'ON' if experiment['fp8'] else 'OFF'} | "
@@ -335,7 +316,6 @@ def run_experiment(
           f"DP={dp}")
 
     # ── Execute ──
-    import subprocess
     t_start = time.time()
     try:
         result = subprocess.run(
@@ -353,23 +333,29 @@ def run_experiment(
     elapsed = time.time() - t_start
     print(f"  Completed in {elapsed:.0f}s (exit={result.returncode})")
 
-    if result.returncode != 0:
-        print(f"  ⚠ Non-zero exit code: {result.returncode}")
-        # Print last 20 lines of stderr for debugging
-        stderr_lines = (result.stderr or "").strip().split("\n")
-        for line in stderr_lines[-20:]:
-            print(f"    stderr: {line}")
+    # Parse exact run directory from stdout to avoid race conditions or picking up old reports
+    report_dir = None
+    if result.stdout:
+        for line in result.stdout.split("\n"):
+            if "Run dir:" in line:
+                # Format is: "  Run dir:    ./output/scientific/2026-06-29_21-00-49"
+                parts = line.split("Run dir:")
+                if len(parts) > 1:
+                    report_dir = Path(parts[1].strip())
+                    break
 
-    # ── Parse report ──
-    output_base = ROOT / "output" / "scientific"
-    report_path = _find_latest_report(output_base)
+    if not report_dir:
+        print("  ⚠ Could not parse Run dir from stdout")
+        # Print stdout and stderr for debugging
+        print("--- STDOUT ---")
+        print(result.stdout)
+        print("--- STDERR ---")
+        print(result.stderr)
+        return None
 
-    if not report_path:
-        print(f"  ⚠ No report found under {output_base}")
-        # Print last 10 lines of stdout for debugging
-        stdout_lines = (result.stdout or "").strip().split("\n")
-        for line in stdout_lines[-10:]:
-            print(f"    stdout: {line}")
+    report_path = ROOT / report_dir / "report" / "benchmark_report.json"
+    if not report_path.exists():
+        print(f"  ⚠ Report file does not exist: {report_path}")
         return None
 
     print(f"  Report: {report_path}")
@@ -378,21 +364,24 @@ def run_experiment(
         report = json.load(f)
 
     # Extract TPS metrics
-    batch_metrics = report.get("metrics", {}).get("batch", {})
-    extrapolation = report.get("extrapolation", {})
-    runtime = report.get("runtime", {})
+    batch_metrics = report.get("metrics", {}).get("batch", {}) or {}
+    extrapolation = report.get("extrapolation", {}) or {}
+    runtime = report.get("runtime", {}) or {}
 
-    mean_tps = (
-        batch_metrics.get("mean_tps")
-        or extrapolation.get("mean_tokens_per_second")
-    )
+    mean_tps = batch_metrics.get("mean_tps")
+    if mean_tps is None:
+        mean_tps = extrapolation.get("mean_tokens_per_second")
     median_tps = batch_metrics.get("median_tps")
     std_tps = batch_metrics.get("std_tps")
 
-    if mean_tps:
-        print(f"  ✓ TPS: mean={mean_tps:.1f}, median={median_tps or 0:.1f}, std={std_tps or 0:.1f}")
+    if mean_tps is not None:
+        print(f"  ✓ TPS: mean={mean_tps:.1f}, median={median_tps or 0.0:.1f}, std={std_tps or 0.0:.1f}")
     else:
         print(f"  ⚠ No TPS data found in report")
+
+    # Safe lookup of optional runtime duration
+    actual_duration = runtime.get("actual_duration_seconds")
+    duration_s = round(actual_duration, 1) if actual_duration is not None else None
 
     return {
         "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -402,16 +391,12 @@ def run_experiment(
         "experiment": exp_label,
         "gpus": num_gpus,
         "dp": num_gpus,
-        "mean_tps": round(mean_tps, 2) if mean_tps else None,
-        "median_tps": round(median_tps, 2) if median_tps else None,
-        "std_tps": round(std_tps, 2) if std_tps else None,
+        "mean_tps": round(mean_tps, 2) if mean_tps is not None else None,
+        "median_tps": round(median_tps, 2) if median_tps is not None else None,
+        "std_tps": round(std_tps, 2) if std_tps is not None else None,
         "total_tokens": runtime.get("total_tokens_translated"),
         "batches": runtime.get("batches_completed"),
-        "duration_s": (
-            round(runtime["actual_duration_seconds"], 1)
-            if runtime.get("actual_duration_seconds")
-            else None
-        ),
+        "duration_s": duration_s,
         "flash_sdpa": "✓" if experiment["flash"] else "✗",
         "torch_compile": "✓" if experiment["compile"] else "✗",
         "fp8_smoothquant": "✓" if experiment["fp8"] else "✗",
@@ -433,16 +418,23 @@ def _write_csv(rows: list[dict]):
     tmp_path.replace(OUTPUT)
 
 
-def main():
-    # Calculate precise total number of cells to run
-    total = 0
+def _get_active_runs() -> list[tuple]:
+    """Generate all valid runs. Factors out configuration logic to avoid duplication."""
+    runs = []
     for model_id, model_path, model_type in MODELS:
         for experiment in EXPERIMENTS:
+            # Skip causal-only experiments for encoder-decoder models
+            if experiment.get("speculative") or experiment.get("paged") or experiment.get("continuous"):
+                if model_type != "gemma":
+                    continue
             for num_gpus in GPU_COUNTS:
-                if experiment.get("speculative") or experiment.get("paged") or experiment.get("continuous"):
-                    if model_type != "gemma":
-                        continue
-                total += 1
+                runs.append((model_id, model_path, model_type, experiment, num_gpus))
+    return runs
+
+
+def main() -> int:
+    active_runs = _get_active_runs()
+    total = len(active_runs)
 
     print(f"Scientific TPS Benchmark Matrix")
     print(f"  Models:      {len(MODELS)}")
@@ -455,37 +447,33 @@ def main():
 
     rows: list[dict] = []
     completed = 0
+    failures = 0
 
-    for model_id, model_path, model_type in MODELS:
-        for experiment in EXPERIMENTS:
-            # Skip causal-only experiments for encoder-decoder models
-            if experiment.get("speculative") or experiment.get("paged") or experiment.get("continuous"):
-                if model_type != "gemma":
-                    continue
+    for model_id, model_path, model_type, experiment, num_gpus in active_runs:
+        completed += 1
+        print(f"\n[{completed}/{total}]", end="")
 
-            for num_gpus in GPU_COUNTS:
-                completed += 1
-                print(f"\n[{completed}/{total}]", end="")
+        row = run_experiment(
+            model_id, model_path, model_type,
+            experiment, num_gpus,
+        )
 
-                row = run_experiment(
-                    model_id, model_path, model_type,
-                    experiment, num_gpus,
-                )
+        if row:
+            rows.append(row)
+            _write_csv(rows)
+            print(f"  → Saved ({len(rows)} rows so far)")
+        else:
+            print("  ⚠ Failed cell run recorded as None")
+            failures += 1
 
-                if row:
-                    rows.append(row)
-                    # Write incrementally for crash safety
-                    _write_csv(rows)
-                    print(f"  → Saved ({len(rows)} rows so far)")
-
-                # Brief pause between runs for GPU cooldown + memory release
-                gc.collect()
-                time.sleep(5)
+        time.sleep(5)
 
     print(f"\n{'=' * 72}")
-    print(f"DONE — {len(rows)}/{total} experiments completed → {OUTPUT}")
+    print(f"DONE — {len(rows)}/{total} experiments completed (failures={failures}) → {OUTPUT}")
     print(f"{'=' * 72}")
+
+    return 1 if failures > 0 or len(rows) == 0 else 0
 
 
 if __name__ == "__main__":
-    sys.exit(main() or 0)
+    sys.exit(main())

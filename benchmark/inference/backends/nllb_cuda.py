@@ -67,7 +67,7 @@ class NLLBCUDABackend(InferenceBackend):
         load_start = time.monotonic()
         logger.info("=== NLLB CUDA: loading %s ===", self.model_path)
 
-        from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
+        from transformers import AutoModelForSeq2SeqLM, AutoTokenizer, T5ForConditionalGeneration
 
         if self.device_info and hasattr(self.device_info, 'device') and self.device_info.device is not None:
             self.devices = [self.device_info.device]
@@ -127,8 +127,10 @@ class NLLBCUDABackend(InferenceBackend):
         except Exception:
             single_gpu = False
 
+        model_cls = T5ForConditionalGeneration if _is_madlad else AutoModelForSeq2SeqLM
+
         if single_gpu or n_devs == 1:
-            self.model = AutoModelForSeq2SeqLM.from_pretrained(
+            self.model = model_cls.from_pretrained(
                 self.model_path,
                 torch_dtype=dtype,
                 trust_remote_code=False,
@@ -147,7 +149,7 @@ class NLLBCUDABackend(InferenceBackend):
                     4 * 1024 ** 3,
                 )
                 max_memory[i] = usable
-            self.model = AutoModelForSeq2SeqLM.from_pretrained(
+            self.model = model_cls.from_pretrained(
                 self.model_path,
                 torch_dtype=dtype,
                 trust_remote_code=False,
