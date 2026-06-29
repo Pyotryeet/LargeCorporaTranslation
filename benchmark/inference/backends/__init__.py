@@ -21,8 +21,6 @@ from benchmark.inference.backends.custom_plugin import (
     register_plugin,
 )
 from benchmark.inference.backends.autoregressive import AutoregressiveBackend
-from benchmark.inference.backends.diffusion import DiffusionBackend
-
 __all__ = [
     "InferenceBackend",
     "ModelCapability",
@@ -33,5 +31,4 @@ __all__ = [
     "PluginRegistry",
     "register_plugin",
     "AutoregressiveBackend",
-    "DiffusionBackend",
 ]

@@ -20,7 +20,35 @@ from pathlib import Path
 import torch
 import numpy as np
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+# Monkey patch to fix transformers 5.x compatibility shims with COMET
+try:
+    from transformers import XLMRobertaTokenizer, XLMRobertaTokenizerFast
+    def _build_inputs_with_special_tokens(self, token_ids_0, token_ids_1=None):
+        if token_ids_1 is None:
+            return [self.bos_token_id] + token_ids_0 + [self.eos_token_id]
+        return [self.bos_token_id] + token_ids_0 + [self.eos_token_id] + [self.bos_token_id] + token_ids_1 + [self.eos_token_id]
+    XLMRobertaTokenizer.build_inputs_with_special_tokens = _build_inputs_with_special_tokens
+    XLMRobertaTokenizerFast.build_inputs_with_special_tokens = _build_inputs_with_special_tokens
+
+    import comet.encoders.xlmr
+    def _forward_patched(self, input_ids: torch.Tensor, attention_mask: torch.Tensor, **kwargs):
+        model_output = self.model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            output_hidden_states=True,
+            return_dict=True,
+        )
+        return {
+            "sentemb": model_output.last_hidden_state[:, 0, :],
+            "wordemb": model_output.last_hidden_state,
+            "all_layers": model_output.hidden_states,
+            "attention_mask": attention_mask,
+        }
+    comet.encoders.xlmr.XLMREncoder.forward = _forward_patched
+except Exception:
+    pass
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 INPUT_FILE = PROJECT_ROOT / "data" / "output" / "model_selection" / "translations.json"
 OUTPUT_FILE = PROJECT_ROOT / "data" / "output" / "model_selection" / "metrics.json"
 
@@ -262,14 +290,24 @@ def main():
                         max_length=1536, padding=False,
                     ).to("cuda:0")
                     with torch.no_grad():
-                        outputs = mx_model.generate(
-                            **inputs, max_new_tokens=16, num_beams=1,
+                        batch_size = inputs["input_ids"].size(0)
+                        decoder_input_ids = torch.zeros(
+                            (batch_size, 1),
+                            dtype=torch.long,
+                            device=inputs["input_ids"].device,
                         )
-                    pred = mx_tokenizer.decode(outputs[0], skip_special_tokens=True)
-                    # MetricX outputs a float string; parse it
+                        outputs = mx_model(
+                            input_ids=inputs["input_ids"],
+                            attention_mask=inputs.get("attention_mask"),
+                            decoder_input_ids=decoder_input_ids,
+                            return_dict=True,
+                        )
+                        lm_logits = outputs.logits  # shape: [batch_size, 1, vocab_size]
+                        pred = lm_logits[:, 0, 250089]
+                        pred = torch.clamp(pred, 0.0, 25.0)
                     try:
-                        score = float(pred.strip())
-                    except ValueError:
+                        score = float(pred.item())
+                    except Exception:
                         score = None
                     seg_scores.append(score)
                 metricx_scores[mid] = seg_scores
@@ -289,12 +327,12 @@ def main():
     # ── Compile final metrics ───────────────────────────────────────────
     print("\n--- Compiling final metrics ---")
     results = []
-    for entry in data:
+    for sid_idx, entry in enumerate(data):
         sid = entry["source_id"]
         src = entry["source_text"]
         for mid in model_ids:
             m = entry["models"][mid]
-            idx = sid * len(model_ids) + model_ids.index(mid)
+            idx = model_ids.index(mid) * len(data) + sid_idx
             item = {
                 "source_id": sid,
                 "source_text": src,

@@ -106,7 +106,7 @@ data:
   max_garbage_ratio: 0.95
   chunk_overlap_tokens: 50
 extrapolation:
-  total_clearnet_non_tr_tokens: 6230000000000
+  total_clearnet_non_tr_tokens: 200000000000
 YAMLEND
 
     echo -e "  ${C}Config:${N} $CONFIG_FILE"

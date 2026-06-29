@@ -20,7 +20,7 @@
 3. [Why Turkish Breaks Standard Metrics](#3-why-turkish-breaks-standard-metrics)
 4. [The Single-Reference Problem](#4-the-single-reference-problem)
 5. [Statistical Methodology for Reliable Evaluation](#5-statistical-methodology-for-reliable-evaluation)
-6. [Inference Cost at 6.23T Scale](#6-inference-cost-at-623t-scale)
+6. [Inference Cost at 200B Scale](#6-inference-cost-at-623t-scale)
 7. [Recommended Architecture](#7-recommended-architecture)
 8. [Implementation Roadmap](#8-implementation-roadmap)
 9. [Sources](#9-sources)
@@ -60,7 +60,7 @@ challenge by challenge.
 
 Reference-free (or "quality estimation," QE) metrics evaluate a translation
 from source + hypothesis only, without needing a human reference. This is
-critical at scale — commissioning human references for every domain in a 6.23T
+critical at scale — commissioning human references for every domain in a 200B
 token corpus is infeasible.
 
 #### xCOMET-lite (278M) — Recommended Tier 1
@@ -187,10 +187,10 @@ metrics like xCOMET are more reliable.
 | **Speed** | 196–256s per 1,000 scores on H100 (44× slower than COMET) |
 | **Self-bias** | LLMs favor their own translations |
 | **Language bias** | Better on high-resource languages; unvalidated for TR |
-| **Cost at 6.23T scale** | Prohibitively expensive |
+| **Cost at 200B scale** | Prohibitively expensive |
 
 **Verdict:** LLM-as-judge is academically validated for **system-level ranking**
-but impractical for per-segment evaluation at 6.23T token scale. The 44× speed
+but impractical for per-segment evaluation at 200B token scale. The 44× speed
 gap and documented self-bias make it unsuitable as a primary metric. Reserve for
 occasional calibration against human judgments — it is the best available
 approximation to human evaluation, just not at scale.
@@ -199,7 +199,7 @@ approximation to human evaluation, just not at scale.
 
 ### 2.4 Cross-Metric Comparison
 
-| Metric | Type | VRAM | Time/1000 scores | 6.23T GPU-hours | Gated? |
+| Metric | Type | VRAM | Time/1000 scores | 200B GPU-hours | Gated? |
 |--------|------|------|-----------------|----------------------|--------|
 | **xCOMET-lite** | Ref-free | 1.8 GB | 6.5s | ~11,000 | No |
 | **xCOMET-XL** | Ref-free | 8 GB | ~12s | ~20,000 | No |
@@ -208,7 +208,7 @@ approximation to human evaluation, just not at scale.
 | MetricX-25 (est.) | Ref-free | ~24 GB | ~30s | ~51,000 | No |
 | GPT-4 API (GEMBA) | LLM-judge | N/A | 256s | $50M+ | Yes |
 
-For 6.23T tokens: evaluate every batch with xCOMET-lite (1.8 GB VRAM, marginal
+For 200B tokens: evaluate every batch with xCOMET-lite (1.8 GB VRAM, marginal
 overhead), then run the quality gate on progressive stratified samples with
 xCOMET-XL. **Total inference budget: ~12,000–15,000 GPU-hours — approximately
 0.7% of the translation compute budget.**
@@ -408,13 +408,13 @@ To calibrate with human evaluation:
 
 ---
 
-## 6. Inference Cost at 6.23T Scale
+## 6. Inference Cost at 200B Scale
 
 Cost matters. A metric that costs more to run than the translation itself is
 not a metric — it's a second translation. The table below projects GPU-hours
-for each metric at the full 6.23T token scale:
+for each metric at the full 200B token scale:
 
-| Metric | VRAM | Time/1,000 scores | 6.23T tokens GPU-hours |
+| Metric | VRAM | Time/1,000 scores | 200B tokens GPU-hours |
 |--------|------|-----------------|----------------------|
 | **xCOMET-lite** | 1.8 GB | 6.5s | ~11,000 |
 | **xCOMET-XL** | 8 GB | ~12s | ~20,000 |
@@ -465,7 +465,7 @@ Tier 2 — Statistical Quality Gate (stratified samples)
 | **Single 32-sentence eval** | **Progressive sampling 100→500→1,000→2,000** | Statistical power + early exit |
 | **No statistical test** | **Paired bootstrap with 95% CI** | Academic standard |
 | **Hardcoded pass/fail** | **Dynamic gate vs baseline + effect size** | Adapts to model improvements |
-| **No per-domain reporting** | **fastText domain classifier + per-domain scores** | Critical for 6.23T heterogeneous text |
+| **No per-domain reporting** | **fastText domain classifier + per-domain scores** | Critical for 200B heterogeneous text |
 | **Max 32 references** | **Full 1,960 references when time allows** | Statistical power |
 
 ---

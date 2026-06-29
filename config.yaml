@@ -55,5 +55,5 @@ data:
   chunk_overlap_tokens: 50
 
 extrapolation:
-  total_clearnet_non_tr_tokens: 6230000000000
+  total_clearnet_non_tr_tokens: 200000000000
   gpu_cost_per_hour_usd: null

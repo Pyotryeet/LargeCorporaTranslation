@@ -264,14 +264,14 @@ class ExtrapolationConfig(BaseModel):
 
     Fields:
         total_clearnet_non_tr_tokens: Estimated total clean-web non-Turkish tokens
-            available for processing. Default 6.23 trillion, minimum 1 million.
+            available for processing. Default 200 billion, minimum 1 million.
         gpu_cost_per_hour_usd: Cloud-equivalent GPU hourly cost (e.g., ~$3.00/GPU-hr
             for H200 on-demand, see M0.4). None means cost extrapolation is disabled.
 
     Model config forbids extra fields.
     """
     model_config = {"extra": "forbid"}
-    total_clearnet_non_tr_tokens: int = Field(default=6_230_000_000_000, ge=1_000_000)
+    total_clearnet_non_tr_tokens: int = Field(default=200_000_000_000, ge=1_000_000)
     gpu_cost_per_hour_usd: Optional[float] = None  # cloud-equivalent ~$3.00/GPU-hour for H200 on-demand. See M0.4.
 
 

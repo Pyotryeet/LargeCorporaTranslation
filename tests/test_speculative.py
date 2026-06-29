@@ -84,7 +84,7 @@ def _make_tiny_model_and_tokenizer(real_tokenizer):
     vocab_size = len(tokenizer)
 
     class TinyDecoderLayer(nn.Module):
-        def __init__(self, hidden=32):
+        def __init__(self, hidden=16):
             super().__init__()
             self.self_attn = nn.MultiheadAttention(hidden, 2, batch_first=True)
             self.mlp = nn.Sequential(
@@ -112,7 +112,7 @@ def _make_tiny_model_and_tokenizer(real_tokenizer):
             return hidden_states,
 
     class TinyModel(nn.Module):
-        def __init__(self, vocab_size, hidden=32, num_layers=8):
+        def __init__(self, vocab_size, hidden=16, num_layers=6):
             super().__init__()
             self.model = nn.Module()
             self.model.embed_tokens = nn.Embedding(vocab_size, hidden)
@@ -153,7 +153,7 @@ def _make_tiny_model_and_tokenizer(real_tokenizer):
             out.logits = logits
             return out
 
-    model = TinyModel(vocab_size, hidden=32, num_layers=8)
+    model = TinyModel(vocab_size, hidden=16, num_layers=6)
     model.eval()
     return model, tokenizer
 
@@ -563,7 +563,6 @@ class TestFactory:
 # ═════════════════════════════════════════════════════════════════════════════
 
 
-@pytest.mark.slow
 class TestSpeculativeSpeedup:
     """Measure wall-clock speedup of self-speculative vs standard decoding.
 
@@ -676,7 +675,6 @@ class TestSpeculativeSpeedup:
         assert stats["acceptance_rate"] >= 0.0
 
 
-@pytest.mark.slow
 class TestSpeculativeCorrectness:
     """Verify speculative decoding produces coherent output."""
 

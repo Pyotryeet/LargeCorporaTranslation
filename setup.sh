@@ -70,7 +70,7 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-banner "TR Benchmark Setup — v3.6"
+banner "TR Benchmark Setup — v3.9"
 echo "  Platform: $(uname -s) / $(uname -m)"
 echo "  Python:   $PYTHON_BIN"
 echo "  Profile:  $PROFILE"

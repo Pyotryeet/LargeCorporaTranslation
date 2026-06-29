@@ -108,7 +108,7 @@ let totalModels = 5;
 (async function autoLoad() {
     const status = document.getElementById('auto-load-status');
     try {
-        const resp = await fetch('data/output/model_selection/human_eval_data.json');
+        const resp = await fetch('../../data/output/model_selection/human_eval_data.json');
         if (resp.ok) {
             const data = await resp.json();
             sources = data.sources;

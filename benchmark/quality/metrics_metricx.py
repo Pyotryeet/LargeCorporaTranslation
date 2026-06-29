@@ -80,7 +80,16 @@ def _get_metricx_model_and_tokenizer(model_name: str = DEFAULT_METRICX_MODEL):
         "Loading MetricX-24 model %s (first use, cached thereafter)", model_name
     )
 
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    tokenizer_model = "google/mt5-xl"  # Official MetricX tokenizer
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_model)
+        logger.info("MetricX-24 tokenizer loaded from %s", tokenizer_model)
+    except Exception as e:
+        logger.warning(
+            "MetricX tokenizer %s unavailable (%s) — trying checkpoint tokenizer",
+            tokenizer_model, e,
+        )
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
     
     # Select best device
     if torch.cuda.is_available():
@@ -232,7 +241,7 @@ def compute_metricx(
 
         seg_scores = []
         for src, ref, hyp in zip(sources, references, hypotheses):
-            input_text = f"source: {src} reference: {ref} candidate: {hyp}"
+            input_text = f"source: {src} candidate: {hyp} reference: {ref}"
             inputs = tokenizer(
                 input_text,
                 return_tensors="pt",
@@ -242,16 +251,25 @@ def compute_metricx(
             ).to(device)
 
             with torch.no_grad():
-                outputs = model.generate(
-                    **inputs,
-                    max_new_tokens=16,
-                    num_beams=1,
+                batch_size = inputs["input_ids"].size(0)
+                decoder_input_ids = torch.zeros(
+                    (batch_size, 1),
+                    dtype=torch.long,
+                    device=inputs["input_ids"].device,
                 )
-            
-            pred = tokenizer.decode(outputs[0], skip_special_tokens=True)
+                outputs = model(
+                    input_ids=inputs["input_ids"],
+                    attention_mask=inputs.get("attention_mask"),
+                    decoder_input_ids=decoder_input_ids,
+                    return_dict=True,
+                )
+                lm_logits = outputs.logits  # shape: [batch_size, 1, vocab_size]
+                pred = lm_logits[:, 0, 250089]
+                pred = torch.clamp(pred, 0.0, 25.0)
+
             try:
-                score = float(pred.strip())
-            except ValueError:
+                score = float(pred.item())
+            except Exception:
                 score = None
             seg_scores.append(score)
 

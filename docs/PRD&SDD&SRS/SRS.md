@@ -49,7 +49,7 @@ To isolate production optimizations from development constraints, the execution 
 
 The System:
 - Auto-detects the available backend at startup.
-- Loads and serves a translation model (e.g. NLLB-600M, custom Bilingual-240M, or TranslateGemma 4B) for English → Turkish translation via the model-agnostic backend protocol (autoregressive, encoder-decoder, custom plugin).
+- Loads and serves a translation model (e.g. NLLB-600M, custom Bilingual-240M, or TranslateGemma 4B) for English → Turkish translation via the backend-dispatched protocol (autoregressive, encoder-decoder, custom plugin).
 - Streams input text, translates, collects metrics, and runs a quality benchmark.
 - Produces a report suitable for extrapolating full-ClearNet translation cost and duration.
 

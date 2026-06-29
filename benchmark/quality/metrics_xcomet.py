@@ -39,16 +39,25 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_XCOMET_MODEL = "Unbabel/XCOMET-XL"
 
-# ── Module-level model cache ─────────────────────────────────────────────────
-_xcomet_model = None
-_xcomet_lock = threading.Lock()
-
+# ── Version check ──────────────────────────────────────────────────────────
+# xCOMET downloadable checkpoints require COMET >= 2.3.0.
+# COMET 2.2.x has the xCOMET metric class but no downloadable model.
 try:
     from comet import download_model, load_from_checkpoint
-
+    import comet as _comet_pkg
+    _comet_version = tuple(int(x) for x in _comet_pkg.__version__.split(".")[:2])
     HAS_COMET = True
+    HAS_XCOMET_MODEL = _comet_version >= (2, 3)
+    if not HAS_XCOMET_MODEL:
+        logger = __import__("logging").getLogger(__name__)
+        logger.info(
+            "xCOMET-lite requires COMET >= 2.3.0 (installed: %s). "
+            "Falling back to COMET-Kiwi for reference-free evaluation.",
+            _comet_pkg.__version__,
+        )
 except ImportError:
     HAS_COMET = False
+    HAS_XCOMET_MODEL = False
 
 
 def _get_xcomet_model(model_name: str = DEFAULT_XCOMET_MODEL):
@@ -147,7 +156,19 @@ def compute_xcomet(
         logger.error("unbabel-comet not installed")
         return {
             "system_score": None,
-            "error": "unbabel-comet not installed. Run: pip install unbabel-comet>=2.2.0",
+            "error": "unbabel-comet not installed. Run: pip install unbabel-comet>=2.3.0",
+            "segments_scores": [],
+        }
+
+    if not HAS_XCOMET_MODEL:
+        logger.error(
+            "xCOMET-lite requires COMET >= 2.3.0 (installed: %s). "
+            "Falling back to COMET-Kiwi.",
+            _comet_pkg.__version__,
+        )
+        return {
+            "system_score": None,
+            "error": f"COMET {_comet_pkg.__version__} too old — requires >= 2.3.0 for xCOMET models",
             "segments_scores": [],
         }
 

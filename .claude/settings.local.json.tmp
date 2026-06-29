@@ -1,0 +1,11 @@
+      "Bash(ssh *)",
+      "Bash(rsync *)",
+      "Bash(hostname)",
+      "Bash(nvidia-smi *)",
+      "Bash(lscpu *)",
+      "Bash(wc *)",
+      "Bash(find *)",
+      "Bash(cat *)",
+      "Bash(echo *)",
+      "Bash(sed *)",
+      "Bash(fswatch *)"

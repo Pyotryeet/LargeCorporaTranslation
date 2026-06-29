@@ -6,9 +6,7 @@ benchmark and writes results to data/output/model_comparison.json.
 
 Backends covered:
   - encoder_decoder (NLLB family via NLLBBackend)
-  - autoregressive (TranslateGemma, SmolLM2 via AutoregressiveBackend)
-  - diffusion (DiffusionGemma 26B-A4B via llama.cpp subprocess)
-  - gguf (QAT E2B/E4B via llama.cpp subprocess)
+  - autoregressive (TranslateGemma 4B via AutoregressiveBackend)
 
 Usage:
   source .venv/bin/activate
@@ -75,67 +73,24 @@ LLAMA_MODELS = Path.home() / "Documents/ComputerScience/Projects/llama/models"
 # ═════════════════════════════════════════════════════════════════════════════
 
 MODELS = [
-    # ── NLLB family (encoder-decoder) — already cached ────────────────────
-    {
-        "name": "NLLB-200-distilled-600M",
-        "path": "facebook/nllb-200-distilled-600M",
-        "backend": "nllb_python",
-        "extra": {"nllb_source_lang": "eng_Latn", "nllb_target_lang": "tur_Latn", "num_beams": 1},
-        "tags": ["nllb", "600M", "encoder-decoder"],
-    },
-    {
-        "name": "NLLB-200-distilled-1.3B",
-        "path": "facebook/nllb-200-distilled-1.3B",
-        "backend": "nllb_python",
-        "extra": {"nllb_source_lang": "eng_Latn", "nllb_target_lang": "tur_Latn", "num_beams": 1},
-        "tags": ["nllb", "1.3B", "encoder-decoder"],
-    },
-    # NLLB-3.3B: needs 13GB download — skip until cached
-    # ── Autoregressive (Transformers) — already cached ────────────────────
-    {
-        "name": "SmolLM2-1.7B-Instruct",
-        "path": "HuggingFaceTB/SmolLM2-1.7B-Instruct",
-        "backend": "ar_python",
-        "tags": ["smollm", "1.7B"],
-    },
-    {
-        "name": "TranslateGemma-4B",
-        "path": "google/translategemma-4b-it",
-        "backend": "ar_python",
-        "tags": ["gemma", "4B", "translator"],
-    },
-    # ── DiffusionGemma (llama.cpp) — 25GB GGUF already on disk ───────────
-    {
-        "name": "DiffusionGemma-26B-A4B-Q8_0",
-        "path": str(LLAMA_MODELS / "diffusiongemma-26B-A4B-it-Q8_0.gguf"),
-        "backend": "llama_diffusion",
-        "llama_args": {
-            "ngl": "all",
-            "diffusion_steps": 64,
-            "diffusion_algorithm": 4,
-            "ctx_size": 4096,
-            "n_predict": 256,
-            "temp": 0.8,
-        },
-        "tags": ["diffusion", "26B-MoE", "Q8_0"],
-    },
-    # ── QAT models (llama.cpp GGUF) — download on demand ──────────────────
-    {
-        "name": "Gemma-4-E2B-QAT-UD-Q4_K_XL",
-        "path": str(LLAMA_MODELS / "gemma-4-E2B-it-qat-UD-Q4_K_XL.gguf"),
-        "backend": "llama_text",
-        "llama_args": {"ngl": "all", "ctx_size": 4096, "n_predict": 256, "temp": 0.0},
-        "hf_dl": "unsloth/gemma-4-E2B-it-qat-GGUF:gemma-4-E2B-it-qat-UD-Q4_K_XL.gguf",
-        "tags": ["gemma", "E2B", "QAT", "GGUF"],
-    },
-    {
-        "name": "Gemma-4-E4B-QAT-UD-Q4_K_XL",
-        "path": str(LLAMA_MODELS / "gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf"),
-        "backend": "llama_text",
-        "llama_args": {"ngl": "all", "ctx_size": 4096, "n_predict": 256, "temp": 0.0},
-        "hf_dl": "unsloth/gemma-4-E4B-it-qat-GGUF:gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf",
-        "tags": ["gemma", "E4B", "QAT", "GGUF"],
-    },
+    {"name": "NLLB-200-distilled-600M", "path": "facebook/nllb-200-distilled-600M",
+     "backend": "nllb_python",
+     "extra": {"nllb_source_lang": "eng_Latn", "nllb_target_lang": "tur_Latn", "num_beams": 1},
+     "tags": ["nllb", "600M", "encoder-decoder"]},
+    {"name": "NLLB-200-distilled-1.3B", "path": "facebook/nllb-200-distilled-1.3B",
+     "backend": "nllb_python",
+     "extra": {"nllb_source_lang": "eng_Latn", "nllb_target_lang": "tur_Latn", "num_beams": 1},
+     "tags": ["nllb", "1.3B", "encoder-decoder"]},
+    {"name": "NLLB-200-3.3B", "path": "facebook/nllb-200-3.3B",
+     "backend": "nllb_python",
+     "extra": {"nllb_source_lang": "eng_Latn", "nllb_target_lang": "tur_Latn", "num_beams": 1},
+     "tags": ["nllb", "3.3B", "encoder-decoder"]},
+    {"name": "MADLAD-400-3B", "path": "google/madlad400-3b-mt",
+     "backend": "nllb_python",
+     "extra": {"nllb_source_lang": "eng_Latn", "nllb_target_lang": "tur_Latn", "num_beams": 1},
+     "tags": ["madlad", "3B", "encoder-decoder"]},
+    {"name": "TranslateGemma-4B", "path": "google/translategemma-4b-it",
+     "backend": "ar_python", "tags": ["gemma", "4B", "translator"]},
 ]
 
 

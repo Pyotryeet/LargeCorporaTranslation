@@ -79,16 +79,16 @@
 \begin{abstract}
 This report documents the complete architecture, optimization stack, benchmarking
 results, codebase evolution, and implementation details of the TR Corpus Translation
-Benchmark --- a production-grade, model-agnostic English→Turkish translation throughput
+Benchmark --- a production-grade, backend-dispatched English→Turkish translation throughput
 benchmarking harness targeting NVIDIA H200 Tensor Core GPUs. The system measures
 translation throughput across four backend architectures (autoregressive,
-encoder-decoder), supports 16 model presets, and computes
+encoder-decoder), supports 5 model presets, and computes
 seven quality metrics in parallel. The benchmark has undergone nine major
 refinement phases totaling approximately 60,000 lines of audited, optimized, and
-documented Python code. Key measured results include approximately 11,000 tok/s on NLLB-600M
-encoder-decoder at batch size 64 and approximately 1,300 tok/s on TranslateGemma 4B
-(BF16, pre-tokenized, PyTorch 2.6.0+cu124). Static FP8 + SmoothQuant yields
-2,723 tok/s on TranslateGemma 4B with PyTorch 2.12.1+cu126 and torch.compile.
+documented Python code. Key measured results include 73,770 tok/s on NLLB-600M encoder-decoder
+at batch size 2,048 (2× H200 data-parallel, 1.97× scaling) and 37,503 tok/s at
+batch size 1,024 (single GPU baseline). Data parallelism achieves 1.96--1.98×
+near-linear scaling across all model sizes.
 \end{abstract}
 
 \tableofcontents
@@ -101,10 +101,10 @@ encoder-decoder at batch size 64 and approximately 1,300 tok/s on TranslateGemma
 \subsection{Mission Statement}
 
 The TR Corpus Translation Benchmark answers one fundamental question: \textbf{how
-many days to translate approximately 6.23 trillion English tokens into Turkish on
+many days to translate approximately 200 billion English tokens into Turkish on
 a dual NVIDIA H200 NVL system, at academic-grade quality?}
 
-This benchmark is designed to be model-agnostic, platform-portable (CUDA, Apple
+This benchmark is designed to be backend-dispatched, platform-portable (CUDA, Apple
 Silicon MPS, CPU), and production-optimized. It supports multiple translation
 paradigms --- autoregressive (causal LM), encoder-decoder (NLLB, MADLAD),
 diffusion-based, and vLLM engine --- through a single, unified \texttt{InferenceBackend}
@@ -116,16 +116,18 @@ protocol.
 \centering
 \caption{Benchmark Results (Measured June 2026, Single H200 GPU)}
 \label{tab:results}
-\begin{tabular}{lccccr}
+\begin{tabular}{lcccrr}
 \toprule
-\textbf{Model} & \textbf{Backend} & \textbf{Batch} & \textbf{Precision} & \textbf{TPS} & \textbf{VRAM} \\
+\textbf{Model} & \textbf{Backend} & \textbf{GPUs} & \textbf{Batch} & \textbf{TPS} & \textbf{Scaling} \\
 \midrule
-NLLB-200 600M     & Enc-Dec & 64    & BF16+compile & 11,000 & 1.1 GB \\
-TranslateGemma 4B & AR      & 32    & BF16+pre-tok & 1,300 & 8.0 GB \\
-TranslateGemma 4B & AR      & 1,749 & FP8+SmoothQuant+compile & 2,723 & 8.0 GB \\
-TranslateGemma 4B & AR      & 16    & BF16+Flash SDPA & 735 & 8.0 GB \\
-NLLB-200 1.3B     & Enc-Dec & 8     & BF16+Flash SDPA & 215.4 & 2.6 GB \\
-NLLB-200 3.3B     & Enc-Dec & 8     & BF16+Flash SDPA & 372.5 & 6.3 GB \\
+NLLB-200 600M  & Enc-Dec & 1 & 1,024  & 37,503 & 1.00× (baseline) \\
+NLLB-200 600M  & Enc-Dec & 2 & 2,048  & 73,770 & 1.97× (data parallel) \\
+NLLB-200 1.3B  & Enc-Dec & 1 & 512    & 18,542 & 1.00× (baseline) \\
+NLLB-200 1.3B  & Enc-Dec & 2 & 1,024  & 36,580 & 1.97× (data parallel) \\
+NLLB-200 3.3B  & Enc-Dec & 1 & 256    & 10,197 & 1.00× (baseline) \\
+NLLB-200 3.3B  & Enc-Dec & 2 & 512    & 20,152 & 1.98× (data parallel) \\
+MADLAD-400 3B  & Enc-Dec & 1 & 256    & 8,408  & 1.00× (baseline) \\
+MADLAD-400 3B  & Enc-Dec & 2 & 512    & 16,501 & 1.96× (data parallel) \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -133,9 +135,9 @@ NLLB-200 3.3B     & Enc-Dec & 8     & BF16+Flash SDPA & 372.5 & 6.3 GB \\
 \subsection{Scale and Scope}
 
 \begin{itemize}[nosep]
-  \item \textbf{64,393} lines of Python across 116 production files
+  \item \textbf{26,243} lines of Python across 78 production files
   \item \textbf{2,560} functions and classes (73\% documented)
-  \item \textbf{16} model presets (5 base architectures, multiple quantization levels)
+  \item \textbf{5} model presets (NLLB 600M, 1.3B, 3.3B, MADLAD 3B, TranslateGemma 4B)
   \item \textbf{7} quality metrics computed in parallel (3 workers)
   \item \textbf{121+} git commits refining the codebase
   \item \textbf{14} optimization features tracked via Capability Registry
@@ -156,7 +158,7 @@ The benchmark follows a pipeline architecture with clearly separated subsystems:
   \item[Orchestration] \texttt{orchestration/harness.py} --- owns lifecycle of all
                        subsystems: load $\rightarrow$ warmup $\rightarrow$ translate
                        $\rightarrow$ quality $\rightarrow$ report
-  \item[Inference Engine] \texttt{inference/engine.py} --- model-agnostic facade,
+  \item[Inference Engine] \texttt{inference/engine.py} --- backend-dispatched facade,
                           backend dispatch via \texttt{ModelRegistry}
   \item[Backends] \texttt{inference/backends/} --- 14 files, 4 backend types
   \item[Data Pipeline] \texttt{data/} --- JSONL/Parquet loader, chunker, async
@@ -721,10 +723,10 @@ CPU & 64-core \\
 \textbf{Metric} & \textbf{Value} \\
 \midrule
 Total Python files & 116 \\
-Total lines of code & 64,393 \\
+Total lines of code & 26,243 \\
 Functions and classes & 2,560 \\
 Documentation coverage & 73\% (97\% on critical files) \\
-Model presets & 16 (5 base + quantization variants) \\
+Model presets & 5 \\
 Backend implementations & 10 (across 14 files) \\
 Quality metrics & 7 \\
 Prometheus metrics & 24 \\

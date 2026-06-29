@@ -58,7 +58,7 @@ class ExtrapolationModel:
     
         Assumes constant throughput (validated over 2.2h on H200).
         """
-    def __init__(self, total_tokens: int = 6_230_000_000_000, gpu_cost_per_hour: float | None = None):
+    def __init__(self, total_tokens: int = 200_000_000_000, gpu_cost_per_hour: float | None = None):
         """Initialise the extrapolation model.
 
         Parameters

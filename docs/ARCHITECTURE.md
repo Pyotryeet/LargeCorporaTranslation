@@ -27,10 +27,10 @@
 
 ## 1. Mental Model
 
-This benchmark answers one question: *how many days to translate ~6.23T English
+This benchmark answers one question: *how many days to translate ~200B English
 tokens into Turkish on 2× NVIDIA H200, at academic quality?*
 
-It is **model-agnostic**: one pipeline drives autoregressive (AR), encoder-decoder
+It is **backend-dispatched**: one pipeline drives autoregressive (AR), encoder-decoder
 (NLLB), diffusion, and custom-plugin backends through a single
 `InferenceBackend` protocol, then measures throughput, extrapolates to
 corpus-completion time, and scores quality.
@@ -51,7 +51,7 @@ loop with HuggingFace `past_key_values`**, accelerated only by:
 
 Additionally, two advanced optimizations have been integrated:
 - **FlashAttention-3** (Method 5) — Hopper-optimized attention kernels (SM90 WGMMA/TMA), auto-dispatched by PyTorch SDPA on CUDA, active when `flash-attn-3` is installed and `--use-flash-attention` is set.
-- **vLLM Engine Integration** (Method 6) Replaces the manual Python generate loop with the high-performance vLLM engine, automatically binding all available GPUs via tensor parallelism, activated via `--vllm` or `backend_type: vllm`.
+
 
 Almost every other "optimization" is **built but gated off** — hardcoded `False`,
 commented out, env-gated, safety-gated, or captured-but-never-replayed. The
@@ -153,7 +153,7 @@ NLLB: empty; diffusion: `encode_ms/denoise_ms`).
 in this fixed priority order:
 
 1. **Explicit override** (`registry.py:214`) — `extra["backend_type"]` (except
-   `"auto"`), validated against `ModelType`. Specifically supports `"vllm"` to target the new high-performance `VLLMBackend`.
+   `"auto"`), validated against `ModelType`
 2. **Auto-detect** (`registry.py:226`) via `_detect_model_type(model_path)`:
    - name contains `nllb`/`madlad` → `ENCODER_DECODER`
    - name matches a `DIFFUSION_KEYWORDS` (`llada, dream, mdlm, e2d2, bd3lm, diffusiongemma, …`, `constants.py:125`)
@@ -194,7 +194,7 @@ The underlying implementation subclasses have `model_type = AUTOREGRESSIVE`; cap
    no cudagraph_trees — warmup takes 30s but decode is stable).
    **≥ 2.14** → `mode="reduce-overhead"` (frame-level CUDA graphs).
    `_apply_extreme_compile` in `autoregressive_cuda.py:1080`.
-   **Measured (no-compile, PyTorch 2.12.1): 1,650 tok/s** (4B, bs=32, 1×H200).
+   **Measured (2026-06): 37,503 tok/s** (NLLB-600M, bs=1024, 1×H200, compile).
 7. JIT kernel precompile — 🗑 REMOVED v3.7.
 8. PagedAttention init — **opt-in** via `--paged-attention` (reads `extra.get("use_paged_attention", False)` at `autoregressive_cuda.py:539`).
 9. FP8 KV-cache — **removed** (empirically showed 0% speedup for NLLB-600M / TranslateGemma 4B; cast/dequant overhead exactly cancelled bandwidth savings at these model sizes).
@@ -223,67 +223,47 @@ A system-agnostic dispatcher wrapper. At runtime, it detects the compute hardwar
 
 The underlying implementation subclasses have `model_type = ENCODER_DECODER`; capabilities `TRANSLATE | FORWARD_ENCODE | ENSEMBLE_READY`.
 
-Encoder-decoder (NLLB-200 / M2M100 / MADLAD). `translate_batch` (`:381`) runs
-`model.generate(input_ids, attention_mask, forced_bos_token_id=tgt_lang,
-num_beams=…)`; `input_tokens_total` correctly uses `attention_mask.sum()` (the
+Encoder-decoder (NLLB-200 / M2M100 / MADLAD). **v3.9:** The CUDA backend uses a
+custom `_fast_decode_batch` loop — encoder runs once, then a tight per-token
+greedy decoder loop with pre-allocated buffers and vectorized EOS detection.
+This eliminates the ~26.8ms of HF `model.generate()` Python overhead per batch.
+The MPS backend continues to use `model.generate()`.
+
+`input_tokens_total` correctly uses `attention_mask.sum()` (the
 padding bug was fixed here in commit `ffa707b`). `torch.compile(reduce-overhead)`
 on CUDA. `forced_bos_token_id`
 from `tgt_lang` (default `tur_Latn`); falls back to `None` if unresolved (may produce
 wrong-language output).
 
-### 5.3 DiffusionBackend (`inference/backends/diffusion.py`)
+### 5.3 DiffusionBackend — 🗑 REMOVED v3.9
 
-`model_type = DIFFUSION`; capabilities include `CLASSIFIER_FREE`.
+The diffusion backend (`inference/backends/diffusion.py`, 1,030 lines) was
+permanently removed in v3.9.  It was experimental and never on the production
+benchmark path.  ``ModelType.DIFFUSION`` is retained in the protocol for
+compatibility.
 
-Denoising loop (`:492`): encode source once (cached), initialize `[MASK]×target_len`,
-iterate `T` reverse steps with timestep embeddings, optional batched CFG
-(`cond+uncond` in one forward), reverse-diffusion step → argmax → re-embed.
-DiffusionGemma auto-detected (steps=128, schedule=linear, guidance=2.0).
+### 5.4 TensorRTBackend — 🗑 REMOVED v3.7
 
-- **CUDA-graph denoising** exists (`:632`) but only if `use_cuda_graph_for_step=True`
-  (default `False`).
-- **Fast-dLLM caching** (`:709`) is **stats-only** — it counts cache hits but
-  always falls through to the full forward.
-- `_forward_step` (`:772`) is a compatibility ladder over encoder-decoder /
-  decoder-only / projection signatures.
+The TensorRT backend and builder were permanently deleted in v3.7
+(`tensorrt_backend.py` 459L + `trt_builder.py` 727L).  TRT decode had no
+KV-cache passthrough (broken by design), was safety-gated to raise
+``RuntimeError``, and broke on TRT 10+.  ``ModelType.AUTOREGRESSIVE``
+fallback was used instead.
 
-### 5.4 TensorRTBackend (`inference/backends/tensorrt_backend.py`)
-
-`model_type = AUTOREGRESSIVE`. **Effectively non-functional for correct
-translation.** The TRT decode loop has no `past_key_values` passthrough, so each
-decode step is an isolated forward with zero accumulated context → output after
-the first token is near-random. There is a hard safety gate
-(`_allow_trtrt_decode_without_kv_cache`, `:182`, default `False`):
-`translate_batch` **raises `RuntimeError`** if TRT is active and this flag is
-False (`:334`). When True, it logs "output WILL be corrupted" and proceeds only
-for latency benchmarking. Falls back to the HF `_hf_model.generate()` path
-otherwise. Also broken on TRT 11.x (`trt_builder.py` uses removed
-`EXPLICIT_BATCH`/`num_layers`). **Net: TRT almost always falls back to AR.**
-
-### 5.5 Custom Plugin (`inference/backends/custom_plugin.py`)
+### 5.5 Custom Plugin — 🔬 Gated behind `TR_ALLOW_UNTRUSTED_PLUGINS=1`
 
 Drop a `.py` defining a `CustomModelPlugin` subclass in
 `~/.tr_benchmark/plugins/`, `TR_BENCHMARK_PLUGIN_PATH`, entry-points, or
-`./plugins/`. Discovery is gated behind `TR_ALLOW_UNTRUSTED_PLUGINS=1` (plugins
-run with full process privileges — no sandbox). Explicit `register_plugin()` bypasses
-the gate.
+`./plugins/`.  Discovery is gated — plugins run with full process privileges,
+no sandbox.  Explicit `register_plugin()` bypasses the gate.
+See ``inference/backends/custom_plugin.py`` for the plugin API.
 
-### 5.6 vLLMBackend (`inference/backends/vllm.py`)
+### 5.6 vLLMBackend — 🗑 REMOVED v3.9
 
-`model_type = AUTOREGRESSIVE` (represented as `ModelType.VLLM` for internal engine dispatch). Bypasses manual Python prefill/decode generation loops in favor of the optimized vLLM engine.
-
-> ⚠️ **Status: Gated / Disabled due to CUDA version conflicts.**
-> Recent vLLM wheels distributed via pip are compiled for CUDA 13.x by default, which introduces a dependency crash (`ImportError: libcudart.so.13: cannot open shared object file: No such file or directory`) when run on hosts with CUDA 12.x drivers (like the current H200 host setup). Because of this, vLLM has been uninstalled to avoid dependency conflicts, and the backend is gated off.
-
-**`load()` actually does:**
-1. Resolves all available CUDA devices and initializes the `vllm.LLM` engine with tensor parallelism equal to the device count (`tensor_parallel_size = device_count`).
-2. Binds sampling arguments (temperature, max_new_tokens) to `SamplingParams`.
-3. Reserves up to `90%` of GPU memory (default) for block allocation.
-
-**`translate_batch` actually does:**
-1. Invokes generation using `self.llm.generate()` passing raw text inputs.
-2. Measures processing wall time and packages results into `BatchGenerationOutput`.
-3. Bypasses the harness warm-up phase, as vLLM handles engine-level warmup and memory profiling internally during setup.
+The vLLM backend (`inference/backends/vllm.py`, 174 lines) was permanently
+removed in v3.9.  It was disabled due to CUDA version conflicts (vLLM wheels
+compile for CUDA 13.x; the H200 host uses CUDA 12.x).  ``ModelType.VLLM`` is
+retained in the protocol for compatibility.
 
 ---
 
@@ -292,7 +272,7 @@ the gate.
 | Subsystem | Key files |
 |---|---|
 | **Entry / orchestration** | `benchmark/__main__.py` · `orchestration/harness.py` · `orchestration/checkpoint.py` · `orchestration/signals.py` |
-| **Inference engine** | `inference/engine.py` · `inference/backends/{protocol,registry,autoregressive,nllb,vllm,diffusion,custom_plugin}.py` · `inference/sampling.py` |
+| **Inference engine** | `inference/engine.py` · `inference/backends/{protocol,registry,autoregressive,nllb,custom_plugin}.py` · `inference/sampling.py` |
 | **Inference optimizations** | `inference/speculative.py` · `inference/paged_attention.py` · `inference/continuous_batcher.py` · `inference/batch_tuner.py` |
 | **Hardware** | `hardware/backend.py` · `hardware/precision.py` · `hardware/parallelism.py` · `hardware/architecture.py` |
 | **Quantization** | `quantization/smoothquant.py` (default on CUDA) · `quantization/qat.py` |
@@ -337,7 +317,7 @@ A subtle point that explains much of the doc-vs-reality confusion: there are
 
 | # | Feature | Status | How to activate | Evidence | Notes |
 |---|---|---|---|---|---|
-| 1 | `torch.compile` | ⚠️ | on by default (CUDA); version-gated | `autoregressive_cuda.py:1080` | **< 2.12** → skipped (eager). **2.12–2.13** → `mode="default"` (stable, warmup 30s). **≥ 2.14** → `mode="reduce-overhead"`. No-compile baseline 1,650 tok/s (2.12.1, 4B, bs=32). |
+| 1 | `torch.compile` | ⚠️ | on by default (CUDA); version-gated | `autoregressive_cuda.py:1080` | **< 2.12** → skipped (eager). **2.12–2.13** → `mode="default"` (stable, warmup 30s). **≥ 2.14** → `mode="reduce-overhead"`. No-compile baseline 37,456 tok/s (NLLB-600M, bs=1024, 1×H200). compile benefit negligible for encoder-decoder at this scale. |
 | 2 | Static FP8 weight quantization | ✅ | on by default (CUDA); `TR_SKIP_FP8=1` to disable | `autoregressive_cuda.py:1767` | `StaticFP8Linear` — weights in FP8 E4M3, dequantized on-chip at forward time. Zero per-token overhead. 2× memory bandwidth vs BF16. lm_head excluded. TE fused kernel attempted first (best perf); static as fallback. |
 | 2b | SmoothQuant FP8 calibration | ✅ | auto on CUDA (`TR_SKIP_SMOOTHQUANT=1` to skip) | `autoregressive_cuda.py:710` | Calibrates before static FP8 to migrate activation outliers into weights. 238 Linear layers smoothed at alpha=0.50. |
 | 2c | Pre-tokenized Parquet cache | ✅ ENFORCED | Enforced (`~/.cache/tr_benchmark/pretokenized/`) | `data/pretokenizer.py` | Strictly required in v3.8. Bypasses dynamic tokenization. Compiled dynamically at startup if cache is missing. |
@@ -350,12 +330,8 @@ A subtle point that explains much of the doc-vs-reality confusion: there are
 | 8 | cudaMallocAsync | ✅ | automatic when compile≠reduce-overhead | `autoregressive_cuda.py:750` | Enabled when `_compile_uses_graphs=False`. Stream-ordered allocation, zero-fragmentation. PT 2.12: compile uses `mode=default` (safe). |
 | 9 | INT8 KV-cache quantization | 🗑 REMOVED v3.7 | — | `kv_cache_quant.py` (289L) deleted in `7b1ef87` | Unnecessary on H200 (141 GB, 4B model uses ~8 GB). |
 | 10 | Speculative decoding | 🔬 | `--speculative` (no env var needed) | `speculative.py`; `autoregressive_cuda.py:766` | **v3.7:** Env gate removed. Verify runs **layers[D:L]** (not full model) — ~25% compute savings. Greedy-only, per-sequence. 8 draft / 26 verify layers for Gemma 34-layer. K=3. |
-| 11 | Batched CFG (diffusion) | ✅ | `guidance_scale > 1.0` | `diffusion.py` | cond+uncond in one forward. |
-| 12 | Fast-dLLM caching (diffusion) | 🟡 | — (stats-only) | `diffusion.py:709` | Counts hits but always falls through to full forward. |
-| 13 | CUDA-graph denoising (diffusion) | 🟡 | `use_cuda_graph_for_step=True` (default False) | `diffusion.py:632` | |
 | 14 | TensorRT backend | 🗑 REMOVED v3.7 | — | `tensorrt_backend.py` (459L) + `trt_builder.py` (727L) deleted | No KV-cache passthrough → corrupted decode. Safety-gated to raise RuntimeError. Broken on TRT 10+. |
 | 15 | Capability Registry | ✅ | Automatic in `load()` | `autoregressive_cuda.py:847`; `config/capability.py` | 14 features tracked with verified `ActivationState` (ACTIVE/INERT/BROKEN/UNKNOWN). Calls `reg.report_text()` at startup. Single source of truth for what's on the hot path — supersedes old manual log lines. |
-| 15b | vLLM Engine Integration | ⚠️ Disabled | `--vllm` CLI flag or `backend_type: vllm` in config | `vllm.py`, `registry.py` | Disabled due to CUDA version conflicts. Standard vLLM wheels compile for CUDA 13.x by default, which causes a dynamic link error (`libcudart.so.13 not found`) on CUDA 12.x hosts (like the H200 host setup). |
 
 ### Memory / KV
 
@@ -409,9 +385,9 @@ A subtle point that explains much of the doc-vs-reality confusion: there are
 | 45 | Checkpoint / resume | ✅ | `orchestration/checkpoint.py` | Atomic rename; file+doc_id position tracking. |
 | 46 | O(1) rolling throughput | ✅ | `metrics/throughput.py` | p50/p99 latency percentiles now populated — `MetricsCollector.log_batch` passes `latency_ms=batch_result.total_latency_ms`. |
 
-**Honest summary:** of the ~41 active features, the ones materially affecting
+**Honest summary:** of the ~35 active features, the ones materially affecting
 production throughput are #1, #2, #2b, #3, #8, #21/22, #19, and (opt-in) #10, #16, #17, #18.
-Five previously-dead modules (#4, #5, #6, #7, #14, #40 — ~3,600 lines) were permanently
+Eight previously-dead modules (#4, #5, #6, #7, #14, #40 — ~3,600 lines) were permanently
 deleted in v3.7.
 
 ---

@@ -7,12 +7,12 @@ randomizes display order per source for blind testing.
 import json, random
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 INPUT_TRANSLATIONS = PROJECT_ROOT / "data" / "output" / "model_selection" / "translations.json"
 INPUT_METRICS = PROJECT_ROOT / "data" / "output" / "model_selection" / "metrics.json"
 OUTPUT_FILE = PROJECT_ROOT / "data" / "output" / "model_selection" / "human_eval_data.json"
 
-MODEL_LABELS = ["A", "B", "C", "D", "E", "F"]
+MODEL_LABELS = ["A", "B", "C", "D", "E", "F", "G", "H", "I"]
 
 
 def main():
@@ -25,8 +25,12 @@ def main():
         "nllb_600m": "NLLB-200 600M",
         "nllb_1.3b": "NLLB-200 1.3B",
         "nllb_3.3b": "NLLB-200 3.3B",
+        "nllb_moe_54b": "NLLB-200 MoE 54B",
         "madlad_3b": "MADLAD-400 3B",
+        "madlad_10b": "MADLAD-400 10B",
         "translategemma_4b": "TranslateGemma 4B",
+        "translategemma_12b": "TranslateGemma 12B",
+        "translategemma_27b": "TranslateGemma 27B",
         "smollm2_1.7b": "SmolLM2 1.7B",
     }
 
@@ -38,8 +42,11 @@ def main():
         # Build lookup: (source_id, model_id) → metrics
         metrics_lookup = {}
         for item in metrics_data:
-            key = (item["source_id"], item["model_id"])
-            metrics_lookup[key] = item["metrics"]
+            sid = item.get("source_id")
+            mid = item.get("model_id")
+            if sid is not None and mid is not None:
+                key = (sid, mid)
+                metrics_lookup[key] = item.get("metrics", {})
 
     rng = random.Random(42)
     sources = []

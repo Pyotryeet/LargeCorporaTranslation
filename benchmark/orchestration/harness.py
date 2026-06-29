@@ -255,7 +255,7 @@ class BenchmarkHarness:
             env_snapshot["pytorch_version"], env_snapshot["python_version"],
         )
 
-        # ── Load model (v3.0: model-agnostic backend dispatch) ──
+        # ── Load model (v3.0: backend-dispatch (autoregressive, encoder-decoder)) ──
         model_cfg = self.config.model
         extra = {
             "do_sample": model_cfg.do_sample,

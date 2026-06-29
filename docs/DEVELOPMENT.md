@@ -68,7 +68,7 @@ For the *runtime* layout and data flow, see
 ## 3. Testing
 
 ```bash
-make test      # ~75 tests across 27 files (pytest)
+make test      # tests across 23 files (pytest)
 make lint      # ruff check
 make format    # ruff format (+ black)
 ```
@@ -138,7 +138,7 @@ points, or `./plugins/`, defining a `CustomModelPlugin` subclass with `name` and
 ### 5.3 Add a model preset
 
 Add a `ModelPreset` to `MODEL_PRESETS` in `benchmark/config/model_presets.py`
-(there are currently 11). Presets provide architecture constants
+(there are currently 5). Presets provide architecture constants
 (`num_layers`, `num_kv_heads`, `head_dim`, `hidden_size`) so other components
 don't hardcode them. Resolve via `get_preset_by_name()` /
 `resolve_architecture_defaults()`.
@@ -198,6 +198,11 @@ See COMPILATION_GUIDE.md for measured baselines.
 **Mandatory pre-reads:**
 - [`ARCHITECTURE.md` §8 Feature Status](ARCHITECTURE.md#8-feature-status-the-truth-table)
 - [`AI_CODING_ANTIPATTERNS.md`](AI_CODING_ANTIPATTERNS.md)
+
+**Decode implementation status (v3.9):**
+- **Autoregressive (TranslateGemma 4B)**: Custom ``_extreme_decode`` loop — per-token ``model()`` with vectorized EOS. Zero ``model.generate()`` overhead.
+- **Encoder-decoder (NLLB/MADLAD CUDA)**: Custom ``_fast_decode_batch`` loop — encoder runs once, tight per-token greedy decoder loop with pre-allocated buffers and vectorized EOS detection. Replaces HF ``model.generate()``, eliminating ~26.8ms Python overhead per batch. Implemented in ``nllb_cuda.py``.
+- **Encoder-decoder (NLLB/MADLAD MPS)**: Still uses HF ``model.generate()`` (Apple Silicon doesn't benefit from the same optimization).
 
 **Verified toolchain (June 2026):**
 - **torch 2.12.1+cu126** — recommended. +27% TPS over 2.6.0 (1,650 vs 1,300 tok/s on 4B).

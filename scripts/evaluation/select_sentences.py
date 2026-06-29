@@ -11,7 +11,7 @@ import gzip, json, os, sys, time
 import numpy as np
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 DATA_DIR = PROJECT_ROOT / "data"
 INPUT_FILE = DATA_DIR / "input" / "fineweb_en_sample.jsonl.gz"
 OUTPUT_DIR = DATA_DIR / "output" / "model_selection"

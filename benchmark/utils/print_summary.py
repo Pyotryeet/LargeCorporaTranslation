@@ -3,7 +3,7 @@
 
 Reads the benchmark report JSON and prints a human-readable summary with
 scale projections computed ENTIRELY from the run's own measurements.
-The only constant is the 6.23T token target corpus size.
+The only constant is the 200B token target corpus size.
 """
 
 import json
@@ -42,7 +42,7 @@ def main():
 
     Expects the JSON filepath as ``sys.argv[1]``.  Prints a summary spanning
     raw per-batch metrics, scale projections (GB/GPU-hour, time-to-translate 1 GB,
-    and cluster-size projections anchored on the 6.23 T token target corpus), and
+    and cluster-size projections anchored on the 200B token target corpus), and
     quality scores (BERTScore / COMET-22 / COMET-Kiwi).
 
     Side effects
@@ -136,9 +136,9 @@ def main():
                 print(f"  1 GB source text: {fmt(gig_hours, 1)} hours ({fmt(gig_days, 1)} days) on this system")
         print()
 
-        # ── 6.23T token corpus ──
+        # ── 200B token target corpus ──
         target_gb = TARGET_TOKENS / tokens_per_gb if tokens_per_gb > 0 else 0
-        print(f"  ── 6.23T token target corpus (~{target_gb:,.0f} GB) ──")
+        print(f"  ── 200B token target corpus (~{target_gb:,.0f} GB) ──")
 
         if extrapolation.get("days_point_estimate") and mean_tps > 0:
             total_days = extrapolation["days_point_estimate"]

@@ -107,6 +107,10 @@ class NLLBMPSBackend(InferenceBackend):
             )
             self.model = self.model.to(self.devices[0])
 
+        if _is_madlad:
+            self.model.shared.weight = self.model.decoder.embed_tokens.weight
+            self.model.encoder.embed_tokens.weight = self.model.decoder.embed_tokens.weight
+
         self.model.eval()
         self._loaded = True
         n_params = sum(p.numel() for p in self.model.parameters())

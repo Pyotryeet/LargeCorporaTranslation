@@ -8,7 +8,7 @@ Key packages
 config          — Pydantic v2 schema, model presets, capability registry
 data            — JSONL/Parquet loader, tokenizer pipeline, pre-tokenization
 hardware        — backend detection, precision/FP8, parallelism
-inference       — model-agnostic engine, AR/NLLB/Diffusion backends
+inference       — backend-dispatched engine, AR/NLLB encoder-decoder backends
 metrics         — GPU/system samplers, O(1) throughput, batch logger
 observability   — Prometheus exporter
 orchestration   — harness, checkpoint, signal handler

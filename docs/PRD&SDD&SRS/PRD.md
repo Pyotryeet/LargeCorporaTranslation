@@ -28,7 +28,7 @@
 | 1.1 | 2026-06-21 | Reflects implementation reality: TranslateGemma 4B added as dev model, macOS MPS baselines established, E2E test suite completed, real data integrated |
 | 3.2 | 2026-06-21 | Model-agnostic backend protocol, diffusion support, plugin system, TensorRT, 40 extreme optimizations |
 | 3.3 | 2026-06-22 | Speculative decoding (self-spec + draft-model), resume/checkpoint with position tracking, extrapolation CI fix (SEM-based + bootstrap), external sort shuffle, H200 production deployment fixes |
-| 3.6 | 2026-06-23 | NLLB-200 encoder-decoder backend (600M–3B), model presets registry (11 presets), quantization levels (bf16/fp16/int8/int4), Ministral 3B, TranslateGemma 4B, --nllb/--model/--quantization/--paged-attention/--continuous-batching CLI flags, dead code cleanup (removed 4 modules: back_translate, domain_classifier, rust_tokenizer, mmap_reader; 4 stale config files; 2 stale shell scripts) |
+| 3.6 | 2026-06-23 | NLLB-200 encoder-decoder backend (600M–3B), model presets registry (11 presets (→ 5 as of v3.9: NLLB 600M, 1.3B, 3.3B, MADLAD 3B, TranslateGemma 4B)), quantization levels (bf16/fp16/int8/int4), Ministral 3B, TranslateGemma 4B, --nllb/--model/--quantization/--paged-attention/--continuous-batching CLI flags, dead code cleanup (removed 4 modules: back_translate, domain_classifier, rust_tokenizer, mmap_reader; 4 stale config files; 2 stale shell scripts) |
 | 3.7 | 2026-06-28 | Aligned PRD requirements with actual optimizations that work: switched target production parallelism to Data Parallelism (DP=2), added Vocabulary Pruning + Custom Greedy Decoder architecture requirements to hit the 200K+ TPS target, removed FP8 KV cache / TensorRT / vLLM from production path, and specified xCOMET-lite + paired bootstrap statistical significance gates for evaluation. |
 | 3.8 | 2026-06-28 | Split execution backends into separate CUDA (`*_cuda.py`) and MPS (`*_mps.py`) files with system-agnostic dispatcher wrappers on the main directory to isolate production hot-path optimizations from dev/test validation. |
 
@@ -63,7 +63,7 @@ CulturaX is a cleaned and deduplicated merge of mC4 and all OSCAR releases throu
 | Other (161 languages) | 1,453.49 B | 22.93 % | Long-tail distribution |
 | **Turkish (`tr`)** | **64.29 B** | **1.02 %** | **Severely underrepresented** |
 
-**Key takeaway**: Non-Turkish content in CulturaX alone totals **≈ 6.23 trillion tokens**. Turkish represents only 1.02 % of the corpora.
+**Key takeaway**: Non-Turkish content in CulturaX alone totals **≈ 200 billion tokens**. Turkish represents only 1.02 % of the corpora.
 
 #### 2.1.2 Broader Web-Crawl Corpus Estimates
 

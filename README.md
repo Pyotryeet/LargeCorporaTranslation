@@ -43,7 +43,6 @@ Full documentation lives in [`docs/`](docs/). Start at
 ./run.sh --speculative       # self-speculative decoding (layers[D:L] verify)
 ./run.sh --quantization int8 # 8-bit quantized model
 ./run.sh --paged-attention --continuous-batching  # chunked prefill CB (CUDA)
-./run.sh --model nllb-600m --vllm  # run using vLLM backend (⚠️ Disabled on CUDA 12.x due to CUDA 13 wheels)
 ./run.sh --pretokenize       # pre-tokenize data once, reuse across runs
 make dashboard               # Prometheus + Grafana stack
 ```
@@ -70,20 +69,22 @@ The cache key includes the model, tokenizer, chunk size, and input files — any
 
 ## What It Measures
 
-| Backend | Model | Throughput | Days for 6.23T tokens |
-|---------|-------|---------------------|----------------------|
-| AR (BF16 + FP8 + Flash SDPA) | TranslateGemma 4B | **2,723 tok/s** (bs=1749, 1× H200, measured 2026-06-26) | ~26,011 days (1× H200) |
-| AR (BF16 + FP8 + Flash SDPA) | TranslateGemma 4B | **13,223 tok/s** (bs=512, 1× H200, measured 2026-06-24) | ~5.5 days (1× H200) |
-| AR + CB + PagedAttn | TranslateGemma 4B | *benchmarking in progress* (bs=128, chunked prefill, 2026-06-26) | — |
-| Enc-Dec (BF16) | NLLB-200 600M | **27,287 tok/s** (bs=2048, 1× H200, BF16 baseline, 2026-06-26) | ~2.6 days |
-| Enc-Dec | NLLB-200 600M | **580.5 tok/s** (bs=8, BF16, Flash SDPA, measured) | ~124 days |
-| Enc-Dec | NLLB-200 3.3B | **372.5 tok/s** (bs=8, BF16, Flash SDPA, measured) | ~193 days |
-| AR (INT8) | TranslateGemma 4B | **213 tok/s** (⚠️ 3.7× SLOWER than BF16, measured) | — |
-| AR (TE FP8) | TranslateGemma 4B | **497 tok/s** (⚠️ 40% slower, 0% memory saved, measured) | — |
+| Backend | Model | Configuration | Batch | TPS |
+|---------|-------|--------------|-------|-----|
+| Enc-Dec (BF16+compile) | NLLB-200 600M | 1× GPU compiled | 1,024 | **37,503 tok/s** |
+| Enc-Dec (BF16) | NLLB-200 600M | 1× GPU uncompiled | 1,024 | 37,456 tok/s (compile: negligible) |
+| Enc-Dec (BF16+DP) | NLLB-200 600M | 2× GPU data-parallel | 2,048 (1,024/GPU) | **73,770 tok/s** (1.97× scaling) |
+| Enc-Dec (BF16+compile) | NLLB-200 1.3B | 1× GPU compiled | 512 | **18,542 tok/s** |
+| Enc-Dec (BF16+DP) | NLLB-200 1.3B | 2× GPU data-parallel | 1,024 (512/GPU) | **36,580 tok/s** (1.97× scaling) |
+| Enc-Dec (BF16+compile) | NLLB-200 3.3B | 1× GPU compiled | 256 | **10,197 tok/s** |
+| Enc-Dec (BF16+DP) | NLLB-200 3.3B | 2× GPU data-parallel | 512 (256/GPU) | **20,152 tok/s** (1.98× scaling) |
+| Enc-Dec (BF16+compile) | MADLAD-400 3B | 1× GPU compiled | 256 | **8,408 tok/s** |
+| Enc-Dec (BF16+DP) | MADLAD-400 3B | 2× GPU data-parallel | 512 (256/GPU) | **16,501 tok/s** (1.96× scaling) |
 
-> All throughputs measured on asus02 (2× NVIDIA H200 NVL, 139.80 GB VRAM).
-> v3.7 run (2,723 tok/s): PyTorch 2.12.1+cu126, torch.compile mode=default,
-> Static FP8 (400 layers, dequant-on-read), Flash SDPA, pretokenized Parquet cache.
+> All throughputs measured June 2026 on asus02 (2× NVIDIA H200 NVL, 139.80 GB VRAM),
+> ``--translate-only --duration 120`` steady-state.  Data parallelism (DP) runs 1 model
+> copy per GPU, zero cross-GPU communication — ~1.96–1.98× near-linear scaling.
+> Pretokenized Parquet cache active across all runs.
 
 All runs also output: **BERTScore · COMET-22 · COMET-Kiwi · MetricX-24 · GPU utilization · memory · temperature · throughput distribution · cost estimate · 95% CI.**
 
@@ -96,13 +97,13 @@ BenchmarkHarness → detect platform → create backend → warmup → translate
 
 InferenceBackend (abstract protocol)
  ├─ Autoregressive     — Static FP8, Flash SDPA, cudaMallocAsync, Speculative layers[D:L]
- ├─ Encoder-Decoder    — NLLB-200 (BART/M2M100), beam search, forced BOS
+ ├─ Encoder-Decoder    — NLLB-200 (BART/M2M100), MADLAD-400, beam search, forced BOS
  ├─ vLLM Engine        — (⚠️ Disabled on CUDA 12.x hosts due to CUDA 13 wheels)
  ├─ Diffusion          — T-step denoising, Fast-dLLM cache, batched CFG
  └─ Custom Plugin      — drop a .py in ~/.tr_benchmark/plugins/
 
-Model Presets: 11 presets (TranslateGemma 4B, Ministral 3B, Gemma4 QAT, DiffusionGemma 26B)
-Quantization:  bf16 · fp16 · int8 (bitsandbytes) · int4 (NF4) — configurable via --quantization
+Model Presets: 5 (NLLB-600M, NLLB-1.3B, NLLB-3.3B, MADLAD-3B, TranslateGemma 4B)
+Quantization:  bf16 (native H200 dtype)
 FP8:            Static weight-only (dequant-on-read) + SmoothQuant calibration (default on CUDA)
 Data pipeline:  orjson → token-level chunking → numpy filters → lock-free tokenizers → pinned memory
 Pretokenized:   Parquet cache (~/.cache/tr_benchmark/pretokenized/) — auto-detected, 30-40% CPU savings
@@ -110,9 +111,9 @@ Batch mode:     Static (batch_size tuner, TPS-aware sweep) + Continuous (chunked
 Observability:  Prometheus 20+ metrics → Grafana dashboard
 Speculative:    Self-speculative (early-layer draft, layers[D:L] verify) via --speculative
 
-Removed (v3.7): TensorRT backend (broken, -1,186 lines), CUDA Graph manual capture,
-                JIT CUDA kernels, fused Triton kernels, INT8 KV-cache quantization
-Removed (post-benchmark): FP8 KV-Cache (0% speedup measured; overhead cancels bandwidth gain at this scale)
+Removed (v3.7): TensorRT backend (1,186L), CUDA graphs, JIT CUDA/Metal kernels, fused Triton kernels, INT8 KV
+Removed (v3.9): Diffusion backend (1,030L), vLLM backend (174L), 11 unused model presets
+Removed (v3.9): FP8 KV-Cache (0% speedup — overhead cancels bandwidth gain at ≤12B scale)
 ```
 
 <details><summary><b>Full architecture diagram</b></summary>
@@ -121,9 +122,9 @@ Removed (post-benchmark): FP8 KV-Cache (0% speedup measured; overhead cancels ba
 ┌─────────────────────────────────────────────────────────────────────┐
 │ BenchmarkHarness — load config → detect backend → engine → run      │
 ├─────────────────────────────────────────────────────────────────────┤
-│ InferenceEngine (model-agnostic facade)                             │
+│ InferenceEngine (backend-dispatched facade)                             │
 │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐   │
-│  │AR Backend│ │NLLB Back.│ │Diff Back.│ │vLLM Back.│ │Custom Pl.│   │
+│  │AR Backend│ │NLLB Back.│ │Data-Par. │ │Custom Pl.│                 │
 │  │Static FP8│ │Enc-Dec   │ │CUDA Graph│ │(Disabled)│ │Plugin    │   │
 │  │Flash SDPA│ │beam src. │ │Fast-dLLM │ │due to    │ │          │   │
 │  │Spec Dec. │ │forced BOS│ │BatchedCFG│ │CUDA 13   │ │          │   │
@@ -133,7 +134,7 @@ Removed (post-benchmark): FP8 KV-Cache (0% speedup measured; overhead cancels ba
 │ Static FP8 · Flash SDPA · FP8 KV Cache · FlashAttention-3           │
 │ PagedAttention (8K blocks) · torch.compile (mode=default)          │
 │ SmoothQuant Calibration · Speculative layers[D:L] Verify            │
-│ Model Presets (11) · Quantization (bf16/fp16/int8/int4/fp8_kv)      │
+│ Model Presets (5) · Quantization (bf16)      │
 ├─────────────────────────────────────────────────────────────────────┤
 │ JSONLLoader(orjson) → Chunker(token-level) → Filter(numpy) →       │
 │ AsyncPipeline(lock-free tok, pinned mem) → Pretokenized Parquet     │
@@ -385,7 +386,7 @@ data:
   chunk_overlap_tokens: 50
 
 extrapolation:
-  total_clearnet_non_tr_tokens: 6230000000000
+  total_clearnet_non_tr_tokens: 200000000000
   gpu_cost_per_hour_usd: null
 ```
 
@@ -534,12 +535,11 @@ TranslateGemma (Google DeepMind, 2025) · LLaDA (Nie et al., 2025) · MDLM (Saho
 | ~~**Chunker tail-drop**~~ | ✅ Fixed v3.6 — minimum chunk size lowered to 1 token; no more silent tail truncation. |  |
 | **BERTScore model** | Uses `bert-base-multilingual-cased` (not DeBERTa as older SRS stated). | `quality/metrics_bertscore.py:32` |
 | **NLLB-200 600M** | Source-language prefix not applied at inference when not detected — may produce wrong-language output. | `inference/backends/nllb.py` |
-| **Throughput baseline (measured)** | TranslateGemma 4B BF16 Flash SDPA: 13,223 tok/s at bs=512, 735 tok/s at bs=16. NLLB-200 600M: 581 tok/s at bs=8.  | |
+| **Throughput baseline (measured)** | NLLB-600M: 73,770 tok/s (2xGPU DP, bs=2048). Single-GPU: 37,503 (NLLB-600M), 18,542 (1.3B), 10,197 (3.3B), 8,408 (MADLAD-3B). June 2026. | |
 | **Quality reference set** | Single reference per source, no bootstrap CIs on quality scores, no paired significance testing. The 10-pair minimum is statistically undersized for production use. | `quality/benchmark.py:13-19` |
 | **INT8 quantization on H200** | 41% memory savings but 3.7× SLOWER (213 vs 792 tok/s at bs=16). Dequant overhead dominates on 4B models with 130+ GB free VRAM. Counterproductive unless VRAM-constrained. Measured 2026-06-24. | M2.7 |
 | **TE FP8 on H200 (4B)** | 40% SLOWER than BF16 (497 vs 832 tok/s), 0% memory saved. Cast overhead dominates for small models. BLOCKED on torch 2.6.0 (TE 2.16 requires torch >=2.11). May benefit 12B+ models. Measured 2026-06-24. | M1.5 |
 | **4B model quality** | BLEU ≈ 0.8 vs target 25 — TranslateGemma 4B is NOT a production translation model. Development and pipeline-testing only. Measured 2026-06-24. | M4.1 |
-| **torch.compile on 4B** | <5% speedup at bs=16 (727.8 vs 735.3 tok/s). Python decode loop dominates at this size. Primary benefit for 12B+ models. Measured 2026-06-24. | M2.1 |
 | **Speculative decoding on 4B** | 25 tok/s at bs=1 (SLOWER than non-spec 62 tok/s), 38% acceptance rate. 8-layer draft + 34-layer full verify overhead exceeds gain at 4B depth. May benefit 48+ layer models. Measured 2026-06-24. | M2.3 |
 
 ---

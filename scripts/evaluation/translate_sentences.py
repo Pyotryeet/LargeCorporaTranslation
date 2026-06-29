@@ -1,244 +1,157 @@
 #!/usr/bin/env python3
-"""Translate 30 selected sentences with 6 candidate models.
+"""Translate 30 selected sentences with all 5 models.
 
-Loads source_sentences.json, runs all 6 models on all 30 sentences
-using the existing inference backend infrastructure, and saves
-translations to translations.json.
+Corrected from web research:
+  - NLLB:     src_lang in tokenizer CONSTRUCTOR, max_length=512, num_beams=4
+  - MADLAD:   T5ForConditionalGeneration + T5Tokenizer (NOT Auto classes),
+              <2tr> prefix, max_new_tokens=256, num_beams=4
+  - Gemma:    chat template, eos=<end_of_turn> (106), do_sample=False
 
-Models (5 — SmolLM2 dropped: instruct model, prompt leak, not a translator):
-  1. facebook/nllb-200-distilled-600M  (encoder-decoder)
-  2. facebook/nllb-200-distilled-1.3B  (encoder-decoder)
-  3. facebook/nllb-200-3.3B            (encoder-decoder)
-  4. google/madlad400-3b-mt            (encoder-decoder)
-  5. google/translategemma-4b-it       (autoregressive)
-
-Output: data/output/model_selection/translations.json
+Usage:  python3 scripts/evaluation/translate_sentences.py
 """
-import json, os, time, gc
+import json, gc, time, os
 from pathlib import Path
+os.environ.pop("HF_HUB_ENABLE_HF_TRANSFER", None)
+
 import torch
+from transformers import (
+    AutoModelForSeq2SeqLM, AutoTokenizer,
+    AutoModelForCausalLM,
+    T5ForConditionalGeneration, T5Tokenizer,
+)
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-INPUT_FILE = PROJECT_ROOT / "data" / "output" / "model_selection" / "source_sentences.json"
-OUTPUT_FILE = PROJECT_ROOT / "data" / "output" / "model_selection" / "translations.json"
+ROOT = Path(__file__).resolve().parent.parent.parent
+INFILE = ROOT / "data" / "output" / "model_selection" / "source_sentences.json"
+OUTFILE = ROOT / "data" / "output" / "model_selection" / "translations.json"
+DEVICE = "mps" if torch.backends.mps.is_available() else "cpu"
+DTYPE = torch.bfloat16 if DEVICE == "mps" else torch.float32
 
-# ── 6 candidate models ──────────────────────────────────────────────────
-MODELS = [
-    {
-        "id": "nllb_600m",
-        "name": "NLLB-200 600M",
-        "path": "facebook/nllb-200-distilled-600M",
-        "backend_type": "encoder_decoder",
-        "family": "nllb",
-        "src_lang": "eng_Latn",
-        "tgt_lang": "tur_Latn",
-    },
-    {
-        "id": "nllb_1.3b",
-        "name": "NLLB-200 1.3B",
-        "path": "facebook/nllb-200-distilled-1.3B",
-        "backend_type": "encoder_decoder",
-        "family": "nllb",
-        "src_lang": "eng_Latn",
-        "tgt_lang": "tur_Latn",
-    },
-    {
-        "id": "nllb_3.3b",
-        "name": "NLLB-200 3.3B",
-        "path": "facebook/nllb-200-3.3B",
-        "backend_type": "encoder_decoder",
-        "family": "nllb",
-        "src_lang": "eng_Latn",
-        "tgt_lang": "tur_Latn",
-    },
-    {
-        "id": "madlad_3b",
-        "name": "MADLAD-400 3B",
-        "path": "google/madlad400-3b-mt",
-        "backend_type": "encoder_decoder",
-        "family": "madlad",
-        "src_lang": "eng_Latn",
-        "tgt_lang": "tur_Latn",
-    },
-    {
-        "id": "translategemma_4b",
-        "name": "TranslateGemma 4B",
-        "path": "google/translategemma-4b-it",
-        "backend_type": "autoregressive",
-        "family": "ar",
-    },
-    {
-        "id": "smollm2_1.7b",
-        "name": "SmolLM2 1.7B",
-        "path": "HuggingFaceTB/SmolLM2-1.7B-Instruct",
-        "backend_type": "autoregressive",
-        "family": "ar",
-    },
-]
+with open(INFILE) as f:
+    sentences = json.load(f)
+print(f"Device: {DEVICE}  Sentences: {len(sentences)}")
+output = [{"source_id": s["id"], "source_text": s["text"],
+           "source_char_len": s["char_len"], "models": {}} for s in sentences]
 
-
-def translate_nllb(model_id, model_path, sentences, src_lang, tgt_lang):
-    """Translate using NLLB encoder-decoder backend."""
-    from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
-    torch.cuda.empty_cache(); gc.collect()
-    print(f"    Loading {model_path}...")
-    model = AutoModelForSeq2SeqLM.from_pretrained(
-        model_path, torch_dtype=torch.bfloat16, device_map="cuda:0",
-        trust_remote_code=False,
-    )
-    model.eval()
-    tok = AutoTokenizer.from_pretrained(model_path)
-    results = []
-    for sent in sentences:
-        tok.src_lang = src_lang
-        inputs = tok(sent["text"], return_tensors="pt", truncation=True, max_length=256).to("cuda:0")
-        start = time.time()
-        with torch.no_grad():
-            out = model.generate(
-                **inputs,
-                forced_bos_token_id=tok.convert_tokens_to_ids(tgt_lang),
-                max_new_tokens=256, num_beams=1, early_stopping=False,
-            )
-        latency_ms = (time.time() - start) * 1000
-        output_ids = out[0][inputs.input_ids.shape[1]:]
-        text = tok.decode(output_ids, skip_special_tokens=True).strip()
-        results.append({
-            "text": text,
-            "output_tokens": len(output_ids),
-            "latency_ms": round(latency_ms, 1),
-        })
-    del model; gc.collect(); torch.cuda.empty_cache()
-    return results
-
-
-def translate_madlad(model_path, sentences):
-    """Translate using MADLAD encoder-decoder (no src_lang needed, uses <2tr> prefix)."""
-    from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
-    torch.cuda.empty_cache(); gc.collect()
-    print(f"    Loading {model_path}...")
-    model = AutoModelForSeq2SeqLM.from_pretrained(
-        model_path, torch_dtype=torch.bfloat16, device_map="cuda:0",
-        trust_remote_code=False,
-    )
-    model.eval()
-    tok = AutoTokenizer.from_pretrained(model_path)
-    results = []
-    for sent in sentences:
-        # MADLAD uses explicit <2tr> prefix
-        prompt = f"<2tr> {sent['text']}"
-        inputs = tok(prompt, return_tensors="pt", truncation=True, max_length=256).to("cuda:0")
-        start = time.time()
-        with torch.no_grad():
-            out = model.generate(**inputs, max_new_tokens=256, num_beams=1)
-        latency_ms = (time.time() - start) * 1000
-        output_ids = out[0][inputs.input_ids.shape[1]:]
-        text = tok.decode(output_ids, skip_special_tokens=True).strip()
-        results.append({
-            "text": text,
-            "output_tokens": len(output_ids),
-            "latency_ms": round(latency_ms, 1),
-        })
-    del model; gc.collect(); torch.cuda.empty_cache()
-    return results
-
-
-def translate_autoregressive(model_path, sentences):
-    """Translate using autoregressive backend (TranslateGemma or SmolLM2)."""
-    from transformers import AutoModelForCausalLM, AutoTokenizer
-    torch.cuda.empty_cache(); gc.collect()
-    print(f"    Loading {model_path}...")
-    model = AutoModelForCausalLM.from_pretrained(
-        model_path, torch_dtype=torch.bfloat16, device_map="cuda:0",
-        trust_remote_code=False,
-    )
-    model.eval()
-    tok = AutoTokenizer.from_pretrained(model_path)
-    results = []
-    for sent in sentences:
-        prompt = f"Translate English to Turkish:\n{sent['text']}"
-        inputs = tok(prompt, return_tensors="pt", truncation=True, max_length=256).to("cuda:0")
-        start = time.time()
-        with torch.no_grad():
-            out = model.generate(
-                **inputs, max_new_tokens=256, do_sample=False, num_beams=1,
-                pad_token_id=tok.pad_token_id or 0,
-            )
-        latency_ms = (time.time() - start) * 1000
-        output_ids = out[0][inputs.input_ids.shape[1]:]
-        text = tok.decode(output_ids, skip_special_tokens=True).strip()
-        results.append({
-            "text": text,
-            "output_tokens": len(output_ids),
-            "latency_ms": round(latency_ms, 1),
-        })
-    del model; gc.collect(); torch.cuda.empty_cache()
-    return results
-
-
-def main():
-    # Load sentences
-    with open(INPUT_FILE, "r", encoding="utf-8") as f:
-        sentences = json.load(f)
-    print(f"Loaded {len(sentences)} source sentences")
-
-    output = []
-    for sent in sentences:
-        output.append({
-            "source_id": sent["id"],
-            "source_text": sent["text"],
-            "source_char_len": sent["char_len"],
-            "models": {},
-        })
-
-    for model_def in MODELS:
-        mid = model_def["id"]
-        mname = model_def["name"]
-        mpath = model_def["path"]
-        family = model_def["family"]
-        print(f"\n{'='*60}")
-        print(f"Model: {mname} ({mid}) — {family}")
-        print(f"{'='*60}")
-
-        try:
-            if family == "nllb":
-                results = translate_nllb(
-                    mid, mpath, sentences,
-                    model_def["src_lang"], model_def["tgt_lang"],
-                )
-            elif family == "madlad":
-                results = translate_madlad(mpath, sentences)
-            elif family == "ar":
-                results = translate_autoregressive(mpath, sentences)
-            else:
-                print(f"  Unknown family: {family}")
+# ════════════════════════════════════════════════════════════════
+# NLLB — src_lang in constructor, max_length=512, num_beams=4
+# ════════════════════════════════════════════════════════════════
+for mid, mpath in [
+    ("nllb_600m", "facebook/nllb-200-distilled-600M"),
+    ("nllb_1.3b", "facebook/nllb-200-distilled-1.3B"),
+    ("nllb_3.3b", "facebook/nllb-200-3.3B"),
+    ("nllb_moe_54b", "facebook/nllb-moe-54b"),
+]:
+    print(f"\n=== {mid} ===")
+    tok = AutoTokenizer.from_pretrained(mpath, src_lang="eng_Latn")
+    device_map = "auto" if "moe" in mpath else (DEVICE if DEVICE == "mps" else None)
+    m = AutoModelForSeq2SeqLM.from_pretrained(
+        mpath, torch_dtype=DTYPE, trust_remote_code=False,
+        device_map=device_map,
+    ).eval()
+    if device_map != "auto" and DEVICE != "mps":
+        m = m.to(DEVICE)
+    for e in output:
+        t0 = time.time()
+        lines = e["source_text"].split("\n")
+        translated_lines = []
+        total_tokens = 0
+        for line in lines:
+            if not line.strip():
+                translated_lines.append("")
                 continue
+            inp = tok(line, return_tensors="pt")
+            inp = {k: v.to(DEVICE) for k, v in inp.items()}
+            with torch.no_grad():
+                out = m.generate(**inp,
+                    forced_bos_token_id=tok.convert_tokens_to_ids("tur_Latn"),
+                    max_length=512, num_beams=4)
+            translated_line = tok.batch_decode(out, skip_special_tokens=True)[0].strip()
+            import html
+            translated_lines.append(html.unescape(translated_line))
+            total_tokens += out.shape[1]
+        text = "\n".join(translated_lines)
+        e["models"][mid] = {"text": text,
+            "output_tokens": total_tokens,
+            "latency_ms": round((time.time()-t0)*1000, 1)}
+    del m; gc.collect()
 
-            # Store results
-            for i, r in enumerate(results):
-                output[i]["models"][mid] = r
+# ════════════════════════════════════════════════════════════════
+# MADLAD — T5ForConditionalGeneration + T5Tokenizer, <2tr> prefix
+# ════════════════════════════════════════════════════════════════
+for mid, mpath in [
+    ("madlad_3b", "google/madlad400-3b-mt"),
+    ("madlad_10b", "google/madlad400-10b-mt"),
+]:
+    print(f"\n=== {mid} ===")
+    tok = T5Tokenizer.from_pretrained(mpath)
+    device_map = "auto" if "10b" in mpath else (DEVICE if DEVICE == "mps" else None)
+    m = T5ForConditionalGeneration.from_pretrained(
+        mpath, torch_dtype=DTYPE,
+        device_map=device_map,
+    ).eval()
+    if device_map != "auto" and DEVICE != "mps":
+        m = m.to(DEVICE)
+    # Tie embedding weights manually to resolve scale mismatch and gibberish outputs
+    m.shared.weight = m.decoder.embed_tokens.weight
+    m.encoder.embed_tokens.weight = m.decoder.embed_tokens.weight
 
-            # Show samples
-            print(f"  Translated {len(results)} sentences")
-            for j in range(min(3, len(results))):
-                t = results[j]["text"][:80]
-                print(f"    [{j}] {t}...")
+    for e in output:
+        inp = tok(f"<2tr> {e['source_text']}", return_tensors="pt")
+        inp = {k: v.to(DEVICE) for k, v in inp.items()}
+        t0 = time.time()
+        with torch.no_grad():
+            out = m.generate(input_ids=inp["input_ids"],
+                             max_new_tokens=200, no_repeat_ngram_size=3)
+        text = tok.decode(out[0], skip_special_tokens=True).strip()
+        e["models"][mid] = {"text": text,
+            "output_tokens": out.shape[1],
+            "latency_ms": round((time.time()-t0)*1000, 1)}
+    del m; gc.collect()
 
-        except Exception as e:
-            print(f"  ERROR: {str(e)[:200]}")
-            for i in range(len(sentences)):
-                output[i]["models"][mid] = {
-                    "text": f"[ERROR: {str(e)[:100]}]",
-                    "output_tokens": 0,
-                    "latency_ms": 0,
-                    "error": str(e)[:200],
-                }
+# ════════════════════════════════════════════════════════════════
+# TranslateGemma — chat template, eos=<end_of_turn>
+# ════════════════════════════════════════════════════════════════
+for mid, mpath in [
+    ("translategemma_4b", "google/translategemma-4b-it"),
+    ("translategemma_12b", "google/translategemma-12b-it"),
+    ("translategemma_27b", "google/translategemma-27b-it"),
+]:
+    print(f"\n=== {mid} ===")
+    tok = AutoTokenizer.from_pretrained(mpath)
+    device_map = "auto" if "12b" in mpath or "27b" in mpath else (DEVICE if DEVICE == "mps" else None)
+    m = AutoModelForCausalLM.from_pretrained(
+        mpath, torch_dtype=DTYPE, trust_remote_code=False,
+        device_map=device_map,
+    ).eval()
+    for e in output:
+        prompt = (
+            f"<start_of_turn>user\n"
+            f"Translate the following English text to Turkish. "
+            f"Do not include any explanations, introduction, markdown formatting, or surrounding quote marks. "
+            f"Strictly output only the clean translation text.\n\n"
+            f"Text to translate:\n{e['source_text']}"
+            f"<end_of_turn>\n<start_of_turn>model\n"
+        )
+        inp = tok(prompt, return_tensors="pt")
+        inp = {k: v.to(DEVICE) for k, v in inp.items()}
+        t0 = time.time()
+        with torch.no_grad():
+            out = m.generate(**inp, max_new_tokens=256, do_sample=False,
+                pad_token_id=tok.eos_token_id,
+                eos_token_id=[tok.eos_token_id, 106])
+        text = tok.batch_decode(
+            out[:, inp["input_ids"].shape[1]:], skip_special_tokens=True,
+        )[0].strip()
+        import html
+        text = html.unescape(text)
+        if text.startswith('"') and text.endswith('"'):
+            text = text[1:-1].strip()
+        e["models"][mid] = {"text": text,
+            "output_tokens": (out[0] != tok.pad_token_id).sum().item() - int(inp["input_ids"].shape[1]),
+            "latency_ms": round((time.time()-t0)*1000, 1)}
+    del m; gc.collect()
 
-    # Save
-    with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
-        json.dump(output, f, indent=2, ensure_ascii=False)
-    print(f"\nSaved 30 sources × {len(MODELS)} models = "
-          f"{len(output) * len(MODELS)} translations to {OUTPUT_FILE}")
-
-
-if __name__ == "__main__":
-    main()
+OUTFILE.parent.mkdir(parents=True, exist_ok=True)
+with open(OUTFILE, "w", encoding="utf-8") as f:
+    json.dump(output, f, indent=2, ensure_ascii=False)
+print(f"\nDONE — {len(output)} sources × {len(output[0]['models'])} models → {OUTFILE}")

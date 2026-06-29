@@ -18,7 +18,7 @@ import json, sys
 from pathlib import Path
 import numpy as np
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 OUTPUT_DIR = PROJECT_ROOT / "data" / "output" / "model_selection"
 HUMAN_RATINGS_FILE = Path("benchmark_sonuclari.json")  # from index.html download
 METRICS_FILE = OUTPUT_DIR / "metrics.json"
@@ -190,8 +190,12 @@ def main():
         "nllb_600m": "NLLB-200 600M",
         "nllb_1.3b": "NLLB-200 1.3B",
         "nllb_3.3b": "NLLB-200 3.3B",
+        "nllb_moe_54b": "NLLB-200 MoE 54B",
         "madlad_3b": "MADLAD-400 3B",
+        "madlad_10b": "MADLAD-400 10B",
         "translategemma_4b": "TranslateGemma 4B",
+        "translategemma_12b": "TranslateGemma 12B",
+        "translategemma_27b": "TranslateGemma 27B",
         "smollm2_1.7b": "SmolLM2 1.7B",
     }
     print(f"\n{'Rank':<5s} {'Model':<25s} {'Score':>8s}  {'±Std':>8s}  {'Min':>8s}  {'Max':>8s}")

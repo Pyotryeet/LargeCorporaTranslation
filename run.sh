@@ -8,17 +8,14 @@
 #    ./run.sh                            # Full benchmark (auto-detect platform)
 #    ./run.sh --dry-run                  # 60-second smoke test
 #    ./run.sh --quick                    # 5-minute evaluation
-#    ./run.sh --model 12B               # Select model size (4B|12B|27B|E2B|E4B|E2B-Q4_0|E4B-Q4_0|26B-A4B)
+#    ./run.sh --nllb --model nllb-600m   # Select model from preset registry
 #    ./run.sh --multi-gpu               # Run 1 model copy per GPU (data-parallel)
-#    ./run.sh --diffusion               # Use diffusion model (LLaDA 8B)
-#    ./run.sh --precompile              # Pre-compile all kernels, then exit
 #    ./run.sh --observability           # Enable Prometheus dashboard on :9090
 #    ./run.sh --batch-size 128          # Force batch size
 #    ./run.sh --duration 3600           # 1-hour run
 #    ./run.sh --resume output/dir/      # Resume from checkpoint
 #
 #  Quick combinations:
-#    ./run.sh --diffusion --quick       # Test diffusion model
 #    ./run.sh --full --observability    # Production with live dashboard
 #    ./run.sh --no-compile --multi-gpu  # 2× throughput on dual GPU
 # =============================================================================
@@ -56,8 +53,8 @@ info(){ echo -e "  ${C}→${N} $*"; }
 
 # Run mode.
 MODE="full"                    # full | quick | dry-run | benchmark-only | translate-only | warmup-only
-MODEL_SIZE="4B"               # 4B | E2B | E4B | E2B-Q4_0 | E4B-Q4_0 | 26B-A4B | ministral-3b
-BACKEND="auto"                 # auto | autoregressive | diffusion
+MODEL_SIZE="nllb-600m"         # presets: nllb-600m | nllb-1.3b | nllb-3b | madlad-3b | translategemma-4b-bf16
+BACKEND="auto"                 # auto | autoregressive | encoder_decoder
 DURATION=""                    # Override seconds
 BATCH_SIZE=""                  # Override batch size
 RESUME_DIR=""                  # Resume path
@@ -86,7 +83,6 @@ while [[ $# -gt 0 ]]; do
         --translate-only)    MODE="translate-only"; shift ;;
         --warmup-only)       MODE="warmup-only"; shift ;;
         --model)             MODEL_SIZE="$2"; shift 2 ;;
-        --diffusion)         BACKEND="diffusion"; shift ;;
         --nllb)              BACKEND="encoder_decoder"; shift ;;
         --ar)                BACKEND="autoregressive"; shift ;;
         --nllb-src-lang)     NLLB_SRC_LANG="$2"; shift 2 ;;
@@ -131,8 +127,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --translate-only   Translation only (skip quality)"
             echo ""
             echo "MODEL:"
-            echo "  --model 4B|E2B|E4B|E2B-Q4_0|E4B-Q4_0|26B-A4B|ministral-3b   Model size (default: 4B)"
-            echo "  --diffusion           Use diffusion model (LLaDA 8B)"
+            echo "  --model nllb-600m|nllb-1.3b|nllb-3b|madlad-3b|translategemma-4b-bf16   Model preset (default: nllb-600m)"
             echo "  --nllb                NLLB encoder-decoder translation model"
             echo "  --nllb-src-lang CODE  NLLB source language (default: eng_Latn)"
             echo "  --nllb-tgt-lang CODE  NLLB target language (default: tur_Latn)"
@@ -216,11 +211,6 @@ else
     PLATFORM_LABEL="CPU"
 fi
 
-# Override model path for diffusion.
-if [ "$BACKEND" = "diffusion" ]; then
-    DEFAULT_MODEL_PATH="GSAI-ML/LLaDA-8B-Instruct"
-    info "Diffusion mode: $DEFAULT_MODEL_PATH"
-fi
 
 # Override model path for NLLB encoder-decoder.
 NLLB_SRC_LANG="${NLLB_SRC_LANG:-eng_Latn}"
@@ -237,7 +227,7 @@ OUTPUT="${FORCE_OUTPUT:-$DEFAULT_OUTPUT}"
 REFS="${FORCE_REFS:-$DEFAULT_REFS}"
 SEED="${FORCE_SEED:-42}"
 COST="${FORCE_COST:-}"
-TOKENS="${FORCE_TOKENS:-6230000000000}"
+TOKENS="${FORCE_TOKENS:-200000000000}"
 CHECKPOINT="${FORCE_CHECKPOINT:-300}"
 
 # Fall back to ./output if the default output dir's parent doesn't exist
@@ -269,16 +259,12 @@ fi
 # Apply model size.
 case "$MODEL_SIZE" in
     4B)  MODEL_PATH="google/translategemma-4b-it" ;;
-    # v3.4: Gemma 4 QAT models.
-    E2B) MODEL_PATH="google/gemma-4-E2B-it-qat-mobile-ct" ;;
-    E4B) MODEL_PATH="google/gemma-4-E4B-it-qat-mobile-ct" ;;
-    E2B-Q4_0) MODEL_PATH="google/gemma-4-E2B-it-qat-mobile-transformers" ;;
-    E4B-Q4_0) MODEL_PATH="google/gemma-4-E4B-it-qat-mobile-transformers" ;;
-    # v3.4: DiffusionGemma 26B-A4B.
-    26B-A4B|DiffusionGemma) MODEL_PATH="google/diffusiongemma-26B-A4B-it"; BACKEND="diffusion" ;;
-    # v3.6: Ministral 3B.
-    ministral-3b) MODEL_PATH="mistralai/Ministral-3B-Instruct" ;;
-    *)   MODEL_PATH="$MODEL_SIZE" ;;  # literal path
+    nllb-600m)  MODEL_PATH="facebook/nllb-200-distilled-600M" ;;
+    nllb-1.3b)  MODEL_PATH="facebook/nllb-200-distilled-1.3B" ;;
+    nllb-3b)    MODEL_PATH="facebook/nllb-200-3.3B" ;;
+    madlad-3b)  MODEL_PATH="google/madlad400-3b-mt" ;;
+    translategemma-4b-bf16) MODEL_PATH="google/translategemma-4b-it" ;;
+    *)          MODEL_PATH="$MODEL_SIZE" ;;
 esac
 
 # Fall back model path: if the default doesn't exist locally
@@ -290,8 +276,6 @@ if [ ! -d "$MODEL_PATH" ] && [ ! -f "$MODEL_PATH" ] && [ "$MODEL_PATH" != "${MOD
         E4B) MODEL_PATH="google/gemma-4-E4B-it-qat-mobile-ct" ;;
         E2B-Q4_0) MODEL_PATH="google/gemma-4-E2B-it-qat-mobile-transformers" ;;
         E4B-Q4_0) MODEL_PATH="google/gemma-4-E4B-it-qat-mobile-transformers" ;;
-        26B-A4B|DiffusionGemma) MODEL_PATH="google/diffusiongemma-26B-A4B-it" ;;
-        ministral-3b) MODEL_PATH="mistralai/Ministral-3B-Instruct" ;;
         *)   MODEL_PATH="google/translategemma-4b-it" ;;
     esac
     info "Local model not found, using HF Hub: $MODEL_PATH"
@@ -331,8 +315,8 @@ if [ "$MULTI_GPU" = true ] && [ "$PLATFORM" = "cuda" ] && [ "$_NUM_GPUS" -ge 2 ]
         warn "--multi-gpu and --single-gpu conflict — ignoring --multi-gpu"
     else
         case "$MODEL_SIZE" in
-            4B|12B) _AUTO_SHARD=true ;;
-            *) warn "--multi-gpu only supports 4B/12B (model fits on one GPU) — running single-GPU" ;;
+            nllb-600m|nllb-1.3b) _AUTO_SHARD=true ;;
+            *) warn "--multi-gpu supports all models (model fits on one GPU) (model fits on one GPU) — running single-GPU" ;;
         esac
     fi
 fi
@@ -449,12 +433,6 @@ if [ -z "$CONFIG_FILE" ]; then
     CONFIG_FILE="$OUTPUT/runtime_config_$(date +%Y%m%d_%H%M%S).yaml"
     mkdir -p "$OUTPUT"
 
-    DIFF_STEPS=256
-    DIFF_GUIDANCE=1.0
-    if [ "$BACKEND" = "diffusion" ]; then
-        DIFF_STEPS="${DIFF_STEPS:-256}"
-        DIFF_GUIDANCE="${DIFF_GUIDANCE:-1.0}"
-    fi
 
     cat > "$CONFIG_FILE" << YAML
 # Auto-generated by run.sh — $(date)
@@ -480,13 +458,9 @@ model:
   speculative_num_tokens: $SPEC_TOKENS
   speculative_draft_model: ""
   speculative_num_draft_layers: $SPEC_DRAFT_LAYERS
-  # v3.6: NLLB encoder-decoder
+  # v3.9: NLLB encoder-decoder
   nllb_source_lang: "$NLLB_SRC_LANG"
   nllb_target_lang: "$NLLB_TGT_LANG"
-  diffusion_steps: $DIFF_STEPS
-  guidance_scale: $DIFF_GUIDANCE
-  noise_schedule: "cosine"
-  target_length_multiplier: 2.0
 
 runtime:
   target_duration_seconds: $DEFAULT_DURATION
@@ -552,7 +526,7 @@ fi
 # ═══════════════════════════════════════════════════════════════════════════
 # Pre-flight summary
 # ═══════════════════════════════════════════════════════════════════════════
-banner "TR Benchmark v3.6 — $PLATFORM_LABEL"
+banner "TR Benchmark v3.9 — $PLATFORM_LABEL"
 echo -e "  ${B}Mode:${N}      $RUN_LABEL"
 # Derive a human-readable model label from MODEL_PATH for the banner.
 _model_label="$MODEL_PATH"
@@ -563,15 +537,7 @@ case "$MODEL_PATH" in
     *translategemma-4b*) _model_label="TranslateGemma 4B" ;;
     *translategemma-12b*) _model_label="TranslateGemma 12B" ;;
     *translategemma-27b*) _model_label="TranslateGemma 27B" ;;
-    *SmolLM*|*smollm*) _model_label="SmolLM2 1.7B" ;;
-    *LLaDA*|*llada*) _model_label="LLaDA 8B" ;;
     # v3.4: Gemma 4 QAT models.
-    *gemma-4-E2B*qat*|*gemma-4-e2b*qat*) _model_label="Gemma 4 E2B QAT" ;;
-    *gemma-4-E4B*qat*|*gemma-4-e4b*qat*) _model_label="Gemma 4 E4B QAT" ;;
-    *gemma-4*2b*|*gemma-4*2B*) _model_label="Gemma 4 E2B" ;;
-    *gemma-4*4b*|*gemma-4*4B*) _model_label="Gemma 4 E4B" ;;
-    # v3.4: DiffusionGemma.
-    *diffusiongemma*|*DiffusionGemma*) _model_label="DiffusionGemma 26B-A4B" ;;
 esac
 
 echo -e "  ${B}Model:${N}     ${_model_label}"

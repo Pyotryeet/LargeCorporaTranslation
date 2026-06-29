@@ -61,10 +61,10 @@ QUALITY_BERTSORE_TARGET = 0.55
 QUALITY_METRICX_TARGET = 1.5  # MQM error rating: lower is better (0.0 = perfect)
 
 # ── Corpus ──
-# Total clearnet non-translated tokens for the 6.23T token target corpus.
+# Total clearnet non-translated tokens for the 200B token target corpus.
 # Mirrors the default in schema.py: ExtrapolationConfig.total_clearnet_non_tr_tokens.
-TOTAL_CLEARNET_TOKENS = 6_230_000_000_000
-# Source: CulturaX (Nguyen et al., LREC-COLING 2024): 6.3T total − 64.29B Turkish ≈ 6.23T non-Turkish. ±5% uncertainty. See M0.3.
+TOTAL_CLEARNET_TOKENS = 200_000_000_000
+# Source: CulturaX (Nguyen et al., LREC-COLING 2024): CulturaX (Nguyen et al., LREC-COLING 2024): 200B EN tokens. ±5% uncertainty. See M0.3.
 
 # ── Tokenizer ──
 # Use "intl" tokenizer instead of "13a" because "13a" strips all non-ASCII

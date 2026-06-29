@@ -69,6 +69,7 @@ count — it does not reflect the gating reality.
   Docker, model selection, performance tuning. *(JIT/TRT sections removed v3.7.)*
 - **[`LANGUAGE_EVALUATION_STUDY.md`](Research/LANGUAGE_EVALUATION_STUDY.md)** — EN→TR quality evaluation study design.
 - **[`H200_SETUP.md`](H200_SETUP.md)** — Production H200 deployment log: installed packages, the 20 errors encountered and fixed, the fork-bomb incident, the MPS memory investigation, the external-sort shuffle. *(Engineering log; stale claims annotated.)*
+- **[`EVALUATION_PIPELINE.md`](EVALUATION_PIPELINE.md)** — Model evaluation pipeline: 5 models, 7 automated metrics, blinded human evaluation, weight tuning. Documents every issue encountered and its resolution.
 
 ### 3. Specifications (historical — design intent, not current reality)
 
@@ -90,7 +91,6 @@ count — it does not reflect the gating reality.
 
 ### 5. Acceleration Plans and Benchmarks
 
-- **[`NLLB_MADLAD_BENCHMARKS.md`](NLLB_MADLAD_BENCHMARKS.md)** — Empirical performance metrics, baseline comparisons, and scientific takeaways for Seq2Seq models.
 
 ---
 

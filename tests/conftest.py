@@ -290,7 +290,7 @@ def mock_config_dict():
             "chunk_overlap_tokens": 50,
         },
         "extrapolation": {
-            "total_clearnet_non_tr_tokens": 6_230_000_000_000,
+            "total_clearnet_non_tr_tokens": 200_000_000_000,
             "gpu_cost_per_hour_usd": None,
         },
     }

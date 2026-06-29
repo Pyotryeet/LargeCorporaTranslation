@@ -1,4 +1,4 @@
-"""Quality benchmark orchestrator — model-agnostic translation + metrics (v3.0).
+"""Quality benchmark orchestrator — backend-dispatched translation + metrics (v3.0).
 
 Uses the ``InferenceBackend`` protocol so quality evaluation works identically
 for autoregressive, diffusion, and custom model backends.

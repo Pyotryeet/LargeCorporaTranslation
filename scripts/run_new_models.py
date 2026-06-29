@@ -166,7 +166,7 @@ def run_benchmark(model: ModelRun, output_dir: Path, duration: int, dry_run: boo
             shuffle=False,
         ),
         extrapolation=ExtrapolationConfig(
-            total_clearnet_non_tr_tokens=6_230_000_000_000,
+            total_clearnet_non_tr_tokens=200_000_000_000,
         ),
     )
 

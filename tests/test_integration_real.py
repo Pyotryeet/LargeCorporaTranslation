@@ -15,6 +15,7 @@ import time
 from pathlib import Path
 
 import pytest
+import torch
 
 # Optional heavy dependencies — tests requiring these skip gracefully when
 # they are absent so the test file remains importable even in minimal envs.

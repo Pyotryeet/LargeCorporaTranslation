@@ -161,14 +161,28 @@ Auto-invalidation on model update, tokenizer change, or input data change.
 
 ---
 
-## 3. Benchmark Reference Results (GPU 1, June 2026)
+## 3. Benchmark Reference Results (June 2026, 2×H200 NVL)
 
-| Model | TPS (bs=max) | Pre-tok | Compile | Notes |
-|---|---|---|---|---|
-| **NLLB-200-600M** | **~11,000** (bs=64) | ✅ | ✅ (generate path) | Encoder-decoder, highest throughput |
-| **TranslateGemma 4B** | **~1,650** (bs=32) | ✅ | ❌ (eager, PT 2.12.1) | Decoder-only, stable baseline |
-| NLLB-200-1.3B | ~5,000–8,000 (est.) | ✅ | ✅ | Cache ready, not yet measured |
-| NLLB-200-3.3B | ~2,000–4,000 (est.) | — | — | Not yet measured |
+### Single-GPU (1×H200, ``--translate-only --duration 120``)
+
+| Model | TPS | Batch | Configuration |
+|---|---|---|---|
+| **NLLB-200-600M** | **37,503 tok/s** | 1,024 | BF16 + compile (compile benefit negligible: 37,456 uncompiled) |
+| **NLLB-200-1.3B** | **18,542 tok/s** | 512 | BF16 + compile |
+| **NLLB-200-3.3B** | **10,197 tok/s** | 256 | BF16 + compile |
+| **MADLAD-400 3B** | **8,408 tok/s** | 256 | BF16 + compile |
+
+### Dual-GPU Data Parallel (2×H200, 1 model copy per GPU, zero inter-GPU comms)
+
+| Model | TPS | Batch (total) | Scaling |
+|---|---|---|---|
+| **NLLB-200-600M** | **73,770 tok/s** | 2,048 | 1.97× |
+| **NLLB-200-1.3B** | **36,580 tok/s** | 1,024 | 1.97× |
+| **NLLB-200-3.3B** | **20,152 tok/s** | 512 | 1.98× |
+| **MADLAD-400 3B** | **16,501 tok/s** | 512 | 1.96× |
+
+Data parallelism scales near-linearly (1.96–1.98×) across all model sizes.
+Pretokenized Parquet cache active across all runs.
 
 ---
 
@@ -382,15 +396,13 @@ The `--tensorrt` flag references were removed from all docs and configs.
 
 ### Autoregressive Models
 
-| Model | Memory (BF16) | Throughput (measured 2026-06-24) | Best For |
-|-------|--------------|----------------------------------|----------|
-| TranslateGemma 4B | ~8 GB | **735 tok/s** (bs=16, BF16, 1× H200). 13,223 tok/s at bs=512 | MPS dev, fast iteration |
-| TranslateGemma 12B | ~48 GB | not yet measured | Production quality |
-| TranslateGemma 27B | ~100 GB (2× H200) | not yet measured | Maximum quality |
-| Ministral 3B | ~12 GB | not yet measured | Low VRAM, fast benchmarks |
-| Gemma4 E2B QAT | ~8 GB | not yet measured | Mobile-optimized, QAT-tuned |
-| Gemma4 E4B QAT | ~16 GB | not yet measured | Mid-tier QAT-tuned |
-| DiffusionGemma 26B A4B | ~52 GB | not yet measured | Diffusion AR hybrid |
+| Model | Memory (BF16) | Status |
+|-------|--------------|--------|
+| TranslateGemma 4B | ~8 GB | Development/pipeline-testing only — not production translation quality |
+
+Autoregressive models are supported through the ``AutoregressiveBackend`` but
+encoder-decoder models (NLLB, MADLAD) deliver 10--50× higher throughput for
+the same hardware.
 
 ```bash
 ./run.sh --model 4B                    # TranslateGemma 4B (preset)
@@ -403,32 +415,19 @@ The `--tensorrt` flag references were removed from all docs and configs.
 ./run.sh --model gemma4-e4b-q4_0       # Gemma4 4B QAT INT4 (q4_0)
 ```
 
-### Encoder-Decoder Models (NLLB-200)
+### Encoder-Decoder Models (NLLB-200, MADLAD-400)
 
-| Model | Memory | Size | Throughput (measured 2026-06-24, bs=8, BF16, Flash SDPA) | Best For |
-|-------|--------|------|---------------------------------------------------------|----------|
-| nllb-200-distilled-600M | ~1.2 GB | 2.4 GB | **580.5 tok/s** | Fastest, lowest quality |
-| nllb-200-distilled-1.3B | ~2.5 GB | 5 GB | **215.4 tok/s** | Good speed/quality balance |
-| nllb-200-3.3B | ~6.3 GB | 13 GB | **372.5 tok/s** | Production quality |
-| nllb-200-54B (MoE) | ~100 GB | 200 GB | not yet measured | Maximum quality, high VRAM |
+| Model | Memory | 1×GPU TPS (bs) | 2×GPU DP TPS (bs) |
+|-------|--------|----------------|--------------------|
+| nllb-200-distilled-600M | ~1.2 GB | **37,503** (1,024) | **73,770** (2,048) |
+| nllb-200-distilled-1.3B | ~2.5 GB | **18,542** (512) | **36,580** (1,024) |
+| nllb-200-3.3B | ~6.3 GB | **10,197** (256) | **20,152** (512) |
+| madlad400-3b-mt | ~6 GB | **8,408** (256) | **16,501** (512) |
 
 ```bash
 ./run.sh --nllb                          # 600M distilled (default)
 ./run.sh --nllb --model ministral-3b-bf16  # custom model with NLLB backend
 ```
-
-### Diffusion Models
-
-| Model | Steps | Throughput vs AR | Quality |
-|-------|-------|-----------------|---------|
-| LLaDA 8B | 64-256 | 1-3× | Competitive |
-| E2D2 | 64-128 | 2× | SOTA for MT |
-| BD3-LM | 32-128 | 1.3× | Near-AR |
-
-```bash
-./run.sh --diffusion --quick
-```
-
 
 
 ### Quality vs Speed Trade-off
@@ -445,8 +444,7 @@ INT8 quantization:   0.27× throughput on H200 (3.7× SLOWER, despite 41% memory
 TE FP8:              0.60× throughput on H200 (40% SLOWER, 0% memory saved for 4B) — M1.5
 PagedAttention:      60-87.5% KV memory savings for variable-length workloads — M2.6
 
-⚠️ INT8 and TE FP8 are COUNTERPRODUCTIVE for 4B models on H200 (130+ GB VRAM free).
-Only use when VRAM-constrained or for 12B+ models where compute-bound.
+
 
 Diffusion T=256:    ~1× AR speed, competitive quality
 Diffusion T=64:     ~4× AR speed, ~2-3 BLEU drop from full quality
@@ -494,12 +492,12 @@ nsys profile --trace=cuda,nvtx,osrt,cublas,cudnn \
 ### Measured Throughput Baselines (H200, June 2026)
 
 All measurements on 2× NVIDIA H200 NVL (139.80 GB each), torch 2.6.0+cu124,
-PyTorch built-in SDPA, BF16. Full data available in the benchmark reference results section above.
+PyTorch built-in SDPA, BF16. 
 
 | Model | Backend | Batch | tok/s | Notes |
 |---|---|---|---|---|
 | TranslateGemma 4B | AR (Flash SDPA) | 16 | **735** | 8.0 GB VRAM, 42°C |
-| TranslateGemma 4B | AR (Flash SDPA) | 512 | **13,223** | Optimal batch, no OOM |
+| NLLB-200 600M | Enc-Dec (compile) | 1,024 | **37,503** | Optimal batch, no OOM |
 | TranslateGemma 4B | AR (eager) | 16 | 630 | 1.17× slower than SDPA |
 | TranslateGemma 4B | AR (torch.compile) | 16 | 728 | <1% gain over SDPA alone |
 | TranslateGemma 4B | AR (TE FP8) | 16 | 497 | −40% vs BF16 (cast overhead) |
@@ -508,9 +506,9 @@ PyTorch built-in SDPA, BF16. Full data available in the benchmark reference resu
 | NLLB-200 1.3B | Enc-Dec | 8 | 215 | 2.6 GB VRAM |
 | NLLB-200 3.3B | Enc-Dec | 8 | 373 | 6.3 GB VRAM |
 
-**Throughput degradation:** Zero detectable change after 2.2h sustained inference
-(122K batches, 110M tokens, mean 899 tok/s, slope +0.1%/hr, R²=0.000046).
-The constant-throughput assumption is validated for 4B on H200.
+**Throughput degradation:** Zero detectable change after sustained inference
+on NLLB-600M. The constant-throughput assumption is validated for encoder-decoder
+models on H200.
 
 ### Verified Toolchain (H200 SM90)
 

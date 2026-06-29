@@ -62,7 +62,7 @@ The code's own docstring already admits the core problems:
 | **Paired bootstrap resampling** | ⭐⭐⭐⭐⭐ | This is the WMT standard since 2004. The code snippet in the doc is correct and ready to implement. Should be P0. |
 | **Multi-reference set (3 human translators × 500 sentences)** | ⭐⭐⭐⭐ | Right idea. Fixes the root cause of COMET-22 unreliability. ~$5-10K cost. Worth it if publishing results. |
 | **Back-translation verification (EN→TR→EN)** | ⭐⭐⭐ | Good sanity check, not a primary metric. NLLB 600M already runs on the benchmark so the roundtrip is essentially free compute. |
-| **fastText domain classifier + per-domain scores** | ⭐⭐⭐⭐ | Critical for a 6.23T heterogeneous corpus. Without domain stratification, system-level scores hide severe quality failures in specific domains (legal, medical, social media). |
+| **fastText domain classifier + per-domain scores** | ⭐⭐⭐⭐ | Critical for a 200B heterogeneous corpus. Without domain stratification, system-level scores hide severe quality failures in specific domains (legal, medical, social media). |
 | **Remove COMET-22 from default path** | ⭐⭐⭐⭐ | Correct. Single-reference COMET-22 scores are actively misleading. Replace with xCOMET reference-free. |
 | **Keep chrF++ for legacy comparison** | ⭐⭐⭐ | Reasonable. chrF++ is the best n-gram metric for Turkish (character-level, robust to morphology) but shouldn't gate decisions. |
 | **Replace BLEU as a gate** | ⭐⭐⭐⭐⭐ | Correct. BLEU on Turkish is nearly meaningless (one Turkish word = many English words; n-gram matching fails catastrophically). Keep for historical comparison only. |
@@ -76,7 +76,7 @@ The document proposes the **TTQS framework** (Turkish Translation Quality Scorin
 | chrF++ | 20% | ⭐⭐⭐ | Good choice for Turkish morphology, correct weight |
 | MetricX-24 | 40% | ⭐⭐⭐⭐ | Strong reference-based metric, but single-reference problem applies here too |
 | COMET-Kiwi | 20% | ⭐⭐⭐⭐ | Good. But gated on HuggingFace. Use xCOMET reference-free as drop-in replacement. |
-| LLM-as-a-Judge | 20% | ⭐⭐ | Academically sound for system-level ranking, but 44× slower than COMET. At 6.23T scale this is infeasible as a regular metric. Reserve for occasional calibration runs only. |
+| LLM-as-a-Judge | 20% | ⭐⭐ | Academically sound for system-level ranking, but 44× slower than COMET. At 200B scale this is infeasible as a regular metric. Reserve for occasional calibration runs only. |
 
 **Overall TTQS rating: ⭐⭐⭐½** — The composite approach is the right philosophy. The weights need to be empirically calibrated with native Turkish speaker judgments (the doc correctly identifies this). The LLM-as-Judge weight should be zero for continuous evaluation and non-zero only for periodic audits.
 
@@ -250,7 +250,7 @@ def score_distribution(scores: list[float]) -> dict:
     }
 ```
 
-**Why this matters for a 6.23T corpus:** A model with 5% catastrophically bad translations (score < 0.5) but 95% good ones will look fine on the system average. At 6.23T tokens, 5% catastrophic = 311 billion tokens of bad output. The distribution catches this; the average hides it.
+**Why this matters for a 200B corpus:** A model with 5% catastrophically bad translations (score < 0.5) but 95% good ones will look fine on the system average. At 200B tokens, 5% catastrophic = 311 billion tokens of bad output. The distribution catches this; the average hides it.
 
 ---
 
@@ -314,7 +314,7 @@ def compare_to_baseline(
 **Rating: ⭐⭐⭐⭐**  
 **Effort:** Medium (2–3 days) | **Risk:** Low | **Dependencies:** `fasttext` (lightweight, 900KB model)
 
-**What it is:** The 6.23T token corpus spans news, web, legal, medical, and social media domains. A single system-level score aggregates across all domains and hides domain-specific failures. A model might be excellent at news but catastrophic at legal text.
+**What it is:** The 200B token corpus spans news, web, legal, medical, and social media domains. A single system-level score aggregates across all domains and hides domain-specific failures. A model might be excellent at news but catastrophic at legal text.
 
 **How:**
 1. Download `lid.176.ftz` (fastText language ID model, 900KB, identifies language and domain signals)

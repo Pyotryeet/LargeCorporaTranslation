@@ -1,4 +1,4 @@
-"""Inference engine — model-agnostic translation facade (v3.0).
+"""Inference engine — backend-dispatched translation facade (v3.0) (v3.0).
 
 This module is now a thin dispatch layer over pluggable inference backends.
 The heavy lifting lives in ``benchmark.inference.backends.*``.
