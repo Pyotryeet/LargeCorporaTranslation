@@ -291,7 +291,7 @@ def run_experiment(
 
     # Generate a completely unique output directory for this cell execution to guarantee
     # zero parallel run directory contamination or glob sorting race conditions.
-    unique_id = uuid.uuid4().hex[:8]
+    unique_id = uuid.uuid4().hex
     cell_output_dir = ROOT / "output" / "scientific" / f"{model_id}_{exp_label}_{num_gpus}gpu_{unique_id}"
     cell_output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -316,6 +316,15 @@ def run_experiment(
     current_bs = base_bs
 
     while True:
+        # Clean up any stale subdirectories inside cell_output_dir from previous failed retry attempts
+        if cell_output_dir.exists():
+            for child in cell_output_dir.iterdir():
+                if child.is_dir():
+                    try:
+                        shutil.rmtree(child)
+                    except Exception:
+                        pass
+
         # ── Build command ──
         cmd = [
             sys.executable, "-m", "benchmark",
@@ -440,10 +449,11 @@ def run_experiment(
     median_tps = batch_metrics.get("median_tps")
     std_tps = batch_metrics.get("std_tps")
 
-    if mean_tps is not None:
+    if mean_tps is not None and mean_tps > 0.0:
         print(f"  ✓ TPS: mean={mean_tps:.1f}, median={median_tps if median_tps is not None else 0.0:.1f}, std={std_tps if std_tps is not None else 0.0:.1f}")
     else:
-        print(f"  ⚠ No TPS data found in report")
+        print(f"  ⚠ Invalid or zero TPS data found in report: {mean_tps}")
+        return None
 
     # Safe lookup of optional runtime duration
     actual_duration = runtime.get("actual_duration_seconds")
@@ -452,7 +462,8 @@ def run_experiment(
     # Verify actual GPU count from environment metadata
     actual_gpus = report.get("environment", {}).get("gpu_count", num_gpus)
     if actual_gpus != num_gpus:
-        print(f"  ⚠ GPU count mismatch: requested {num_gpus}, but report shows {actual_gpus} GPUs used!")
+        print(f"  ⚠ GPU count mismatch: requested {num_gpus}, but report shows {actual_gpus} GPUs used! Skipping this cell as contaminated.")
+        return None
 
     return {
         "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
