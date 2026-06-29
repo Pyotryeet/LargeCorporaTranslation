@@ -57,7 +57,7 @@ class NLLBMPSBackend(InferenceBackend):
         load_start = time.monotonic()
         logger.info("=== NLLB MPS: loading %s ===", self.model_path)
 
-        from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
+        from transformers import AutoModelForSeq2SeqLM, AutoTokenizer, T5ForConditionalGeneration, T5Tokenizer
 
         self.devices = [torch.device("mps")]
         self.precision_config = get_precision_config(self.backend_name)
@@ -67,7 +67,11 @@ class NLLBMPSBackend(InferenceBackend):
         _tok_kwargs: dict = {"trust_remote_code": False, **_local_kwargs(self.tokenizer_path)}
         if not _is_madlad:
             _tok_kwargs["src_lang"] = self.src_lang
-        self.tokenizer = AutoTokenizer.from_pretrained(
+            tokenizer_cls = AutoTokenizer
+        else:
+            tokenizer_cls = T5Tokenizer
+
+        self.tokenizer = tokenizer_cls.from_pretrained(
             self.tokenizer_path,
             **_tok_kwargs,
         )
@@ -86,8 +90,10 @@ class NLLBMPSBackend(InferenceBackend):
         else:
             self._forced_bos_id = int(tgt_id)
 
+        model_cls = T5ForConditionalGeneration if _is_madlad else AutoModelForSeq2SeqLM
+
         try:
-            self.model = AutoModelForSeq2SeqLM.from_pretrained(
+            self.model = model_cls.from_pretrained(
                 self.model_path,
                 torch_dtype=dtype,
                 trust_remote_code=False,
@@ -97,7 +103,7 @@ class NLLBMPSBackend(InferenceBackend):
             )
         except (ImportError, ValueError, RuntimeError) as e:
             logger.warning("MPS device_map failed (%s) — falling back to CPU load", e)
-            self.model = AutoModelForSeq2SeqLM.from_pretrained(
+            self.model = model_cls.from_pretrained(
                 self.model_path,
                 torch_dtype=dtype,
                 trust_remote_code=False,
