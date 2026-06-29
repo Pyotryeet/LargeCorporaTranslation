@@ -2,8 +2,8 @@
 """Tune metric weights from human evaluation feedback.
 
 Loads human ratings + automated metrics, performs linear regression
-to learn optimal weights for the composite accuracy score, ranks models,
-and selects the best candidate for production.
+at the model level to learn optimal weights for the composite accuracy score,
+ranks models, and selects the best candidate for production.
 
 Input:
   - data/output/model_selection/human_eval_data.json  (sources + label maps)
@@ -25,14 +25,8 @@ METRICS_FILE = OUTPUT_DIR / "metrics.json"
 HUMAN_EVAL_DATA = OUTPUT_DIR / "human_eval_data.json"
 
 METRIC_KEYS = [
-    "bleurt", "comet", "comet_kiwi", "metricx_24",
-    "chrf_seg",
-    # System-level metrics (applied to all segments of a model)
-    "chrf", "chrf_pp", "bleu", "sacrbleu", "spbleu", "morph_bleu",
+    "comet_kiwi", "comet", "metricx_24", "bertscore", "chrf", "spbleu", "morph_bleu"
 ]
-
-SEGMENT_METRICS = ["bleurt", "comet", "comet_kiwi", "metricx_24", "chrf_seg"]
-SYSTEM_METRICS = ["chrf", "chrf_pp", "bleu", "sacrbleu", "spbleu", "morph_bleu"]
 
 
 def main():
@@ -51,86 +45,68 @@ def main():
     with open(METRICS_FILE, "r", encoding="utf-8") as f:
         metrics_list = json.load(f)
 
-    # Build lookups
-    # human_data.ratings = [{source_id, source_text, ratings: {label: score}}, ...]
-    # eval_data.sources = [{id, label_map: {label: model_id}}, ...]
-    # metrics = [{source_id, model_id, metrics: {key: val}}, ...]
-
-    # Build: model_id → system-level metrics
-    model_ids = eval_data["model_ids"]
-    system_metrics = {}
-    for item in metrics_list:
-        mid = item["model_id"]
-        if mid not in system_metrics:
-            system_metrics[mid] = {}
-        for key in SYSTEM_METRICS:
-            val = item["metrics"].get(key)
-            if val is not None:
-                system_metrics[mid][key] = val
-
-    # Build: label → model_id per source
+    # 1. Build label to model mapping per source
     label_to_model = {}
-    for src in eval_data["sources"]:
-        label_to_model[src["id"]] = src.get("label_map", {})
+    for src in eval_data.get("sources", []):
+        sid = src.get("id")
+        label_to_model[sid] = src.get("label_map", {})
 
-    # Build: (source_id, model_id) → segment metrics
-    seg_metrics = {}
-    for item in metrics_list:
-        sid = item["source_id"]
-        mid = item["model_id"]
-        seg_metrics[(sid, mid)] = {
-            k: v for k, v in item["metrics"].items()
-            if v is not None and k in SEGMENT_METRICS
-        }
-
-    # ── Build training data ─────────────────────────────────────────────
-    # For each human rating, collect the corresponding segment metrics
-    X_rows = []  # feature vectors
-    y_scores = []  # human ratings
-
+    # 2. Collect human ratings per model
+    model_ratings = {}
+    total_ratings_count = 0
     for rating_entry in human_data.get("ratings", []):
-        sid = rating_entry["source_id"]
+        sid = rating_entry.get("source_id")
         for label, score in rating_entry.get("ratings", {}).items():
             mid = label_to_model.get(sid, {}).get(label)
-            if mid is None:
+            if mid is not None:
+                model_ratings.setdefault(mid, []).append(float(score))
+                total_ratings_count += 1
+            else:
                 print(f"  WARNING: source {sid} label {label} → model not found")
-                continue
 
-            # Collect segment metrics
-            seg = seg_metrics.get((sid, mid), {})
-            # Collect system metrics for this model
-            sys = system_metrics.get(mid, {})
+    if not model_ratings:
+        print("ERROR: No matching human ratings could be mapped to model IDs.")
+        sys.exit(1)
 
-            feature = []
-            for key in SEGMENT_METRICS:
-                feature.append(seg.get(key, np.nan))
-            for key in SYSTEM_METRICS:
-                feature.append(sys.get(key, np.nan))
+    # Compute average human rating per model
+    model_avg_human = {}
+    for mid, ratings in model_ratings.items():
+        model_avg_human[mid] = np.mean(ratings)
+        print(f"Model {mid}: average human rating = {model_avg_human[mid]:.2f} (from {len(ratings)} scores)")
 
-            X_rows.append(feature)
-            y_scores.append(score)
+    # 3. Extract metrics per model
+    model_metrics = {}
+    for item in metrics_list:
+        mid = item["model_id"]
+        # Ensure we have ratings for this model
+        if mid in model_avg_human:
+            model_metrics[mid] = item["metrics"]
+
+    # ── Build Regression Dataset ─────────────────────────────────────────
+    # We fit a regression at the model level: y (avg human rating) = X (metrics) @ w + b
+    model_ids = sorted(list(model_avg_human.keys()))
+    X_rows = []
+    y_scores = []
+
+    for mid in model_ids:
+        metrics = model_metrics.get(mid, {})
+        row = [float(metrics.get(key, 0.0)) for key in METRIC_KEYS]
+        X_rows.append(row)
+        y_scores.append(model_avg_human[mid])
 
     X = np.array(X_rows, dtype=float)
     y = np.array(y_scores, dtype=float)
 
-    print(f"Training data: {len(y)} human ratings from {len(human_data.get('ratings', []))} sources")
-    print(f"Features per sample: {X.shape[1]} ({len(SEGMENT_METRICS)} segment + {len(SYSTEM_METRICS)} system)")
-
-    # ── Impute missing values with column means ─────────────────────────
-    col_means = np.nanmean(X, axis=0)
-    for j in range(X.shape[1]):
-        X[np.isnan(X[:, j]), j] = col_means[j]
-
-    # ── Normalize features to [0, 1] ────────────────────────────────────
+    # Normalize metrics to [0, 1] range to make learned weights comparable
     X_min = X.min(axis=0)
     X_max = X.max(axis=0)
     X_range = X_max - X_min
-    X_range[X_range == 0] = 1  # avoid division by zero
+    X_range[X_range == 0] = 1.0  # prevent division by zero
     X_norm = (X - X_min) / X_range
 
-    # ── Linear regression ───────────────────────────────────────────────
-    # y = X @ w + b
-    X_aug = np.column_stack([X_norm, np.ones(len(X_norm))])  # add bias
+    # Linear Regression: y = X_norm @ w + b
+    # Add bias term column
+    X_aug = np.column_stack([X_norm, np.ones(len(X_norm))])
     w, residuals, rank, sv = np.linalg.lstsq(X_aug, y, rcond=None)
 
     weights = w[:-1]
@@ -138,14 +114,13 @@ def main():
     y_pred = X_aug @ w
     ss_res = np.sum((y - y_pred) ** 2)
     ss_tot = np.sum((y - np.mean(y)) ** 2)
-    r_squared = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0
+    r_squared = 1.0 - (ss_res / ss_tot) if ss_tot > 0 else 0.0
 
-    all_feature_names = SEGMENT_METRICS + SYSTEM_METRICS
-    print(f"\nLinear regression results:")
+    print(f"\nLinear regression results (Model-level regression):")
     print(f"  R² = {r_squared:.4f}")
     print(f"  Bias = {bias:.4f}")
     print(f"\n  Feature weights (normalized, higher = more predictive of human score):")
-    for name, w_val in sorted(zip(all_feature_names, weights), key=lambda x: -abs(x[1])):
+    for name, w_val in sorted(zip(METRIC_KEYS, weights), key=lambda x: -abs(x[1])):
         bar = "█" * max(1, int(abs(w_val) * 40))
         print(f"    {name:>16s}: {w_val:+.4f}  {bar}")
 
@@ -156,32 +131,18 @@ def main():
 
     model_scores = {}
     for mid in model_ids:
-        scores_for_model = []
-        for sid in range(30):  # 30 sources
-            seg = seg_metrics.get((sid, mid), {})
-            sys = system_metrics.get(mid, {})
-            feature = []
-            for key in SEGMENT_METRICS:
-                val = seg.get(key, col_means[len(feature)] if len(feature) < len(col_means) else 0)
-                feature.append(val if val is not None and not np.isnan(val) else 0)
-            for key in SYSTEM_METRICS:
-                val = sys.get(key, col_means[len(feature)] if len(feature) < len(col_means) else 0)
-                feature.append(val if val is not None and not np.isnan(val) else 0)
-
-            feature_arr = np.array(feature, dtype=float)
-            # Impute + normalize using stored min/max
-            for j in range(len(feature_arr)):
-                if np.isnan(feature_arr[j]):
-                    feature_arr[j] = col_means[j]
-            feature_norm = (feature_arr - X_min) / X_range
-            composite = np.dot(feature_norm, weights) + bias
-            scores_for_model.append(composite)
-
+        metrics = model_metrics.get(mid, {})
+        row = np.array([float(metrics.get(key, 0.0)) for key in METRIC_KEYS], dtype=float)
+        row_norm = (row - X_min) / X_range
+        composite = float(np.dot(row_norm, weights) + bias)
+        
+        # Calculate standard deviation/range based on individual ratings if available
+        ratings = model_ratings.get(mid, [composite])
         model_scores[mid] = {
-            "mean": float(np.mean(scores_for_model)),
-            "std": float(np.std(scores_for_model)),
-            "min": float(np.min(scores_for_model)),
-            "max": float(np.max(scores_for_model)),
+            "mean": composite,
+            "std": float(np.std(ratings)),
+            "min": float(np.min(ratings)),
+            "max": float(np.max(ratings)),
         }
 
     # Rank models
@@ -198,6 +159,7 @@ def main():
         "translategemma_27b": "TranslateGemma 27B",
         "smollm2_1.7b": "SmolLM2 1.7B",
     }
+
     print(f"\n{'Rank':<5s} {'Model':<25s} {'Score':>8s}  {'±Std':>8s}  {'Min':>8s}  {'Max':>8s}")
     print(f"{'-'*5} {'-'*25} {'-'*8}  {'-'*8}  {'-'*8}  {'-'*8}")
     for rank, (mid, scores) in enumerate(ranked, 1):
@@ -211,8 +173,8 @@ def main():
     weights_output = {
         "r_squared": round(float(r_squared), 4),
         "bias": round(float(bias), 4),
-        "n_samples": len(y),
-        "weights": {name: round(float(w), 4) for name, w in zip(all_feature_names, weights)},
+        "n_samples": total_ratings_count,
+        "weights": {name: round(float(w), 4) for name, w in zip(METRIC_KEYS, weights)},
         "normalization": {
             "min": [float(x) for x in X_min],
             "max": [float(x) for x in X_max],

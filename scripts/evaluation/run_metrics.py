@@ -260,6 +260,7 @@ def main():
         eval_data["sources"].append({
             "id": entry["source_id"],
             "text": entry["source_text"],
+            "label_map": label_map,
             "translations": [
                 {"model_label": lbl, "text": entry["models"].get(mid, {}).get("text", "N/A")}
                 for lbl, mid in label_map.items()
