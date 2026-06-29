@@ -73,8 +73,8 @@ EXPERIMENTS = [
         "speculative": False,
         "paged": False,
         "continuous": False,
-        "safe_mode": True,  # True zero-optimization baseline via safe-mode
-        "description": "Safe-mode baseline (BF16, Flash SDPA disabled, eager attention)",
+        "safe_mode": False,  # Changed to False so we only measure attention delta, not cudaMallocAsync
+        "description": "Baseline (BF16, Flash SDPA disabled, eager attention)",
     },
     {
         "label": "fp8_plus_compile",
@@ -304,8 +304,9 @@ def run_experiment(
     if experiment.get("continuous"):
         cmd.extend(["--batch-size", "16"])
     else:
-        # dp=2 gets half the batch size to keep cumulative GPU workload identical
-        bs = "64" if num_gpus == 2 else "128"
+        # To measure scaling efficiency correctly, keep per-GPU batch size constant.
+        # DP=2 processes double the total workload (256 vs 128) so each GPU gets exactly 128.
+        bs = "256" if num_gpus == 2 else "128"
         cmd.extend(["--batch-size", bs])
 
     # For NLLB/MADLAD, tell the CLI it's an encoder-decoder model

@@ -67,7 +67,7 @@ class NLLBCUDABackend(InferenceBackend):
         load_start = time.monotonic()
         logger.info("=== NLLB CUDA: loading %s ===", self.model_path)
 
-        from transformers import AutoModelForSeq2SeqLM, AutoTokenizer, T5ForConditionalGeneration
+        from transformers import AutoModelForSeq2SeqLM, AutoTokenizer, T5ForConditionalGeneration, T5Tokenizer
 
         if self.device_info and hasattr(self.device_info, 'device') and self.device_info.device is not None:
             self.devices = [self.device_info.device]
@@ -85,7 +85,11 @@ class NLLBCUDABackend(InferenceBackend):
         _tok_kwargs: dict = {"trust_remote_code": False, **_local_kwargs(self.tokenizer_path)}
         if not _is_madlad:
             _tok_kwargs["src_lang"] = self.src_lang
-        self.tokenizer = AutoTokenizer.from_pretrained(
+            tokenizer_cls = AutoTokenizer
+        else:
+            tokenizer_cls = T5Tokenizer
+
+        self.tokenizer = tokenizer_cls.from_pretrained(
             self.tokenizer_path,
             **_tok_kwargs,
         )
