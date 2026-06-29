@@ -174,17 +174,10 @@ def main():
                     if device_map is None:
                         m = m.to(DEVICE)
 
-                # 2. SmoothQuant Calibration & Static FP8 Quantization
+                # 2. Static FP8 Weight Quantization (weight-only, no activation scaling)
                 if precision == "FP8":
-                    from quantization.smoothquant import SmoothQuantCalibrator
                     from benchmark.hardware.precision import apply_static_fp8_to_model
-                    print("Running SmoothQuant calibration...")
-                    if tok.pad_token_id is None:
-                        tok.pad_token = tok.eos_token
-                    calibration_texts = [s["text"] for s in sentences]
-                    calibrator = SmoothQuantCalibrator(m, tok, alpha=0.5, device=DEVICE)
-                    calibrator.calibrate(calibration_texts)
-                    print("Applying static FP8 quantization...")
+                    print("Applying static FP8 weight quantization...")
                     apply_static_fp8_to_model(m, skip_lm_head=True)
 
                 # 2. Run Inference
@@ -245,10 +238,7 @@ def main():
                     latencies.append((time.time() - t0) * 1000)
                     hyps.append(text)
 
-                    # Clear dynamic dequantization cache after each sentence to prevent VRAM accumulation
-                    if precision == "FP8":
-                        from benchmark.hardware.precision import clear_fp8_linear_caches
-                        clear_fp8_linear_caches(m)
+
 
                 avg_latency = sum(latencies) / len(latencies)
                 print(f"Inference complete. Latency: {avg_latency:.1f} ms/sentence")
