@@ -79,6 +79,12 @@ for mid, mpath in [
             "output_tokens": total_tokens,
             "latency_ms": round((time.time()-t0)*1000, 1)}
     del m; gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    if torch.backends.mps.is_available():
+        try:
+            torch.mps.empty_cache()
+        except Exception: pass
 
 # ════════════════════════════════════════════════════════════════
 # MADLAD — T5ForConditionalGeneration + T5Tokenizer, <2tr> prefix
@@ -112,7 +118,7 @@ for mid, mpath in [
             inp = tok(f"<2tr> {line}", return_tensors="pt")
             inp = {k: v.to(DEVICE) for k, v in inp.items()}
             with torch.no_grad():
-                out = m.generate(input_ids=inp["input_ids"],
+                out = m.generate(**inp,
                                  max_new_tokens=200, no_repeat_ngram_size=3)
             translated_line = tok.decode(out[0], skip_special_tokens=True).strip()
             translated_lines.append(translated_line)
@@ -122,6 +128,12 @@ for mid, mpath in [
             "output_tokens": total_tokens,
             "latency_ms": round((time.time()-t0)*1000, 1)}
     del m; gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    if torch.backends.mps.is_available():
+        try:
+            torch.mps.empty_cache()
+        except Exception: pass
 
 # ════════════════════════════════════════════════════════════════
 # TranslateGemma — chat template, eos=<end_of_turn>
@@ -167,6 +179,12 @@ for mid, mpath in [
             "output_tokens": (out[0] != tok.pad_token_id).sum().item() - int(inp["input_ids"].shape[1]),
             "latency_ms": round((time.time()-t0)*1000, 1)}
     del m; gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    if torch.backends.mps.is_available():
+        try:
+            torch.mps.empty_cache()
+        except Exception: pass
 
 OUTFILE.parent.mkdir(parents=True, exist_ok=True)
 with open(OUTFILE, "w", encoding="utf-8") as f:

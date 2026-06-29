@@ -79,14 +79,19 @@ def load_references():
     return {}
 
 
+_sp_tokenizer = None
+
 def compute_spbleu(hyps, refs):
     """SentencePiece-tokenized BLEU using the TranslateGemma 4B tokenizer."""
+    global _sp_tokenizer
     import sacrebleu
-    from transformers import AutoTokenizer
-    try:
-        sp_tok = AutoTokenizer.from_pretrained("google/translategemma-4b-it")
-    except Exception:
-        return {"score": None, "error": "tokenizer not available"}
+    if _sp_tokenizer is None:
+        from transformers import AutoTokenizer
+        try:
+            _sp_tokenizer = AutoTokenizer.from_pretrained("google/translategemma-4b-it")
+        except Exception:
+            return {"score": None, "error": "tokenizer not available"}
+    sp_tok = _sp_tokenizer
     hyp_tok = [" ".join(sp_tok.convert_ids_to_tokens(sp_tok.encode(h, add_special_tokens=False))) for h in hyps]
     ref_tok = [[" ".join(sp_tok.convert_ids_to_tokens(sp_tok.encode(r, add_special_tokens=False))) for r in refs]]
     result = sacrebleu.corpus_bleu(hyp_tok, ref_tok, tokenize="none")
@@ -256,7 +261,7 @@ def main():
             "id": entry["source_id"],
             "text": entry["source_text"],
             "translations": [
-                {"model_label": lbl, "text": entry["models"][mid]["text"]}
+                {"model_label": lbl, "text": entry["models"].get(mid, {}).get("text", "N/A")}
                 for lbl, mid in label_map.items()
             ],
         })

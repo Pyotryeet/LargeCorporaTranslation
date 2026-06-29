@@ -70,9 +70,17 @@ def load_references():
             except Exception: pass
     return ref_map
 
+_sp_tokenizer = None
+
 def compute_spbleu(hyps, refs):
+    global _sp_tokenizer
     import sacrebleu
-    sp_tok = AutoTokenizer.from_pretrained("google/translategemma-4b-it")
+    if _sp_tokenizer is None:
+        try:
+            _sp_tokenizer = AutoTokenizer.from_pretrained("google/translategemma-4b-it")
+        except Exception:
+            return 0.0
+    sp_tok = _sp_tokenizer
     hyp_tok = [" ".join(sp_tok.convert_ids_to_tokens(sp_tok.encode(h, add_special_tokens=False))) for h in hyps]
     ref_tok = [[" ".join(sp_tok.convert_ids_to_tokens(sp_tok.encode(r, add_special_tokens=False))) for r in refs]]
     result = sacrebleu.corpus_bleu(hyp_tok, ref_tok, tokenize="none")
