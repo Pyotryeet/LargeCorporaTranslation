@@ -503,7 +503,7 @@ class StaticFP8Linear(torch.nn.Module):
         return self.weight_fp8.to(torch.bfloat16) * self.weight_scale.to(torch.bfloat16)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Forward pass with FP8-to-BF16 dequantization on read.
+        """Forward pass with FP8 dequantization matching input dtype on read.
 
         Parameters
         ----------
@@ -513,18 +513,12 @@ class StaticFP8Linear(torch.nn.Module):
         Returns
         -------
         torch.Tensor
-            Output tensor of shape ``(..., out_features)`` after linear projection,
-            computed in BF16 with TF32 tensor-core acceleration.
-
-        Notes
-        -----
-        The FP8 weight is dequantized to BF16 in the same memory transaction as the
-        read — the H200 memory controller casts inline. There is zero per-token
-        compute overhead from dequantization. The matmul itself runs in BF16.
+            Output tensor of shape ``(..., out_features)`` after linear projection.
         """
-        # Dequantize on same cycle as memory read — zero overhead.
-        w_bf16 = self.weight_fp8.to(torch.bfloat16) * self.weight_scale.to(torch.bfloat16)
-        return torch.nn.functional.linear(x, w_bf16, self.bias)
+        # Dequantize to the same dtype as input activations to avoid type mismatches
+        w_dequant = self.weight_fp8.to(x.dtype) * self.weight_scale.to(x.dtype)
+        bias = self.bias.to(x.dtype) if self.bias is not None else None
+        return torch.nn.functional.linear(x, w_dequant, bias)
 
 
 def apply_static_fp8_to_model(
