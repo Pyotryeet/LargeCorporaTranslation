@@ -94,7 +94,7 @@ def _get_metricx_model_and_tokenizer(model_name: str = DEFAULT_METRICX_MODEL):
     # Select best device
     if torch.cuda.is_available():
         device = "cuda:0"
-        dtype = torch.bfloat16
+        dtype = torch.float32  # Standardize to float32 for perfect numerical consistency across MPS/CUDA
     elif torch.backends.mps.is_available():
         device = "mps"
         dtype = torch.float32  # MPS doesn't support bfloat16 for all ops
