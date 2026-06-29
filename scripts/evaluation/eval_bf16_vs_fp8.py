@@ -59,6 +59,8 @@ DTYPE = torch.bfloat16 if DEVICE in ("mps", "cuda") else torch.float32
 def load_references():
     """Load references as a dict keyed by source_text for proper alignment."""
     ref_map = {}
+    if not REF_FILE.exists():
+        return ref_map
     with open(REF_FILE, encoding="utf-8") as f:
         for line in f:
             try:
@@ -238,10 +240,11 @@ def main():
                             out = m.generate(**inp, max_new_tokens=256, do_sample=False,
                                 pad_token_id=tok.eos_token_id,
                                 eos_token_id=[tok.eos_token_id, 106])
-                        text = tok.batch_decode(out[:, inp["input_ids"].shape[1]:], skip_special_tokens=True)[0].strip()
-                        text = html.unescape(text)
-                        if text.startswith('"') and text.endswith('"'):
-                            text = text[1:-1].strip()
+                        decoded = tok.batch_decode(out[:, inp["input_ids"].shape[1]:], skip_special_tokens=True)[0].strip()
+                        decoded = html.unescape(decoded)
+                        if decoded.startswith('"') and decoded.endswith('"'):
+                            decoded = decoded[1:-1].strip()
+                        text = decoded
 
                     latencies.append((time.time() - t0) * 1000)
                     hyps.append(text)
