@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import sys
 r"""Scientific TPS benchmark — measure every optimization in isolation.
 
 Runs a matrix of controlled experiments:
@@ -144,7 +145,7 @@ def run_experiment(model_path, experiment_label, num_gpus, overrides, model_idx)
         env["TR_SKIP_SMOOTHQUANT"] = "1"
 
     cmd = [
-        "python3", "-m", "benchmark",
+        sys.executable, "-m", "benchmark",
         "--config", tmp.name,
         "--translate-only",
         "--duration", "60",
