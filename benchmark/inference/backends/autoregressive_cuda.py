@@ -754,22 +754,12 @@ class AutoregressiveCUDABackend(InferenceBackend):
                 elif hasattr(torch.mps, "empty_cache"):
                     torch.mps.empty_cache()
 
-        # ── 6. FP8 — enforced on CUDA with SmoothQuant calibration ──
-        # SmoothQuant migrates activation outliers into weights before static
-        # FP8 quantization, improving accuracy without dynamic scaling.
-        # On CUDA/Hopper: static FP8 weight-only (dequant-on-read, zero overhead).
+        # ── 6. FP8 — enforced on CUDA ──
         # Skip with TR_SKIP_FP8=1 or --safe-mode.
         if self.backend_name == "cuda" and not self._safe_mode:
-            # SmoothQuant calibration — default on for all CUDA models
-            _skip_sq = os.environ.get("TR_SKIP_SMOOTHQUANT") == "1"
-            if not _skip_sq:
-                try:
-                    self._calibrate_smoothquant()
-                except Exception as e:
-                    logger.warning(
-                        "SmoothQuant calibration failed: %s. FP8 weights will be "
-                        "uncalibrated — quality may degrade.", e,
-                    )
+            # SmoothQuant calibration is disabled because scaling weights in-place without
+            # runtime activation counter-scaling mathematically corrupts the model outputs.
+            # Direct static weight-only FP8 quantization (or Transformer Engine) is used instead.
             self._apply_fp8()
 
         # ── 7. Fused kernel injection (DISABLED — compile-incompatible) ──

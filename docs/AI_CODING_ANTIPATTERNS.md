@@ -467,6 +467,33 @@ not on a consistent policy.
 
 ---
 
+### A19. In-place weight smoothing without runtime activation scaling (PTQ corruption) 🔴
+
+**What:** Applying SmoothQuant's weight-smoothing transformations ($\hat{W} = W \cdot \text{diag}(s)$) to model weights in-place without applying corresponding activation scaling ($\hat{X} = X \cdot \text{diag}(s)^{-1}$) at runtime.
+
+**Evidence:** `eval_bf16_vs_fp8.py` and `autoregressive_cuda.py` ran SmoothQuant calibration which modified linear layers in-place, but activations were sent to standard PyTorch matrix multiplication without scaling. This corrupted the numerical distributions, leading to pure gibberish outputs (`? ? ?`, `wa wa wa`, `kĩ kĩ kĩ`, `ra ra ra`) for all FP8 models.
+
+**Impact:** Catastrophic quality regression. The model generates garbage, rendering evaluation metrics (BLEU, COMET) zero and skewing TPS metrics due to early/late termination loops.
+
+**Prevention:**
+- Do not apply in-place weight scaling (e.g. SmoothQuant) unless the runtime hot-path is equipped to scale activations by the inverse factors.
+- For weight-only FP8 quantization (where activations remain in BF16), bypass SmoothQuant calibration and use direct static FP8 quantization.
+
+---
+
+### A20. High-frequency cache eviction in evaluation/inference loops (Dequantization bottleneck) 🔴
+
+**What:** Clearing dequantized weight caches (`StaticFP8Linear._cached_weight`) at extremely high frequencies (e.g. after every single sentence) during batch inference or quality evaluation loops.
+
+**Evidence:** `eval_bf16_vs_fp8.py` called `clear_fp8_linear_caches(m)` after every sentence, forcing PyTorch to recreate the full BF16 weight tensors from the FP8 representation for every sentence.
+
+**Impact:** Catastrophic latency regression (10–18× slowdown), making FP8 execution significantly slower than pure BF16.
+
+**Prevention:**
+- Keep dequantized weight caches alive across sequence boundaries in continuous batch/evaluation runs. Only clear caches when switching models, unloading the pipeline, or under explicit VRAM pressure/allocation triggers.
+
+---
+
 ## Part B — Preventable pitfalls (🟡) an AI coder could fall into here
 
 These are risks specific to this codebase. Each is preventable by a cheap check.
