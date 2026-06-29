@@ -130,23 +130,19 @@ def main():
         ("nllb_600m", "facebook/nllb-200-distilled-600M", False, "nllb"),
         ("nllb_1.3b", "facebook/nllb-200-distilled-1.3B", False, "nllb"),
         ("nllb_3.3b", "facebook/nllb-200-3.3B", False, "nllb"),
-        ("nllb_moe_54b", "facebook/nllb-moe-54b", True, "nllb"),
         ("madlad_3b", "google/madlad400-3b-mt", False, "madlad"),
-        ("madlad_10b", "google/madlad400-10b-mt", True, "madlad"),
         ("translategemma_4b", "google/translategemma-4b-it", False, "gemma"),
-        ("translategemma_12b", "google/translategemma-12b-it", True, "gemma"),
-        ("translategemma_27b", "google/translategemma-27b-it", True, "gemma"),
     ]
 
     for model_id, mpath, is_large, mtype in models_config:
-        precisions = ["BF16", "FP8"] if (is_large and DEVICE == "cuda") else ["BF16"]
+        precisions = ["BF16", "FP8"] if DEVICE == "cuda" else ["BF16"]
         
         for precision in precisions:
             print(f"\n================ Running model: {model_id} ({precision}) ================")
             t_start = time.time()
             hyps = []
             
-            device_map = "auto" if is_large else None
+            device_map = None
 
             try:
                 # 1. Load Tokenizer & Model
