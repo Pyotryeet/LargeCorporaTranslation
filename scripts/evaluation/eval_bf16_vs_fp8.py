@@ -193,11 +193,19 @@ def main():
                             translated_lines.append(html.unescape(decoded))
                         text = "\n".join(translated_lines)
                     elif mtype == "madlad":
-                        inp = tok(f"<2tr> {src_text}", return_tensors="pt").to(DEVICE)
-                        with torch.no_grad():
-                            out = m.generate(input_ids=inp["input_ids"],
-                                             max_new_tokens=200, no_repeat_ngram_size=3)
-                        text = tok.decode(out[0], skip_special_tokens=True).strip()
+                        lines = src_text.split("\n")
+                        translated_lines = []
+                        for line in lines:
+                            if not line.strip():
+                                translated_lines.append("")
+                                continue
+                            inp = tok(f"<2tr> {line}", return_tensors="pt").to(DEVICE)
+                            with torch.no_grad():
+                                out = m.generate(input_ids=inp["input_ids"],
+                                                 max_new_tokens=200, no_repeat_ngram_size=3)
+                            translated_line = tok.decode(out[0], skip_special_tokens=True).strip()
+                            translated_lines.append(translated_line)
+                        text = "\n".join(translated_lines)
                     else: # gemma
                         prompt = (
                             f"<start_of_turn>user\n"

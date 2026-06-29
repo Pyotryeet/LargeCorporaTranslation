@@ -101,15 +101,25 @@ for mid, mpath in [
     m.encoder.embed_tokens.weight = m.decoder.embed_tokens.weight
 
     for e in output:
-        inp = tok(f"<2tr> {e['source_text']}", return_tensors="pt")
-        inp = {k: v.to(DEVICE) for k, v in inp.items()}
         t0 = time.time()
-        with torch.no_grad():
-            out = m.generate(input_ids=inp["input_ids"],
-                             max_new_tokens=200, no_repeat_ngram_size=3)
-        text = tok.decode(out[0], skip_special_tokens=True).strip()
+        lines = e["source_text"].split("\n")
+        translated_lines = []
+        total_tokens = 0
+        for line in lines:
+            if not line.strip():
+                translated_lines.append("")
+                continue
+            inp = tok(f"<2tr> {line}", return_tensors="pt")
+            inp = {k: v.to(DEVICE) for k, v in inp.items()}
+            with torch.no_grad():
+                out = m.generate(input_ids=inp["input_ids"],
+                                 max_new_tokens=200, no_repeat_ngram_size=3)
+            translated_line = tok.decode(out[0], skip_special_tokens=True).strip()
+            translated_lines.append(translated_line)
+            total_tokens += out.shape[1]
+        text = "\n".join(translated_lines)
         e["models"][mid] = {"text": text,
-            "output_tokens": out.shape[1],
+            "output_tokens": total_tokens,
             "latency_ms": round((time.time()-t0)*1000, 1)}
     del m; gc.collect()
 
