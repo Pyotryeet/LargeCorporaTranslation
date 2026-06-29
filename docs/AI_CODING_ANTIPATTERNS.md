@@ -428,6 +428,45 @@ not on a consistent policy.
 
 ---
 
+### A16. Lost forward/backward hooks on module replacement 🔴
+
+**What:** Replacing standard `nn.Linear` layers with custom modules (such as `StaticFP8Linear`) in models configured with Hugging Face `device_map="auto"` (like 54B MoE or 27B Gemma) without copying forward/backward hooks or accelerate metadata attributes.
+
+**Evidence:** `benchmark/hardware/precision.py` — when instantiating `StaticFP8Linear(child)`, the original `AlignDevicesHook` registered on the children by Hugging Face `accelerate` was lost. This caused the model to silently deadlock (GPU waiting indefinitely on a stream sync, producing 0% CPU and 0% active GPU utilization) when a layer execution crossed device boundaries.
+
+**Impact:** Complete pipeline deadlock during inference on multi-GPU nodes without any traceback or error message.
+
+**Prevention:**
+- When swapping submodules in-place, copy all PyTorch hooks (`_forward_hooks`, `_forward_pre_hooks`, `_backward_hooks`, `_backward_pre_hooks`) and `accelerate`-specific attributes (such as `_hf_hook`, `hf_device_map`) to the new replacement module.
+
+---
+
+### A17. Recursive dtype casting on custom modules (The Router `.to(dtype)` Trap) 🔴
+
+**What:** Failing to override PyTorch's private `_apply(self, fn)` method on custom quantized modules (like `StaticFP8Linear`) when they are used as submodules inside layers that recursively cast themselves.
+
+**Evidence:** `transformers` implementation of `NllbMoeTop2Router` calls `self.classifier = self.classifier.to(self.dtype)` (which defaults to `float32`) on **every single forward pass**. If `self.classifier` is a custom quantized layer, calling `.to(torch.float32)` recursively casts the underlying FP8 weight buffer from `float8_e4m3fn` (1 byte) to `float32` (4 bytes), destroying quantization, inflating VRAM, invalidating caches, and forcing dequantization on every single token step (100x slowdown).
+
+**Impact:** Massive GPU memory bandwidth bottleneck and performance degradation on Mixture-of-Experts (MoE) routing modules.
+
+**Prevention:**
+- Override the private `_apply(self, fn)` method on custom precision modules to intercept and skip dtype casting on protected quantized buffers (while still allowing device placement moves).
+
+---
+
+### A18. Autoregressive quantization cache bloat (VRAM overflow) 🔴
+
+**What:** Caching dequantized weights (e.g. casting `FP8` weights to `BF16` to avoid dequantization overhead during decoding) globally without an eviction strategy.
+
+**Evidence:** `benchmark/hardware/precision.py` — caching dequantized weights in `StaticFP8Linear` caused NLLB MoE 54B to consume both FP8 (54 GB) and dequantized BF16 cached weights (108 GB) simultaneously, exceeding the H200's 141 GB VRAM capacity and triggering silent CPU memory swapping/thrashing.
+
+**Impact:** 100x performance drop due to GPU-CPU thrashing, or Out-Of-Memory (OOM) crashes.
+
+**Prevention:**
+- Implement a dynamic cache eviction strategy. For sequence-level generation, cache the weights during token generation for the active sequence, but purge the caches (using a `clear_cache` helper) at the end of each sequence block to maintain a low VRAM footprint.
+
+---
+
 ## Part B — Preventable pitfalls (🟡) an AI coder could fall into here
 
 These are risks specific to this codebase. Each is preventable by a cheap check.
