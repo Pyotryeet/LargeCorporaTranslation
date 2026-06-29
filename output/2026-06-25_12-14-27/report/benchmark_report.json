@@ -1,0 +1,490 @@
+{
+  "config": {
+    "backend": "auto",
+    "model": {
+      "model_path": "google/translategemma-4b-it",
+      "tokenizer_path": "google/translategemma-4b-it",
+      "max_input_tokens": 512,
+      "max_new_tokens": 512,
+      "temperature": 0.0,
+      "do_sample": false,
+      "num_beams": 1,
+      "dtype": "auto",
+      "tensor_parallel_size": 1,
+      "use_flash_attention": true,
+      "backend_type": "auto",
+      "diffusion_steps": 256,
+      "guidance_scale": 1.0,
+      "noise_schedule": "cosine",
+      "target_length_multiplier": 2.0,
+      "plugin_name": "",
+      "plugin_config": {},
+      "use_tensorrt": false,
+      "tensorrt_precision": "fp16",
+      "tensorrt_max_batch": 32,
+      "tensorrt_cache_dir": "",
+      "use_speculative": false,
+      "speculative_mode": "self",
+      "speculative_num_tokens": 3,
+      "speculative_draft_model": "",
+      "speculative_num_draft_layers": 0,
+      "use_paged_attention": false,
+      "use_continuous_batching": false,
+      "quantization": "bf16",
+      "nllb_source_lang": "eng_Latn",
+      "nllb_target_lang": "tur_Latn"
+    },
+    "runtime": {
+      "target_duration_seconds": 7200,
+      "checkpoint_interval_seconds": 300,
+      "heartbeat_interval_seconds": 10,
+      "metrics_sample_rate_hz": 1,
+      "seed": 42,
+      "observability_enabled": false
+    },
+    "data": {
+      "input_paths": [
+        "./data/input/*.jsonl.gz"
+      ],
+      "output_dir": "./output",
+      "reference_set_path": "./data/references/golden_en_tr.jsonl",
+      "shard_size_mb": 100,
+      "prefetch_workers": 4,
+      "shuffle": true,
+      "min_chunk_tokens": 10,
+      "max_garbage_ratio": 0.95,
+      "chunk_overlap_tokens": 50,
+      "max_references": null,
+      "shuffle_max_memory_gb": null,
+      "shuffle_temp_dir": ""
+    },
+    "extrapolation": {
+      "total_clearnet_non_tr_tokens": 6230000000000,
+      "gpu_cost_per_hour_usd": null
+    }
+  },
+  "environment": {
+    "python_version": "3.12.3",
+    "platform": "Linux-6.8.0-117-generic-x86_64-with-glibc2.39",
+    "pytorch_version": "2.6.0+cu124",
+    "transformers_version": "4.57.6",
+    "cuda_available": true,
+    "mps_available": false,
+    "cuda_version": "12.4",
+    "gpu_count": 1,
+    "gpu_names": [
+      "NVIDIA H200 NVL"
+    ]
+  },
+  "runtime": {
+    "actual_duration_seconds": 103.0,
+    "batches_completed": 5,
+    "total_tokens_translated": 49892,
+    "mode": "dry-run",
+    "config_hash": "a373f723f4de2f4e"
+  },
+  "metrics": {
+    "batch": {
+      "total_batches": 5,
+      "total_input_tokens": 68545,
+      "total_output_tokens": 49892,
+      "mean_tps": 758.4,
+      "median_tps": 752.9,
+      "std_tps": 147.0,
+      "p5_tps": 580.1,
+      "p95_tps": 917.8,
+      "mean_latency_ms": 13155.0,
+      "p95_latency_ms": 13172.4,
+      "tps_values": [
+        549.0,
+        704.4,
+        934.4,
+        752.9,
+        851.4
+      ]
+    },
+    "device": {},
+    "system": {
+      "num_samples": 73,
+      "mean_cpu_pct": 3.3,
+      "mean_ram_used_mib": 38479.0,
+      "p95_cpu_pct": 4.9
+    }
+  },
+  "quality": {
+    "comet": {
+      "system_score": 0.4496,
+      "segments_scores": [
+        0.2914,
+        0.4766,
+        0.5082,
+        0.8582,
+        0.2952,
+        0.3802,
+        0.417,
+        0.5259,
+        0.3092,
+        0.3978,
+        0.4505,
+        0.4667,
+        0.4621,
+        0.4071,
+        0.8657,
+        0.358,
+        0.3853,
+        0.3257,
+        0.4637,
+        0.4517,
+        0.3305,
+        0.7589,
+        0.5038,
+        0.4285,
+        0.3254,
+        0.3906,
+        0.4584,
+        0.3827,
+        0.482,
+        0.4496,
+        0.3629,
+        0.4184
+      ],
+      "low_quality_segments": [
+        {
+          "src": "Russian leaders reacted to the announcement of US plans to place missile defence bases in eastern Poland.",
+          "mt": "",
+          "ref": "Rus liderleri Amerika Birleşik Devletleri'nin Polonya'nın doğusuna füze üssü kurma planlarına tepkili.",
+          "comet": 0.2913835346698761
+        },
+        {
+          "src": "- Yeah, like a... you know, like a date.",
+          "mt": "",
+          "ref": "- Öğle yemeğini akşam yiyeceğiz.",
+          "comet": 0.2951671779155731
+        },
+        {
+          "src": "Please! Don't take away my words!",
+          "mt": "",
+          "ref": "Lütfen, kelimelerimi elimden almayın.",
+          "comet": 0.38016805052757263
+        },
+        {
+          "src": "So spend another night out in the open.",
+          "mt": "در.",
+          "ref": "O zaman bu geceyi de dışarda geçirirsiniz olur biter.",
+          "comet": 0.30918964743614197
+        },
+        {
+          "src": "I think that'll make her happy.",
+          "mt": "",
+          "ref": "Sanırım bu Videl-san'ı mutlu eder.",
+          "comet": 0.3978012502193451
+        },
+        {
+          "src": "But me and your mum have been very worried about...",
+          "mt": "است. Ben de ve anneniz de...",
+          "ref": "Annenle ben senin için çok endişelenmiştik...",
+          "comet": 0.35797661542892456
+        },
+        {
+          "src": "No Will Smith, no free lunch, and now a bully?",
+          "mt": "",
+          "ref": "Will Smith yok,bedava yemek yok. Bir de şimdi kabadayı mı çıktı?",
+          "comet": 0.38527825474739075
+        },
+        {
+          "src": "Your father always made sure he could rest his head at night.",
+          "mt": "",
+          "ref": "Baban daima geceleri uyurken başını buna dayardı.",
+          "comet": 0.32565686106681824
+        },
+        {
+          "src": "Feeling ill, she decided to visit Dr. Tash but never did arrive at the doctor's office.",
+          "mt": "",
+          "ref": "Kendini iyi hissetmiyormuş, Dr. Tash'e gitmeye karar vermiş. Ne var ki muayenehaneye gitmemiş.",
+          "comet": 0.33048543334007263
+        },
+        {
+          "src": "I doubt Paul would appreciate me lending you any of his things.",
+          "mt": "",
+          "ref": "Paul, herhangi bir eşyasını sana vermemden hoşlanır mıydı bilemiyorum.",
+          "comet": 0.32541418075561523
+        },
+        {
+          "src": "\"craft room\"?",
+          "mt": "soru>",
+          "ref": "Ivır zıvır odası mı?",
+          "comet": 0.3905937075614929
+        },
+        {
+          "src": "As a token of our friendship and esteem, Your Wizardship.",
+          "mt": "",
+          "ref": "Dostluğumuzun, ve sizin bilgeliğinizin şerefine.",
+          "comet": 0.3826993405818939
+        },
+        {
+          "src": "Probably why she ignored The Wolf's instructions and called the boyfriend.",
+          "mt": "",
+          "ref": "Muhtemelen neden o Wolf'un talimatlarını görmezden ve erkek arkadaşı çağırdı.",
+          "comet": 0.3629177212715149
+        }
+      ],
+      "model": "Unbabel/wmt22-comet-da"
+    },
+    "comet_kiwi": {
+      "system_score": 0.3821,
+      "segments_scores": [
+        0.3374,
+        0.2945,
+        0.2983,
+        0.752,
+        0.3157,
+        0.4061,
+        0.2508,
+        0.2761,
+        0.3136,
+        0.4572,
+        0.2624,
+        0.2866,
+        0.297,
+        0.3113,
+        0.8391,
+        0.552,
+        0.287,
+        0.4171,
+        0.3507,
+        0.2885,
+        0.2963,
+        0.8432,
+        0.2947,
+        0.4069,
+        0.3184,
+        0.3885,
+        0.3162,
+        0.3292,
+        0.436,
+        0.3939,
+        0.2384,
+        0.3733
+      ],
+      "low_quality_segments": [
+        {
+          "src": "Russian leaders reacted to the announcement of US plans to place missile defence bases in eastern Poland.",
+          "mt": "",
+          "cometkiwi": 0.33739545941352844
+        },
+        {
+          "src": "Mr Popular. Time to meet your friends.",
+          "mt": "",
+          "cometkiwi": 0.29445070028305054
+        },
+        {
+          "src": "I'll check this bus.",
+          "mt": "",
+          "cometkiwi": 0.29826071858406067
+        },
+        {
+          "src": "- Yeah, like a... you know, like a date.",
+          "mt": "",
+          "cometkiwi": 0.31574198603630066
+        },
+        {
+          "src": "They got nothing solid on you.",
+          "mt": "",
+          "cometkiwi": 0.2507839500904083
+        },
+        {
+          "src": "Oh, well, as long as it's germane. Please continue.",
+          "mt": "",
+          "cometkiwi": 0.2761329412460327
+        },
+        {
+          "src": "So spend another night out in the open.",
+          "mt": "در.",
+          "cometkiwi": 0.31355953216552734
+        },
+        {
+          "src": "On his first visit to the fleshpots of portsmouth,",
+          "mt": "",
+          "cometkiwi": 0.2623683214187622
+        },
+        {
+          "src": "Your cloak is torn.",
+          "mt": "",
+          "cometkiwi": 0.2866171896457672
+        },
+        {
+          "src": "Holiness, prudence is...",
+          "mt": "",
+          "cometkiwi": 0.29697853326797485
+        },
+        {
+          "src": "Have you taken the data control room?",
+          "mt": "**\"",
+          "cometkiwi": 0.3113469183444977
+        },
+        {
+          "src": "No Will Smith, no free lunch, and now a bully?",
+          "mt": "",
+          "cometkiwi": 0.28698617219924927
+        },
+        {
+          "src": "Tesla designed the antenna to observe every kind of frequency out there.",
+          "mt": "",
+          "cometkiwi": 0.3507091999053955
+        },
+        {
+          "src": "Not a move out of place.",
+          "mt": "",
+          "cometkiwi": 0.28849127888679504
+        },
+        {
+          "src": "Feeling ill, she decided to visit Dr. Tash but never did arrive at the doctor's office.",
+          "mt": "",
+          "cometkiwi": 0.2962859869003296
+        },
+        {
+          "src": "You're an early bird.",
+          "mt": "",
+          "cometkiwi": 0.2946735620498657
+        },
+        {
+          "src": "I doubt Paul would appreciate me lending you any of his things.",
+          "mt": "",
+          "cometkiwi": 0.3183860182762146
+        },
+        {
+          "src": "\"craft room\"?",
+          "mt": "soru>",
+          "cometkiwi": 0.38845255970954895
+        },
+        {
+          "src": "It admits liability.",
+          "mt": "",
+          "cometkiwi": 0.31618732213974
+        },
+        {
+          "src": "As a token of our friendship and esteem, Your Wizardship.",
+          "mt": "",
+          "cometkiwi": 0.3292255401611328
+        },
+        {
+          "src": "I don't know if you saw it or not.",
+          "mt": "",
+          "cometkiwi": 0.39390110969543457
+        },
+        {
+          "src": "Probably why she ignored The Wolf's instructions and called the boyfriend.",
+          "mt": "",
+          "cometkiwi": 0.23838666081428528
+        },
+        {
+          "src": "What are you doing?",
+          "mt": "جا",
+          "cometkiwi": 0.37330806255340576
+        }
+      ],
+      "model": "Unbabel/wmt22-cometkiwi-da"
+    },
+    "bertscore": {
+      "system_score": 0.1785,
+      "segments_scores": [
+        0.0,
+        0.0,
+        0.0,
+        0.9201,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.6063,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.6266,
+        0.9198,
+        0.6948,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.7104,
+        0.0,
+        0.0,
+        0.0,
+        0.6252,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.6091
+      ],
+      "precision": 0.1879,
+      "recall": 0.171,
+      "model": "bert-base-multilingual-cased",
+      "method": "bertscore_reference_based"
+    },
+    "bleu": {
+      "bleu": 0.0,
+      "score": 0.0,
+      "signature": "BLEU = 0.00 0.0/0.0/0.0/0.0 (BP = 0.000 ratio = 0.000 hyp_len = 0 ref_len = 3)",
+      "tokenizer": "intl"
+    },
+    "chrf": {
+      "chrF": 0.0,
+      "score": 0.0,
+      "word_order": 2,
+      "signature": "chrF2++ = 0.00"
+    },
+    "num_references": 32,
+    "num_translated": 8,
+    "duration_seconds": 16.3,
+    "backend_info": {
+      "backend_display_name": "Autoregressive (Extreme Optimized)",
+      "model_type": "autoregressive",
+      "capabilities": [
+        "TRANSLATE",
+        "FORWARD_ENCODE",
+        "CONFIDENCE",
+        "ENSEMBLE_READY",
+        "QUANTIZABLE_KV",
+        "SPECULATIVE"
+      ],
+      "is_loaded": true
+    }
+  },
+  "extrapolation": {
+    "total_tokens": 6230000000000,
+    "mean_tokens_per_second": 758.4,
+    "median_tokens_per_second": 752.9,
+    "std_tokens_per_second": 147.0,
+    "sem_tokens_per_second": 65.7,
+    "n_batches": 5,
+    "seconds_needed": 8274671271.0,
+    "days_point_estimate": 95771.7,
+    "days_95ci_lower": 72722.2,
+    "days_95ci_upper": 118821.1,
+    "gpu_hours": 2298519.8,
+    "estimated_cost_usd": null,
+    "num_gpus": 1,
+    "relative_uncertainty_pct": 8.7,
+    "bootstrap_days_lower": 83369.7,
+    "bootstrap_days_upper": 112273.4,
+    "bootstrap_method": "bootstrap"
+  },
+  "filter_stats": {
+    "total_chunks": 292,
+    "passed": 292,
+    "rejected": 0,
+    "rejected_too_short": 0,
+    "rejected_garbage": 0,
+    "rejected_language": 0,
+    "pass_rate": 1.0
+  },
+  "_metadata": {
+    "generated_at": "2026-06-25T12:16:30Z",
+    "benchmark_version": "3.6"
+  }
+}

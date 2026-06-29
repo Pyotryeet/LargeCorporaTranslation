@@ -1,0 +1,471 @@
+{
+  "config": {
+    "backend": "auto",
+    "model": {
+      "model_path": "google/translategemma-4b-it",
+      "tokenizer_path": "google/translategemma-4b-it",
+      "max_input_tokens": 512,
+      "max_new_tokens": 512,
+      "temperature": 0.0,
+      "do_sample": false,
+      "num_beams": 1,
+      "dtype": "auto",
+      "tensor_parallel_size": 1,
+      "use_flash_attention": true,
+      "backend_type": "auto",
+      "diffusion_steps": 256,
+      "guidance_scale": 1.0,
+      "noise_schedule": "cosine",
+      "target_length_multiplier": 2.0,
+      "plugin_name": "",
+      "plugin_config": {},
+      "use_tensorrt": false,
+      "tensorrt_precision": "fp16",
+      "tensorrt_max_batch": 32,
+      "tensorrt_cache_dir": "",
+      "use_speculative": false,
+      "speculative_mode": "self",
+      "speculative_num_tokens": 3,
+      "speculative_draft_model": "",
+      "speculative_num_draft_layers": 0,
+      "use_paged_attention": false,
+      "use_continuous_batching": false,
+      "quantization": "bf16",
+      "nllb_source_lang": "eng_Latn",
+      "nllb_target_lang": "tur_Latn"
+    },
+    "runtime": {
+      "target_duration_seconds": 7200,
+      "checkpoint_interval_seconds": 300,
+      "heartbeat_interval_seconds": 10,
+      "metrics_sample_rate_hz": 1,
+      "seed": 42,
+      "observability_enabled": false
+    },
+    "data": {
+      "input_paths": [
+        "./data/input/*.jsonl.gz"
+      ],
+      "output_dir": "./output",
+      "reference_set_path": "./data/references/golden_en_tr.jsonl",
+      "shard_size_mb": 100,
+      "prefetch_workers": 4,
+      "shuffle": true,
+      "min_chunk_tokens": 10,
+      "max_garbage_ratio": 0.95,
+      "chunk_overlap_tokens": 50,
+      "max_references": null,
+      "shuffle_max_memory_gb": null,
+      "shuffle_temp_dir": ""
+    },
+    "extrapolation": {
+      "total_clearnet_non_tr_tokens": 6230000000000,
+      "gpu_cost_per_hour_usd": null
+    }
+  },
+  "environment": {
+    "python_version": "3.12.3",
+    "platform": "Linux-6.8.0-117-generic-x86_64-with-glibc2.39",
+    "pytorch_version": "2.6.0+cu124",
+    "transformers_version": "4.57.6",
+    "cuda_available": true,
+    "mps_available": false,
+    "cuda_version": "12.4",
+    "gpu_count": 2,
+    "gpu_names": [
+      "NVIDIA H200 NVL",
+      "NVIDIA H200 NVL"
+    ]
+  },
+  "runtime": {
+    "actual_duration_seconds": 127.0,
+    "batches_completed": 1,
+    "total_tokens_translated": 87905,
+    "mode": "dry-run",
+    "config_hash": "a373f723f4de2f4e"
+  },
+  "metrics": {
+    "batch": {
+      "total_batches": 1,
+      "total_input_tokens": 106214,
+      "total_output_tokens": 87905,
+      "mean_tps": 1528.6,
+      "median_tps": 1528.6,
+      "std_tps": 0,
+      "p5_tps": 1528.6,
+      "p95_tps": 1528.6,
+      "mean_latency_ms": 57505.9,
+      "p95_latency_ms": 57505.9,
+      "tps_values": [
+        1528.6
+      ]
+    },
+    "device": {},
+    "system": {
+      "num_samples": 97,
+      "mean_cpu_pct": 1.9,
+      "mean_ram_used_mib": 13317.0,
+      "p95_cpu_pct": 3.8
+    }
+  },
+  "quality": {
+    "comet": {
+      "system_score": 0.4372,
+      "segments_scores": [
+        0.2914,
+        0.4766,
+        0.4953,
+        0.5161,
+        0.2721,
+        0.3802,
+        0.595,
+        0.6367,
+        0.2532,
+        0.3978,
+        0.2454,
+        0.4289,
+        0.3778,
+        0.4503,
+        0.8701,
+        0.3245,
+        0.3853,
+        0.3257,
+        0.4637,
+        0.4744,
+        0.7372,
+        0.733,
+        0.1969,
+        0.4653,
+        0.3254,
+        0.3645,
+        0.4028,
+        0.3827,
+        0.482,
+        0.4496,
+        0.3629,
+        0.4293
+      ],
+      "low_quality_segments": [
+        {
+          "src": "Russian leaders reacted to the announcement of US plans to place missile defence bases in eastern Poland.",
+          "mt": "",
+          "ref": "Rus liderleri Amerika Birleşik Devletleri'nin Polonya'nın doğusuna füze üssü kurma planlarına tepkili.",
+          "comet": 0.2913835346698761
+        },
+        {
+          "src": "- Yeah, like a... you know, like a date.",
+          "mt": "جا, yani, gibi... biliorsunuz.",
+          "ref": "- Öğle yemeğini akşam yiyeceğiz.",
+          "comet": 0.2720530331134796
+        },
+        {
+          "src": "Please! Don't take away my words!",
+          "mt": "",
+          "ref": "Lütfen, kelimelerimi elimden almayın.",
+          "comet": 0.38016805052757263
+        },
+        {
+          "src": "So spend another night out in the open.",
+          "mt": "[Tr]",
+          "ref": "O zaman bu geceyi de dışarda geçirirsiniz olur biter.",
+          "comet": 0.2532499134540558
+        },
+        {
+          "src": "I think that'll make her happy.",
+          "mt": "",
+          "ref": "Sanırım bu Videl-san'ı mutlu eder.",
+          "comet": 0.3978012502193451
+        },
+        {
+          "src": "On his first visit to the fleshpots of portsmouth,",
+          "mt": "\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"",
+          "ref": "Portsmouth'un lüks hayatına ilk ziyareti...",
+          "comet": 0.24535539746284485
+        },
+        {
+          "src": "Holiness, prudence is...",
+          "mt": "Post&nbul.",
+          "ref": "Yüce Efendimiz, sağduyu odur ki...",
+          "comet": 0.3778468072414398
+        },
+        {
+          "src": "But me and your mum have been very worried about...",
+          "mt": "Ol.",
+          "ref": "Annenle ben senin için çok endişelenmiştik...",
+          "comet": 0.32447898387908936
+        },
+        {
+          "src": "No Will Smith, no free lunch, and now a bully?",
+          "mt": "",
+          "ref": "Will Smith yok,bedava yemek yok. Bir de şimdi kabadayı mı çıktı?",
+          "comet": 0.3852783143520355
+        },
+        {
+          "src": "Your father always made sure he could rest his head at night.",
+          "mt": "",
+          "ref": "Baban daima geceleri uyurken başını buna dayardı.",
+          "comet": 0.32565686106681824
+        },
+        {
+          "src": "You're an early bird.",
+          "mt": "[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]",
+          "ref": "Sen erkenci kuşsun.",
+          "comet": 0.19692696630954742
+        },
+        {
+          "src": "I doubt Paul would appreciate me lending you any of his things.",
+          "mt": "",
+          "ref": "Paul, herhangi bir eşyasını sana vermemden hoşlanır mıydı bilemiyorum.",
+          "comet": 0.32541418075561523
+        },
+        {
+          "src": "\"craft room\"?",
+          "mt": "önü:\n\"\n\"\n\"\n\"",
+          "ref": "Ivır zıvır odası mı?",
+          "comet": 0.36448708176612854
+        },
+        {
+          "src": "As a token of our friendship and esteem, Your Wizardship.",
+          "mt": "",
+          "ref": "Dostluğumuzun, ve sizin bilgeliğinizin şerefine.",
+          "comet": 0.3826994299888611
+        },
+        {
+          "src": "Probably why she ignored The Wolf's instructions and called the boyfriend.",
+          "mt": "",
+          "ref": "Muhtemelen neden o Wolf'un talimatlarını görmezden ve erkek arkadaşı çağırdı.",
+          "comet": 0.3629177212715149
+        }
+      ],
+      "model": "Unbabel/wmt22-comet-da"
+    },
+    "comet_kiwi": {
+      "system_score": 0.4135,
+      "segments_scores": [
+        0.3374,
+        0.2945,
+        0.3321,
+        0.5548,
+        0.4681,
+        0.4061,
+        0.484,
+        0.7197,
+        0.3039,
+        0.4572,
+        0.2613,
+        0.4012,
+        0.2534,
+        0.4365,
+        0.8342,
+        0.295,
+        0.287,
+        0.4171,
+        0.3507,
+        0.3667,
+        0.7515,
+        0.7967,
+        0.3031,
+        0.3479,
+        0.3184,
+        0.3518,
+        0.3031,
+        0.3292,
+        0.436,
+        0.3939,
+        0.2384,
+        0.4019
+      ],
+      "low_quality_segments": [
+        {
+          "src": "Russian leaders reacted to the announcement of US plans to place missile defence bases in eastern Poland.",
+          "mt": "",
+          "cometkiwi": 0.33739545941352844
+        },
+        {
+          "src": "Mr Popular. Time to meet your friends.",
+          "mt": "",
+          "cometkiwi": 0.29445064067840576
+        },
+        {
+          "src": "I'll check this bus.",
+          "mt": "Sorun.",
+          "cometkiwi": 0.33211418986320496
+        },
+        {
+          "src": "So spend another night out in the open.",
+          "mt": "[Tr]",
+          "cometkiwi": 0.30388346314430237
+        },
+        {
+          "src": "On his first visit to the fleshpots of portsmouth,",
+          "mt": "\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"\n\"",
+          "cometkiwi": 0.26133212447166443
+        },
+        {
+          "src": "Holiness, prudence is...",
+          "mt": "Post&nbul.",
+          "cometkiwi": 0.25340431928634644
+        },
+        {
+          "src": "But me and your mum have been very worried about...",
+          "mt": "Ol.",
+          "cometkiwi": 0.29503336548805237
+        },
+        {
+          "src": "No Will Smith, no free lunch, and now a bully?",
+          "mt": "",
+          "cometkiwi": 0.2869860827922821
+        },
+        {
+          "src": "Tesla designed the antenna to observe every kind of frequency out there.",
+          "mt": "",
+          "cometkiwi": 0.3507091999053955
+        },
+        {
+          "src": "Not a move out of place.",
+          "mt": "sorun.",
+          "cometkiwi": 0.36671051383018494
+        },
+        {
+          "src": "You're an early bird.",
+          "mt": "[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]\n[0]",
+          "cometkiwi": 0.30313682556152344
+        },
+        {
+          "src": "You, you almost got us both killed!",
+          "mt": "doğru.",
+          "cometkiwi": 0.34793975949287415
+        },
+        {
+          "src": "I doubt Paul would appreciate me lending you any of his things.",
+          "mt": "",
+          "cometkiwi": 0.3183860182762146
+        },
+        {
+          "src": "\"craft room\"?",
+          "mt": "önü:\n\"\n\"\n\"\n\"",
+          "cometkiwi": 0.3517930209636688
+        },
+        {
+          "src": "It admits liability.",
+          "mt": "kader",
+          "cometkiwi": 0.3031270503997803
+        },
+        {
+          "src": "As a token of our friendship and esteem, Your Wizardship.",
+          "mt": "",
+          "cometkiwi": 0.32922589778900146
+        },
+        {
+          "src": "I don't know if you saw it or not.",
+          "mt": "",
+          "cometkiwi": 0.39390110969543457
+        },
+        {
+          "src": "Probably why she ignored The Wolf's instructions and called the boyfriend.",
+          "mt": "",
+          "cometkiwi": 0.23838666081428528
+        }
+      ],
+      "model": "Unbabel/wmt22-cometkiwi-da"
+    },
+    "bertscore": {
+      "system_score": 0.4076,
+      "segments_scores": [
+        0.0,
+        0.0,
+        0.6398,
+        0.693,
+        0.6165,
+        0.0,
+        0.7439,
+        0.7503,
+        0.5919,
+        0.0,
+        0.5708,
+        0.7268,
+        0.5393,
+        0.6975,
+        0.9224,
+        0.5449,
+        0.0,
+        0.0,
+        0.0,
+        0.6186,
+        0.7157,
+        0.7404,
+        0.4608,
+        0.6445,
+        0.0,
+        0.6154,
+        0.6606,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.5508
+      ],
+      "precision": 0.4185,
+      "recall": 0.4001,
+      "model": "bert-base-multilingual-cased",
+      "method": "bertscore_reference_based"
+    },
+    "bleu": {
+      "bleu": 0.0,
+      "score": 0.0,
+      "signature": "BLEU = 0.00 0.0/0.0/0.0/0.0 (BP = 0.000 ratio = 0.000 hyp_len = 0 ref_len = 3)",
+      "tokenizer": "intl"
+    },
+    "chrf": {
+      "chrF": 0.0,
+      "score": 0.0,
+      "word_order": 2,
+      "signature": "chrF2++ = 0.00"
+    },
+    "num_references": 32,
+    "num_translated": 20,
+    "duration_seconds": 26.6,
+    "backend_info": {
+      "backend_display_name": "Autoregressive (Extreme Optimized)",
+      "model_type": "autoregressive",
+      "capabilities": [
+        "TRANSLATE",
+        "FORWARD_ENCODE",
+        "CONFIDENCE",
+        "ENSEMBLE_READY",
+        "QUANTIZABLE_KV",
+        "SPECULATIVE"
+      ],
+      "is_loaded": true
+    }
+  },
+  "extrapolation": {
+    "total_tokens": 6230000000000,
+    "mean_tokens_per_second": 1528.6,
+    "median_tokens_per_second": 1528.6,
+    "std_tokens_per_second": 0,
+    "sem_tokens_per_second": 0.0,
+    "n_batches": 1,
+    "seconds_needed": 4075624755.0,
+    "days_point_estimate": 47171.6,
+    "days_95ci_lower": 47171.6,
+    "days_95ci_upper": 47171.6,
+    "gpu_hours": 2264236.0,
+    "estimated_cost_usd": null,
+    "num_gpus": 2,
+    "relative_uncertainty_pct": 0.0
+  },
+  "filter_stats": {
+    "total_chunks": 5598,
+    "passed": 5598,
+    "rejected": 0,
+    "rejected_too_short": 0,
+    "rejected_garbage": 0,
+    "rejected_language": 0,
+    "pass_rate": 1.0
+  },
+  "_metadata": {
+    "generated_at": "2026-06-24T20:36:14Z",
+    "benchmark_version": "3.6"
+  }
+}

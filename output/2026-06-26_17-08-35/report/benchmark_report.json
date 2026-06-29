@@ -1,0 +1,161 @@
+{
+  "config": {
+    "backend": "auto",
+    "model": {
+      "model_path": "facebook/nllb-200-distilled-600M",
+      "tokenizer_path": "facebook/nllb-200-distilled-600M",
+      "max_input_tokens": 512,
+      "max_new_tokens": 512,
+      "temperature": 0.0,
+      "do_sample": false,
+      "num_beams": 1,
+      "dtype": "auto",
+      "tensor_parallel_size": 1,
+      "use_flash_attention": true,
+      "backend_type": "auto",
+      "diffusion_steps": 256,
+      "guidance_scale": 1.0,
+      "noise_schedule": "cosine",
+      "target_length_multiplier": 2.0,
+      "plugin_name": "",
+      "plugin_config": {},
+      "use_speculative": false,
+      "speculative_mode": "self",
+      "speculative_num_tokens": 3,
+      "speculative_draft_model": "",
+      "speculative_num_draft_layers": 0,
+      "use_paged_attention": false,
+      "use_continuous_batching": false,
+      "quantization": "bf16",
+      "data_parallel_size": 2,
+      "nllb_source_lang": "eng_Latn",
+      "nllb_target_lang": "tur_Latn"
+    },
+    "runtime": {
+      "target_duration_seconds": 120,
+      "checkpoint_interval_seconds": 60,
+      "heartbeat_interval_seconds": 5,
+      "metrics_sample_rate_hz": 1,
+      "seed": 42,
+      "batch_size": 512,
+      "observability_enabled": false
+    },
+    "data": {
+      "input_paths": [
+        "./data/input/*.jsonl.gz"
+      ],
+      "output_dir": "./output",
+      "reference_set_path": "./data/references/golden_en_tr.jsonl",
+      "shard_size_mb": 100,
+      "prefetch_workers": 8,
+      "shuffle": true,
+      "min_chunk_tokens": 10,
+      "max_garbage_ratio": 0.95,
+      "chunk_overlap_tokens": 50,
+      "max_references": null,
+      "shuffle_max_memory_gb": null,
+      "shuffle_temp_dir": ""
+    },
+    "extrapolation": {
+      "total_clearnet_non_tr_tokens": 6230000000000,
+      "gpu_cost_per_hour_usd": null
+    }
+  },
+  "environment": {
+    "python_version": "3.12.3",
+    "platform": "Linux-6.8.0-124-generic-x86_64-with-glibc2.39",
+    "pytorch_version": "2.12.1+cu126",
+    "transformers_version": "4.57.6",
+    "cuda_available": true,
+    "mps_available": false,
+    "cuda_version": "12.6",
+    "gpu_count": 2,
+    "gpu_names": [
+      "NVIDIA H200 NVL",
+      "NVIDIA H200 NVL"
+    ]
+  },
+  "runtime": {
+    "actual_duration_seconds": 124.3,
+    "batches_completed": 20,
+    "total_tokens_translated": 5253120,
+    "mode": "translate-only",
+    "config_hash": "66b148562efea304"
+  },
+  "metrics": {
+    "batch": {
+      "total_batches": 20,
+      "total_input_tokens": 3852032,
+      "total_output_tokens": 5253120,
+      "mean_tps": 42936.5,
+      "median_tps": 42935.9,
+      "std_tps": 228.0,
+      "p5_tps": 42657.0,
+      "p95_tps": 43180.2,
+      "mean_latency_ms": 6117.5,
+      "p95_latency_ms": 6157.4,
+      "tps_values": [
+        42222.3,
+        42925.6,
+        42892.2,
+        42845.9,
+        42966.9,
+        42679.9,
+        42808.5,
+        43074.0,
+        43162.7,
+        43178.2,
+        43093.5,
+        43035.1,
+        43178.1,
+        43115.0,
+        42792.6,
+        42905.8,
+        42923.4,
+        42765.5,
+        43218.6,
+        42946.3
+      ]
+    },
+    "device": {},
+    "system": {
+      "num_samples": 124,
+      "mean_cpu_pct": 3.1,
+      "mean_ram_used_mib": 7038.0,
+      "p95_cpu_pct": 3.2
+    }
+  },
+  "quality": {},
+  "extrapolation": {
+    "total_tokens": 6230000000000,
+    "mean_tokens_per_second": 42936.5,
+    "median_tokens_per_second": 42935.9,
+    "std_tokens_per_second": 228.0,
+    "sem_tokens_per_second": 51.0,
+    "n_batches": 20,
+    "seconds_needed": 145100021.0,
+    "days_point_estimate": 1679.4,
+    "days_95ci_lower": 1675.2,
+    "days_95ci_upper": 1683.6,
+    "gpu_hours": 80611.1,
+    "estimated_cost_usd": null,
+    "num_gpus": 2,
+    "relative_uncertainty_pct": 0.1,
+    "bootstrap_days_lower": 1675.9,
+    "bootstrap_days_upper": 1683.6,
+    "bootstrap_method": "bootstrap"
+  },
+  "filter_stats": {
+    "total_chunks": 0,
+    "passed": 0,
+    "rejected": 0,
+    "rejected_too_short": 0,
+    "rejected_garbage": 0,
+    "rejected_language": 0,
+    "pass_rate": 0.0
+  },
+  "_metadata": {
+    "generated_at": "2026-06-26T17:10:55Z",
+    "benchmark_version": "3.6"
+  }
+}

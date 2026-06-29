@@ -1,0 +1,142 @@
+{
+  "config": {
+    "backend": "auto",
+    "model": {
+      "model_path": "google/translategemma-4b-it",
+      "tokenizer_path": "google/translategemma-4b-it",
+      "max_input_tokens": 512,
+      "max_new_tokens": 512,
+      "temperature": 0.0,
+      "do_sample": false,
+      "num_beams": 1,
+      "dtype": "auto",
+      "tensor_parallel_size": 1,
+      "use_flash_attention": true,
+      "backend_type": "auto",
+      "diffusion_steps": 256,
+      "guidance_scale": 1.0,
+      "noise_schedule": "cosine",
+      "target_length_multiplier": 2.0,
+      "plugin_name": "",
+      "plugin_config": {},
+      "use_speculative": false,
+      "speculative_mode": "self",
+      "speculative_num_tokens": 3,
+      "speculative_draft_model": "",
+      "speculative_num_draft_layers": 0,
+      "use_paged_attention": false,
+      "use_continuous_batching": false,
+      "quantization": "bf16",
+      "data_parallel_size": 1,
+      "nllb_source_lang": "eng_Latn",
+      "nllb_target_lang": "tur_Latn"
+    },
+    "runtime": {
+      "target_duration_seconds": 120,
+      "checkpoint_interval_seconds": 60,
+      "heartbeat_interval_seconds": 5,
+      "metrics_sample_rate_hz": 1,
+      "seed": 42,
+      "batch_size": 256,
+      "observability_enabled": false
+    },
+    "data": {
+      "input_paths": [
+        "./data/input/*.jsonl.gz"
+      ],
+      "output_dir": "./output",
+      "reference_set_path": "./data/references/golden_en_tr.jsonl",
+      "shard_size_mb": 100,
+      "prefetch_workers": 8,
+      "shuffle": true,
+      "min_chunk_tokens": 10,
+      "max_garbage_ratio": 0.95,
+      "chunk_overlap_tokens": 50,
+      "max_references": null,
+      "shuffle_max_memory_gb": null,
+      "shuffle_temp_dir": ""
+    },
+    "extrapolation": {
+      "total_clearnet_non_tr_tokens": 6230000000000,
+      "gpu_cost_per_hour_usd": null
+    }
+  },
+  "environment": {
+    "python_version": "3.12.3",
+    "platform": "Linux-6.8.0-124-generic-x86_64-with-glibc2.39",
+    "pytorch_version": "2.12.1+cu126",
+    "transformers_version": "4.57.6",
+    "cuda_available": true,
+    "mps_available": false,
+    "cuda_version": "12.6",
+    "gpu_count": 2,
+    "gpu_names": [
+      "NVIDIA H200 NVL",
+      "NVIDIA H200 NVL"
+    ]
+  },
+  "runtime": {
+    "actual_duration_seconds": 131.2,
+    "batches_completed": 4,
+    "total_tokens_translated": 479755,
+    "mode": "translate-only",
+    "config_hash": "72e14e336ce9d6bc"
+  },
+  "metrics": {
+    "batch": {
+      "total_batches": 4,
+      "total_input_tokens": 429396,
+      "total_output_tokens": 479755,
+      "mean_tps": 3674.8,
+      "median_tps": 3660.7,
+      "std_tps": 69.2,
+      "p5_tps": 3614.3,
+      "p95_tps": 3755.2,
+      "mean_latency_ms": 32639.0,
+      "p95_latency_ms": 32802.3,
+      "tps_values": [
+        3610.4,
+        3685.1,
+        3636.3,
+        3767.6
+      ]
+    },
+    "device": {},
+    "system": {
+      "num_samples": 131,
+      "mean_cpu_pct": 1.6,
+      "mean_ram_used_mib": 19114.0,
+      "p95_cpu_pct": 1.6
+    }
+  },
+  "quality": {},
+  "extrapolation": {
+    "total_tokens": 6230000000000,
+    "mean_tokens_per_second": 3674.8,
+    "median_tokens_per_second": 3660.7,
+    "std_tokens_per_second": 69.2,
+    "sem_tokens_per_second": 34.6,
+    "n_batches": 4,
+    "seconds_needed": 1701860300.0,
+    "days_point_estimate": 19697.5,
+    "days_95ci_lower": 19107.2,
+    "days_95ci_upper": 20287.7,
+    "gpu_hours": 945477.9,
+    "estimated_cost_usd": null,
+    "num_gpus": 2,
+    "relative_uncertainty_pct": 0.9
+  },
+  "filter_stats": {
+    "total_chunks": 0,
+    "passed": 0,
+    "rejected": 0,
+    "rejected_too_short": 0,
+    "rejected_garbage": 0,
+    "rejected_language": 0,
+    "pass_rate": 0.0
+  },
+  "_metadata": {
+    "generated_at": "2026-06-26T16:40:46Z",
+    "benchmark_version": "3.6"
+  }
+}

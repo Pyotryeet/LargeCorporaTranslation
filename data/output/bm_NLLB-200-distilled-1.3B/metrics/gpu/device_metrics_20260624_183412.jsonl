@@ -1,0 +1,6 @@
+{"timestamp": "2026-06-24T18:34:12.509Z", "elapsed_s": 0.002, "backend": "cuda", "devices": [{"id": 0, "error": "pynvml not available"}, {"id": 1, "error": "pynvml not available"}]}
+{"timestamp": "2026-06-24T18:34:13.509Z", "elapsed_s": 1.002, "backend": "cuda", "devices": [{"id": 0, "error": "pynvml not available"}, {"id": 1, "error": "pynvml not available"}]}
+{"timestamp": "2026-06-24T18:34:14.509Z", "elapsed_s": 2.002, "backend": "cuda", "devices": [{"id": 0, "error": "pynvml not available"}, {"id": 1, "error": "pynvml not available"}]}
+{"timestamp": "2026-06-24T18:34:15.509Z", "elapsed_s": 3.002, "backend": "cuda", "devices": [{"id": 0, "error": "pynvml not available"}, {"id": 1, "error": "pynvml not available"}]}
+{"timestamp": "2026-06-24T18:34:16.509Z", "elapsed_s": 4.002, "backend": "cuda", "devices": [{"id": 0, "error": "pynvml not available"}, {"id": 1, "error": "pynvml not available"}]}
+{"timestamp": "2026-06-24T18:34:17.509Z", "elapsed_s": 5.002, "backend": "cuda", "devices": [{"id": 0, "error": "pynvml not available"}, {"id": 1, "error": "pynvml not available"}]}

@@ -1,0 +1,1 @@
+{"timestamp": "2026-06-25T13:54:06.740Z", "elapsed_s": 0.001, "backend": "cuda", "devices": [{"id": 0, "error": "pynvml not available"}]}

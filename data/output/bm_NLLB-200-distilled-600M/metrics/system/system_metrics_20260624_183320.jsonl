@@ -1,0 +1,6 @@
+{"timestamp": "2026-06-24T18:33:20.867Z", "elapsed_s": 0.005, "cpu_util_pct": 25.0, "ram_used_mib": 15207, "ram_total_mib": 515490, "disk_read_mbps": 0.0, "disk_write_mbps": 0.0, "swap_used_mib": 1}
+{"timestamp": "2026-06-24T18:33:21.867Z", "elapsed_s": 1.005, "cpu_util_pct": 1.4, "ram_used_mib": 12685, "ram_total_mib": 515490, "disk_read_mbps": 0.0, "disk_write_mbps": 0.0, "swap_used_mib": 1}
+{"timestamp": "2026-06-24T18:33:22.867Z", "elapsed_s": 2.005, "cpu_util_pct": 0.2, "ram_used_mib": 12635, "ram_total_mib": 515490, "disk_read_mbps": 0.0, "disk_write_mbps": 0.0, "swap_used_mib": 1}
+{"timestamp": "2026-06-24T18:33:23.867Z", "elapsed_s": 3.005, "cpu_util_pct": 0.0, "ram_used_mib": 12598, "ram_total_mib": 515490, "disk_read_mbps": 0.0, "disk_write_mbps": 0.0, "swap_used_mib": 1}
+{"timestamp": "2026-06-24T18:33:24.867Z", "elapsed_s": 4.005, "cpu_util_pct": 0.2, "ram_used_mib": 12576, "ram_total_mib": 515490, "disk_read_mbps": 0.0, "disk_write_mbps": 0.0, "swap_used_mib": 1}
+{"timestamp": "2026-06-24T18:33:25.867Z", "elapsed_s": 5.005, "cpu_util_pct": 0.0, "ram_used_mib": 12544, "ram_total_mib": 515490, "disk_read_mbps": 0.0, "disk_write_mbps": 0.0, "swap_used_mib": 1}

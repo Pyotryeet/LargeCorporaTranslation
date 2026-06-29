@@ -1,0 +1,120 @@
+{
+  "config": {
+    "backend": "auto",
+    "model": {
+      "model_path": "google/translategemma-4b-it",
+      "tokenizer_path": "google/translategemma-4b-it",
+      "max_input_tokens": 512,
+      "max_new_tokens": 512,
+      "temperature": 0.0,
+      "do_sample": false,
+      "num_beams": 1,
+      "dtype": "auto",
+      "tensor_parallel_size": 1,
+      "use_flash_attention": true,
+      "backend_type": "auto",
+      "diffusion_steps": 256,
+      "guidance_scale": 1.0,
+      "noise_schedule": "cosine",
+      "target_length_multiplier": 2.0,
+      "plugin_name": "",
+      "plugin_config": {},
+      "use_tensorrt": false,
+      "tensorrt_precision": "fp16",
+      "tensorrt_max_batch": 32,
+      "tensorrt_cache_dir": "",
+      "use_speculative": false,
+      "speculative_mode": "self",
+      "speculative_num_tokens": 3,
+      "speculative_draft_model": "",
+      "speculative_num_draft_layers": 0,
+      "use_paged_attention": true,
+      "use_continuous_batching": true,
+      "quantization": "bf16",
+      "nllb_source_lang": "eng_Latn",
+      "nllb_target_lang": "tur_Latn"
+    },
+    "runtime": {
+      "target_duration_seconds": 7200,
+      "checkpoint_interval_seconds": 300,
+      "heartbeat_interval_seconds": 10,
+      "metrics_sample_rate_hz": 1,
+      "seed": 42,
+      "observability_enabled": false
+    },
+    "data": {
+      "input_paths": [
+        "./data/input/*.jsonl.gz"
+      ],
+      "output_dir": "./output",
+      "reference_set_path": "./data/references/golden_en_tr.jsonl",
+      "shard_size_mb": 100,
+      "prefetch_workers": 4,
+      "shuffle": true,
+      "min_chunk_tokens": 10,
+      "max_garbage_ratio": 0.95,
+      "chunk_overlap_tokens": 50,
+      "max_references": null,
+      "shuffle_max_memory_gb": null,
+      "shuffle_temp_dir": ""
+    },
+    "extrapolation": {
+      "total_clearnet_non_tr_tokens": 6230000000000,
+      "gpu_cost_per_hour_usd": null
+    }
+  },
+  "environment": {
+    "python_version": "3.12.3",
+    "platform": "Linux-6.8.0-117-generic-x86_64-with-glibc2.39",
+    "pytorch_version": "2.6.0+cu124",
+    "transformers_version": "4.57.6",
+    "cuda_available": true,
+    "mps_available": false,
+    "cuda_version": "12.4",
+    "gpu_count": 1,
+    "gpu_names": [
+      "NVIDIA H200 NVL"
+    ]
+  },
+  "runtime": {
+    "actual_duration_seconds": 37.0,
+    "batches_completed": 0,
+    "total_tokens_translated": 0,
+    "mode": "continuous_batching_dry-run",
+    "config_hash": "e7dd3dd42fb4db67"
+  },
+  "metrics": {
+    "batch": {
+      "total_batches": 0
+    },
+    "device": {},
+    "system": {
+      "num_samples": 37,
+      "mean_cpu_pct": 8.5,
+      "mean_ram_used_mib": 35574.0,
+      "p95_cpu_pct": 11.4
+    }
+  },
+  "extrapolation": {
+    "error": "effective_tps must be positive",
+    "days_point_estimate": 0,
+    "days_95ci_lower": 0,
+    "days_95ci_upper": 0,
+    "gpu_hours": 0,
+    "estimated_cost_usd": null,
+    "relative_uncertainty_pct": 0
+  },
+  "filter_stats": {
+    "total_chunks": 0,
+    "passed": 0,
+    "rejected": 0,
+    "rejected_too_short": 0,
+    "rejected_garbage": 0,
+    "rejected_language": 0,
+    "pass_rate": 0.0
+  },
+  "_metadata": {
+    "generated_at": "2026-06-25T12:37:56Z",
+    "benchmark_version": "3.6"
+  }
+}

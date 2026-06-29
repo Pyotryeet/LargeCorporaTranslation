@@ -1,0 +1,16 @@
+{"timestamp": "2026-06-26T18:28:53.286Z", "elapsed_s": 0.001, "cpu_util_pct": 0.0, "ram_used_mib": 7033, "ram_total_mib": 515490, "disk_read_mbps": 0.0, "disk_write_mbps": 12149.95, "swap_used_mib": 5}
+{"timestamp": "2026-06-26T18:28:54.291Z", "elapsed_s": 1.006, "cpu_util_pct": 1.8, "ram_used_mib": 7371, "ram_total_mib": 515490, "disk_read_mbps": 0.0, "disk_write_mbps": 45.27, "swap_used_mib": 5}
+{"timestamp": "2026-06-26T18:28:55.286Z", "elapsed_s": 2.001, "cpu_util_pct": 1.7, "ram_used_mib": 7617, "ram_total_mib": 515490, "disk_read_mbps": 0.0, "disk_write_mbps": 0.0, "swap_used_mib": 5}
+{"timestamp": "2026-06-26T18:28:56.286Z", "elapsed_s": 3.001, "cpu_util_pct": 1.6, "ram_used_mib": 7616, "ram_total_mib": 515490, "disk_read_mbps": 0.0, "disk_write_mbps": 0.0, "swap_used_mib": 5}
+{"timestamp": "2026-06-26T18:28:57.286Z", "elapsed_s": 4.001, "cpu_util_pct": 1.6, "ram_used_mib": 7616, "ram_total_mib": 515490, "disk_read_mbps": 0.0, "disk_write_mbps": 0.0, "swap_used_mib": 5}
+{"timestamp": "2026-06-26T18:28:58.286Z", "elapsed_s": 5.001, "cpu_util_pct": 1.6, "ram_used_mib": 7615, "ram_total_mib": 515490, "disk_read_mbps": 0.0, "disk_write_mbps": 0.01, "swap_used_mib": 5}
+{"timestamp": "2026-06-26T18:28:59.286Z", "elapsed_s": 6.001, "cpu_util_pct": 1.6, "ram_used_mib": 7615, "ram_total_mib": 515490, "disk_read_mbps": 0.0, "disk_write_mbps": 0.15, "swap_used_mib": 5}
+{"timestamp": "2026-06-26T18:29:00.286Z", "elapsed_s": 7.001, "cpu_util_pct": 1.6, "ram_used_mib": 7615, "ram_total_mib": 515490, "disk_read_mbps": 0.0, "disk_write_mbps": 0.0, "swap_used_mib": 5}
+{"timestamp": "2026-06-26T18:29:01.286Z", "elapsed_s": 8.001, "cpu_util_pct": 1.6, "ram_used_mib": 7614, "ram_total_mib": 515490, "disk_read_mbps": 0.0, "disk_write_mbps": 0.0, "swap_used_mib": 5}
+{"timestamp": "2026-06-26T18:29:02.286Z", "elapsed_s": 9.001, "cpu_util_pct": 1.6, "ram_used_mib": 7614, "ram_total_mib": 515490, "disk_read_mbps": 0.0, "disk_write_mbps": 0.0, "swap_used_mib": 5}
+{"timestamp": "2026-06-26T18:29:03.286Z", "elapsed_s": 10.001, "cpu_util_pct": 1.6, "ram_used_mib": 7613, "ram_total_mib": 515490, "disk_read_mbps": 0.0, "disk_write_mbps": 0.0, "swap_used_mib": 5}
+{"timestamp": "2026-06-26T18:29:04.286Z", "elapsed_s": 11.001, "cpu_util_pct": 1.6, "ram_used_mib": 7613, "ram_total_mib": 515490, "disk_read_mbps": 0.0, "disk_write_mbps": 0.0, "swap_used_mib": 5}
+{"timestamp": "2026-06-26T18:29:05.286Z", "elapsed_s": 12.001, "cpu_util_pct": 1.6, "ram_used_mib": 7613, "ram_total_mib": 515490, "disk_read_mbps": 0.0, "disk_write_mbps": 0.0, "swap_used_mib": 5}
+{"timestamp": "2026-06-26T18:29:06.286Z", "elapsed_s": 13.001, "cpu_util_pct": 1.6, "ram_used_mib": 7612, "ram_total_mib": 515490, "disk_read_mbps": 0.0, "disk_write_mbps": 0.0, "swap_used_mib": 5}
+{"timestamp": "2026-06-26T18:29:07.286Z", "elapsed_s": 14.001, "cpu_util_pct": 1.6, "ram_used_mib": 7620, "ram_total_mib": 515490, "disk_read_mbps": 0.0, "disk_write_mbps": 0.0, "swap_used_mib": 5}
+{"timestamp": "2026-06-26T18:29:08.286Z", "elapsed_s": 15.001, "cpu_util_pct": 1.6, "ram_used_mib": 7619, "ram_total_mib": 515490, "disk_read_mbps": 0.0, "disk_write_mbps": 0.0, "swap_used_mib": 5}

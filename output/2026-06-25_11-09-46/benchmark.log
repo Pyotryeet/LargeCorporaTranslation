@@ -1,0 +1,8 @@
+{"timestamp": "2026-06-25T11:09:46.229Z", "level": "INFO", "logger": "benchmark.orchestration.harness", "thread": "MainThread", "module": "harness", "message": "============================================================"}
+{"timestamp": "2026-06-25T11:09:46.229Z", "level": "INFO", "logger": "benchmark.orchestration.harness", "thread": "MainThread", "module": "harness", "message": "Turkish Corpus Translation Benchmark Harness  v3.6"}
+{"timestamp": "2026-06-25T11:09:46.229Z", "level": "INFO", "logger": "benchmark.orchestration.harness", "thread": "MainThread", "module": "harness", "message": "  Run mode:   dry-run"}
+{"timestamp": "2026-06-25T11:09:46.229Z", "level": "INFO", "logger": "benchmark.orchestration.harness", "thread": "MainThread", "module": "harness", "message": "  Run dir:    output/2026-06-25_11-09-46"}
+{"timestamp": "2026-06-25T11:09:46.229Z", "level": "INFO", "logger": "benchmark.orchestration.harness", "thread": "MainThread", "module": "harness", "message": "  torch.compile: True"}
+{"timestamp": "2026-06-25T11:09:46.229Z", "level": "INFO", "logger": "benchmark.orchestration.harness", "thread": "MainThread", "module": "harness", "message": "============================================================"}
+{"timestamp": "2026-06-25T11:09:46.311Z", "level": "INFO", "logger": "benchmark.orchestration.harness", "thread": "MainThread", "module": "harness", "message": "Seed set to 42. Full determinism requires --deterministic mode (not yet implemented)."}
+{"timestamp": "2026-06-25T11:09:46.345Z", "level": "INFO", "logger": "benchmark.hardware.backend", "thread": "MainThread", "module": "backend", "message": "Auto-detected CUDA with 2 GPUs"}

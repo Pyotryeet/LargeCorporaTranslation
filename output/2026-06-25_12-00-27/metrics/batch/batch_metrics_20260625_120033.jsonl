@@ -1,0 +1,4 @@
+{"batch_id": 1, "timestamp": "2026-06-25T12:00:54.738Z", "batch_size": 32, "input_tokens_total": 12207, "output_tokens_total": 7220, "prefill_time_ms": 505.5, "decode_time_ms": 12686.1, "total_latency_ms": 13191.8, "tokens_per_second": 547.3}
+{"batch_id": 2, "timestamp": "2026-06-25T12:01:07.935Z", "batch_size": 32, "input_tokens_total": 13263, "output_tokens_total": 9767, "prefill_time_ms": 449.3, "decode_time_ms": 12707.3, "total_latency_ms": 13156.8, "tokens_per_second": 742.4}
+{"batch_id": 3, "timestamp": "2026-06-25T12:01:21.169Z", "batch_size": 32, "input_tokens_total": 14757, "output_tokens_total": 11799, "prefill_time_ms": 455.9, "decode_time_ms": 12742.6, "total_latency_ms": 13198.6, "tokens_per_second": 894.0}
+{"batch_id": 4, "timestamp": "2026-06-25T12:01:34.384Z", "batch_size": 32, "input_tokens_total": 14467, "output_tokens_total": 9892, "prefill_time_ms": 463.3, "decode_time_ms": 12714.0, "total_latency_ms": 13177.5, "tokens_per_second": 750.7}

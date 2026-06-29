@@ -1,0 +1,1 @@
+{"batch_id": 1, "timestamp": "2026-06-25T14:59:23.043Z", "batch_size": 32, "input_tokens_total": 11540, "output_tokens_total": 12815, "prefill_time_ms": 9387.1, "decode_time_ms": 85107.7, "total_latency_ms": 94496.4, "tokens_per_second": 135.6}

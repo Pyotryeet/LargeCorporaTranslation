@@ -1,0 +1,3 @@
+{"batch_id": 1, "timestamp": "2026-06-26T17:44:46.193Z", "batch_size": 2048, "input_tokens_total": 772276, "output_tokens_total": 1050624, "prefill_time_ms": 0, "decode_time_ms": 0, "total_latency_ms": 42752.9, "tokens_per_second": 24574.3}
+{"batch_id": 2, "timestamp": "2026-06-26T17:45:27.412Z", "batch_size": 2048, "input_tokens_total": 783723, "output_tokens_total": 1050624, "prefill_time_ms": 0, "decode_time_ms": 0, "total_latency_ms": 41041.1, "tokens_per_second": 25599.3}
+{"batch_id": 3, "timestamp": "2026-06-26T17:46:08.624Z", "batch_size": 2048, "input_tokens_total": 770420, "output_tokens_total": 1050624, "prefill_time_ms": 0, "decode_time_ms": 0, "total_latency_ms": 41044.7, "tokens_per_second": 25597.1}
