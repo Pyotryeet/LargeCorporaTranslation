@@ -13,16 +13,11 @@ Output: data/output/scientific_tps_matrix.csv
 Usage:
     python3 scripts/benchmark_scientific_tps.py
 """
-import json, csv, os, sys, time, tempfile, atexit, subprocess, shutil
+import json, csv, os, sys, time, tempfile, atexit, subprocess, shutil, uuid
 from pathlib import Path
 from datetime import datetime, timezone
 
 from typing import Any
-
-try:
-    import fcntl
-except ImportError:
-    fcntl = None
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_OUTPUT = ROOT / "data" / "output" / "scientific_tps_matrix.csv"
@@ -285,7 +280,6 @@ def run_experiment(
     num_gpus: int,
 ) -> dict | None:
     """Run one benchmark cell. Returns a dict row for the CSV, or None on failure."""
-    import uuid
     exp_label = experiment["label"]
     dp = num_gpus
     oom_retries = 0
@@ -489,22 +483,17 @@ def run_experiment(
     }
 
 
-def _write_csv_row(row: dict[str, Any], output_path: Path):
+def _write_csv_row(row: dict[str, Any], output_path: Path, write_header: bool):
     """Append a single row to the CSV file incrementally.
 
     Writes with UTF-8-SIG (BOM) for correct rendering in Windows Excel.
     """
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    write_header = not output_path.exists()
-    
-    try:
-        with open(output_path, "a", newline="", encoding="utf-8-sig") as f:
-            w = csv.DictWriter(f, fieldnames=FIELD_NAMES)
-            if write_header:
-                w.writeheader()
-            w.writerow(row)
-    except Exception as e:
-        print(f"  ⚠ Failed incremental write to CSV: {e}")
+    with open(output_path, "a", newline="", encoding="utf-8-sig") as f:
+        w = csv.DictWriter(f, fieldnames=FIELD_NAMES)
+        if write_header:
+            w.writeheader()
+        w.writerow(row)
 
 
 def _get_active_runs() -> list[tuple]:
@@ -555,6 +544,8 @@ def main() -> int:
     completed = 0
     failures = 0
 
+    write_header = not output_path.exists()
+
     for model_id, model_path, model_type, experiment, num_gpus in active_runs:
         completed += 1
         print(f"\n[{completed}/{total}]", end="")
@@ -566,7 +557,8 @@ def main() -> int:
 
         if row:
             rows.append(row)
-            _write_csv_row(row, output_path)
+            _write_csv_row(row, output_path, write_header)
+            write_header = False
             print(f"  → Saved ({len(rows)} rows so far)")
         else:
             print("  ⚠ Failed cell run recorded as None")
