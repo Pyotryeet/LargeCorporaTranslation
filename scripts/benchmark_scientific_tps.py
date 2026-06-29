@@ -13,14 +13,18 @@ Output: data/output/scientific_tps_matrix.csv
 Usage:
     python3 scripts/benchmark_scientific_tps.py
 """
-import json, csv, os, sys, time, tempfile, atexit, subprocess, fcntl
+import json, csv, os, sys, time, tempfile, atexit, subprocess, shutil
 from pathlib import Path
 from datetime import datetime, timezone
 
+try:
+    import fcntl
+except ImportError:
+    fcntl = None
+
 ROOT = Path(__file__).resolve().parent.parent
-TIMESTAMP = datetime.now().strftime("%Y%m%d_%H%M%S")
-OUTPUT = ROOT / "data" / "output" / f"scientific_tps_matrix_{TIMESTAMP}.csv"
 DEFAULT_OUTPUT = ROOT / "data" / "output" / "scientific_tps_matrix.csv"
+OUTPUT = None  # Populated dynamically at run time in main() using UTC timestamp
 
 # ── Models to benchmark ──────────────────────────────────────────
 # Format: (model_id, huggingface_path, architecture_type)
@@ -173,9 +177,10 @@ DURATION_SECONDS = 60
 
 FIELD_NAMES = [
     "timestamp", "model_id", "model_path", "model_type",
-    "experiment", "gpus", "dp",
+    "experiment", "gpus", "dp", "actual_gpus",
     "mean_tps", "median_tps", "std_tps",
-    "total_tokens", "batches", "duration_s",
+    "total_tokens", "output_tokens", "batches", "duration_s",
+    "mean_latency_ms",
     "flash_sdpa", "torch_compile", "fp8_smoothquant",
     "speculative", "paged_attention", "continuous_batching",
     "batch_size",
@@ -213,7 +218,7 @@ def _build_config(
     num_gpus: int,
 ) -> dict:
     """Build a benchmark config dict for one experiment cell."""
-    backend_type = "encoder_decoder" if model_type in ("nllb", "madlad") else "auto"
+    backend_type = "encoder_decoder" if model_type in ("nllb", "madlad") else "autoregressive"
 
     cfg = {
         "backend": "auto",
@@ -380,7 +385,7 @@ def run_experiment(
         # Successfully ran. Break out to parse results.
         break
 
-    # Parse exact run directory from stdout to avoid race conditions or picking up old reports
+    # Parse exact run directory from stdout to avoid race conditions
     report_dir = None
     if result.stdout:
         for line in result.stdout.split("\n"):
@@ -391,7 +396,15 @@ def run_experiment(
                     break
 
     if not report_dir:
-        print("  ⚠ Could not parse Run dir from stdout")
+        print("  ⚠ Could not parse Run dir from stdout. Falling back to glob search...")
+        output_base = ROOT / "output" / "scientific"
+        if output_base.exists():
+            subdirs = [d for d in output_base.iterdir() if d.is_dir()]
+            if subdirs:
+                report_dir = max(subdirs, key=lambda d: d.stat().st_mtime)
+
+    if not report_dir:
+        print("  ⚠ Could not resolve Run dir")
         print("--- STDOUT ---")
         print(result.stdout)
         print("--- STDERR ---")
@@ -433,6 +446,11 @@ def run_experiment(
     actual_duration = runtime.get("actual_duration_seconds")
     duration_s = round(actual_duration, 1) if actual_duration is not None else None
 
+    # Verify actual GPU count from environment metadata
+    actual_gpus = report.get("environment", {}).get("gpu_count", num_gpus)
+    if actual_gpus != num_gpus:
+        print(f"  ⚠ GPU count mismatch: requested {num_gpus}, but report shows {actual_gpus} GPUs used!")
+
     return {
         "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "model_id": model_id,
@@ -441,19 +459,22 @@ def run_experiment(
         "experiment": exp_label,
         "gpus": num_gpus,
         "dp": num_gpus,
+        "actual_gpus": actual_gpus,
         "mean_tps": round(mean_tps, 2) if mean_tps is not None else None,
         "median_tps": round(median_tps, 2) if median_tps is not None else None,
         "std_tps": round(std_tps, 2) if std_tps is not None else None,
         "total_tokens": runtime.get("total_tokens_translated"),
+        "output_tokens": batch_metrics.get("total_output_tokens"),
         "batches": runtime.get("batches_completed"),
         "duration_s": duration_s,
+        "mean_latency_ms": batch_metrics.get("mean_latency_ms"),
         "flash_sdpa": "✓" if experiment["flash"] else "✗",
         "torch_compile": "✓" if experiment["compile"] else "✗",
         "fp8_smoothquant": "✓" if experiment["fp8"] else "✗",
         "speculative": "✓" if experiment.get("speculative") else "✗",
         "paged_attention": "✓" if experiment.get("paged") else "✗",
         "continuous_batching": "✓" if experiment.get("continuous") else "✗",
-        "batch_size": batch_metrics.get("batch_size", ""),
+        "batch_size": current_bs,
     }
 
 
@@ -514,6 +535,11 @@ def _get_active_runs() -> list[tuple]:
 
 
 def main() -> int:
+    global OUTPUT
+    # Timestamp dynamically at start of execution using UTC to prevent import-time freeze or NTP drift
+    utc_now_str = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%SZ")
+    OUTPUT = ROOT / "data" / "output" / f"scientific_tps_matrix_{utc_now_str}.csv"
+
     active_runs = _get_active_runs()
     total = len(active_runs)
 
