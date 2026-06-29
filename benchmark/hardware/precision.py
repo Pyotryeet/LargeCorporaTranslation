@@ -522,6 +522,35 @@ class StaticFP8Linear(torch.nn.Module):
         self._cached_weight = None
         self._cached_dtype = None
 
+    def _apply(self, fn):
+        """Override _apply to protect FP8 buffers from dtype casting.
+
+        PyTorch's Module.to(dtype) calls _apply with a lambda that casts
+        every tensor.  The NLLB-MoE router does this on EVERY forward pass
+        (``self.classifier = self.classifier.to(self.dtype)``), which would
+        destroy weight_fp8 by casting it from float8_e4m3fn to float32.
+
+        We intercept _apply and only allow **device** moves — dtype casts
+        on weight_fp8 are silently skipped.  The cache is invalidated on
+        any device move so forward() re-dequantises on the new device.
+        """
+        # Save FP8 buffer state before the parent _apply runs
+        fp8_data = self.weight_fp8.data
+        fp8_device = fp8_data.device
+
+        # Run parent _apply (handles bias, scale, and any other tensors)
+        super()._apply(fn)
+
+        # Restore weight_fp8 to its original FP8 dtype — undo any cast
+        if self.weight_fp8.dtype != torch.float8_e4m3fn:
+            self.weight_fp8.data = fp8_data.to(device=self.weight_fp8.device)
+
+        # If device changed, invalidate cache
+        if self.weight_fp8.device != fp8_device:
+            self.clear_cache()
+
+        return self
+
     @property
     def weight(self) -> torch.Tensor:
         """Return the dequantized weight tensor dynamically in BF16 precision."""
