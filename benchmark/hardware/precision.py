@@ -497,6 +497,11 @@ class StaticFP8Linear(torch.nn.Module):
         else:
             self.bias = None
 
+    @property
+    def weight(self) -> torch.Tensor:
+        """Return the dequantized weight tensor dynamically in BF16 precision."""
+        return self.weight_fp8.to(torch.bfloat16) * self.weight_scale.to(torch.bfloat16)
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Forward pass with FP8-to-BF16 dequantization on read.
 
