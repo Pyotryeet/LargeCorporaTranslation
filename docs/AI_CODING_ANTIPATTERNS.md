@@ -494,6 +494,46 @@ not on a consistent policy.
 
 ---
 
+### A21. Silently swallowing write errors in data pipelines (Silent Data Loss) 🔴
+
+**What:** Silently catching I/O exceptions in data logging routines (like CSV row writes) and continuing process execution without signaling failure.
+
+**Evidence:** `scripts/benchmark_scientific_tps.py` originally caught all exceptions during incremental CSV writes and printed a simple warning. If the storage device became full, subsequent runs silently discarded 100% of the experiment results while the parent script returned exit code 0.
+
+**Impact:** Catastrophic data loss. Unattended benchmark sweeps can run for hours and silently write nothing to disk.
+
+**Prevention:**
+- Allow disk and file write exceptions to propagate up to main execution blocks, or raise them explicitly to crash the process loudly on failure.
+
+---
+
+### A22. Non-atomic/stale directory globbing in concurrent/retried benchmarks (Data Contamination) 🔴
+
+**What:** Locating a subdirectory by searching the parent directory via timestamp or modification time (`mtime`) globbing, which races when parallel runs execute concurrently or when OOM retries leave stale folders behind.
+
+**Evidence:** `scripts/benchmark_scientific_tps.py` parsed run directories from stdout with a fallback of picking the latest directory by `st_mtime` in `output/scientific/`. If an earlier attempt generated a partial report and the final retry crashed, the script picked up the stale failed folder or took another parallel process's run directory.
+
+**Impact:** Silent cross-contamination of experimental results.
+
+**Prevention:**
+- Create a completely unique cell execution folder (e.g. using a cell parameters + UUID combination) and target it explicitly.
+- Purge any stale directories within the cell folder before each retry attempt.
+
+---
+
+### A23. Incorrect decoder start token fallback for Seq2Seq architectures (Garbage Output) 🔴
+
+**What:** Falling back to `0` or `unk_token_id` as the start token ID (`bos_id`) for Seq2Seq decoders when `bos_token_id` is missing in the tokenizer.
+
+**Evidence:** MADLAD (T5) vocab maps token `0` to `<unk>` and `1` to `<s>` / `<pad>`. Since `tokenizer.bos_token_id` is missing and the config's `decoder_start_token_id` defaults to `0`, standard Seq2Seq fast decoders started decoding from the `<unk>` token, causing every subsequent token to be sampled from unk-conditioned logits and producing garbage output.
+
+**Impact:** Completely corrupted text generation.
+
+**Prevention:**
+- For T5/MADLAD and related Seq2Seq architectures, explicitly fall back to `pad_token_id` (typically `1` or `<s>`) if `decoder_start_token_id` or `bos_token_id` resolves to `0` / `<unk>`.
+
+---
+
 ## Part B — Preventable pitfalls (🟡) an AI coder could fall into here
 
 These are risks specific to this codebase. Each is preventable by a cheap check.
