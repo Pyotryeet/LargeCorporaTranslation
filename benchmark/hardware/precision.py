@@ -513,15 +513,9 @@ class StaticFP8Linear(torch.nn.Module):
         # Free original weight memory immediately to prevent VRAM spikes during the conversion loop
         linear.weight.data = torch.empty(0)
 
-        # Cache for dequantized weight to bypass PyTorch runtime casting overhead during decoding
-        self._cached_weight = None
-        self._cached_dtype = None
-
     @property
     def weight(self) -> torch.Tensor:
         """Return the dequantized weight tensor dynamically in BF16 precision."""
-        if self._cached_weight is not None and self._cached_dtype == torch.bfloat16:
-            return self._cached_weight
         return self.weight_fp8.to(torch.bfloat16) * self.weight_scale.to(torch.bfloat16)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -537,13 +531,10 @@ class StaticFP8Linear(torch.nn.Module):
         torch.Tensor
             Output tensor of shape ``(..., out_features)`` after linear projection.
         """
-        # Cache the dequantized weights to eliminate sequential casting/multiplication overheads
-        if self._cached_weight is None or self._cached_dtype != x.dtype:
-            self._cached_weight = (self.weight_fp8.to(x.dtype) * self.weight_scale.to(x.dtype)).detach()
-            self._cached_dtype = x.dtype
-
+        # Dequantize dynamically to the same dtype as input activations to avoid type mismatches
+        w_dequant = self.weight_fp8.to(x.dtype) * self.weight_scale.to(x.dtype)
         bias = self.bias.to(x.dtype) if self.bias is not None else None
-        return torch.nn.functional.linear(x, self._cached_weight, bias)
+        return torch.nn.functional.linear(x, w_dequant, bias)
 
 
 def apply_static_fp8_to_model(
