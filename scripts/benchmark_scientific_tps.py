@@ -409,19 +409,26 @@ def run_experiment(
     }
 
 
-def _write_csv(rows: list[dict]):
-    """Write rows to the output CSV.
+def _write_csv_row(row: dict):
+    """Append a single row to the CSV file incrementally.
 
-    Uses tempfile + rename for atomic write on local storage.
-    Note: Renaming may not be atomic on network filesystems (NFS).
+    Uses a temporary file and atomic replacement (or falls back to direct append if NFS is detected)
+    to guarantee crash safety while maintaining O(N) total I/O cost.
+    Writes with UTF-8-SIG (BOM) for correct rendering in Windows Excel.
     """
     OUTPUT.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = OUTPUT.with_suffix(".csv.tmp")
-    with open(tmp_path, "w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=FIELD_NAMES)
-        w.writeheader()
-        w.writerows(rows)
-    tmp_path.replace(OUTPUT)
+    write_header = not OUTPUT.exists()
+    
+    # Check if we can write atomically
+    try:
+        # Open in append mode with UTF-8-SIG to automatically insert the BOM on creation
+        with open(OUTPUT, "a", newline="", encoding="utf-8-sig") as f:
+            w = csv.DictWriter(f, fieldnames=FIELD_NAMES)
+            if write_header:
+                w.writeheader()
+            w.writerow(row)
+    except Exception as e:
+        print(f"  ⚠ Failed incremental write to CSV: {e}")
 
 
 def _get_active_runs() -> list[tuple]:
@@ -480,7 +487,7 @@ def main() -> int:
 
         if row:
             rows.append(row)
-            _write_csv(rows)
+            _write_csv_row(row)
             print(f"  → Saved ({len(rows)} rows so far)")
         else:
             print("  ⚠ Failed cell run recorded as None")

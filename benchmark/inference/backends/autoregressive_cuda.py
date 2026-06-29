@@ -1076,6 +1076,7 @@ class AutoregressiveCUDABackend(InferenceBackend):
                     torch_dtype=dtype, trust_remote_code=False,
                     low_cpu_mem_usage=True,
                     device_map=None,  # no sharding → single GPU
+                    attn_implementation="sdpa" if self.use_flash_attention else "eager",
                     **_local_kwargs(self.model_path),
                 )
                 self.model = self.model.to(self.devices[0])
@@ -1090,6 +1091,7 @@ class AutoregressiveCUDABackend(InferenceBackend):
                     torch_dtype=dtype, trust_remote_code=False,
                     low_cpu_mem_usage=True,
                     device_map="auto", max_memory=max_memory,
+                    attn_implementation="sdpa" if self.use_flash_attention else "eager",
                     **_local_kwargs(self.model_path),
                 )
         elif self.backend_name == "mps":
@@ -1130,6 +1132,7 @@ class AutoregressiveCUDABackend(InferenceBackend):
                 self.model_path,
                 dtype=dtype, trust_remote_code=False,
                 low_cpu_mem_usage=True,
+                attn_implementation="sdpa" if self.use_flash_attention else "eager",
                 **_local_kwargs(self.model_path),
             )
 
