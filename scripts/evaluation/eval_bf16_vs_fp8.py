@@ -17,7 +17,6 @@ from transformers import (
     AutoModelForSeq2SeqLM, AutoTokenizer,
     AutoModelForCausalLM,
     T5ForConditionalGeneration, T5Tokenizer,
-    QuantoConfig,
 )
 
 # Apply COMET compatibility monkey patch for transformers 5.x
@@ -137,8 +136,6 @@ def main():
             t_start = time.time()
             hyps = []
             
-            # Setup Quantization Config if FP8
-            q_config = QuantoConfig(weights="float8") if precision == "FP8" else None
             device_map = "auto" if is_large else None
 
             try:
@@ -147,7 +144,7 @@ def main():
                     tok = AutoTokenizer.from_pretrained(mpath, src_lang="eng_Latn")
                     m = AutoModelForSeq2SeqLM.from_pretrained(
                         mpath, torch_dtype=DTYPE, trust_remote_code=False,
-                        device_map=device_map, quantization_config=q_config
+                        device_map=device_map
                     ).eval()
                     if device_map is None:
                         m = m.to(DEVICE)
@@ -155,7 +152,7 @@ def main():
                     tok = T5Tokenizer.from_pretrained(mpath)
                     m = T5ForConditionalGeneration.from_pretrained(
                         mpath, torch_dtype=DTYPE,
-                        device_map=device_map, quantization_config=q_config
+                        device_map=device_map
                     ).eval()
                     if device_map is None:
                         m = m.to(DEVICE)
@@ -166,10 +163,23 @@ def main():
                     tok = AutoTokenizer.from_pretrained(mpath)
                     m = AutoModelForCausalLM.from_pretrained(
                         mpath, torch_dtype=DTYPE, trust_remote_code=False,
-                        device_map=device_map, quantization_config=q_config
+                        device_map=device_map
                     ).eval()
                     if device_map is None:
                         m = m.to(DEVICE)
+
+                # 2. SmoothQuant Calibration & Static FP8 Quantization
+                if precision == "FP8":
+                    from quantization.smoothquant import SmoothQuantCalibrator
+                    from benchmark.hardware.precision import apply_static_fp8_to_model
+                    print("Running SmoothQuant calibration...")
+                    if tok.pad_token_id is None:
+                        tok.pad_token = tok.eos_token
+                    calibration_texts = [s["text"] for s in sentences]
+                    calibrator = SmoothQuantCalibrator(m, tok, alpha=0.5, device=DEVICE)
+                    calibrator.calibrate(calibration_texts)
+                    print("Applying static FP8 quantization...")
+                    apply_static_fp8_to_model(m, skip_lm_head=True)
 
                 # 2. Run Inference
                 latencies = []
