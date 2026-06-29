@@ -249,6 +249,11 @@ def main():
                     latencies.append((time.time() - t0) * 1000)
                     hyps.append(text)
 
+                    # Clear dynamic dequantization cache after each sentence to prevent VRAM accumulation
+                    if precision == "FP8":
+                        from benchmark.hardware.precision import clear_fp8_linear_caches
+                        clear_fp8_linear_caches(m)
+
                 avg_latency = sum(latencies) / len(latencies)
                 print(f"Inference complete. Latency: {avg_latency:.1f} ms/sentence")
 
