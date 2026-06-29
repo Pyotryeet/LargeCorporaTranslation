@@ -494,6 +494,8 @@ class StaticFP8Linear(torch.nn.Module):
         self.register_buffer("weight_scale", scale)
         if linear.bias is not None:
             self.bias = torch.nn.Parameter(linear.bias.data.clone().to(torch.bfloat16))
+            # Free original bias memory immediately
+            linear.bias.data = torch.empty(0)
         else:
             self.bias = None
         
@@ -507,6 +509,9 @@ class StaticFP8Linear(torch.nn.Module):
         for attr in ["_hf_hook", "hf_device_map"]:
             if hasattr(linear, attr):
                 setattr(self, attr, getattr(linear, attr))
+
+        # Free original weight memory immediately to prevent VRAM spikes during the conversion loop
+        linear.weight.data = torch.empty(0)
 
         # Cache for dequantized weight to bypass PyTorch runtime casting overhead during decoding
         self._cached_weight = None
