@@ -151,7 +151,9 @@ class ActivationCapture:
         acts = self.activations.get(name)
         if acts is None or not acts:
             return None
-        return torch.cat(acts, dim=0)
+        # Flatten all tensors to 2D [tokens, in_features] first to handle varying seq_len across batches
+        acts_2d = [t.reshape(-1, t.shape[-1]) for t in acts]
+        return torch.cat(acts_2d, dim=0)
 
 
 # ── SmoothQuant scaling factors ────────────────────────────────────────────
@@ -402,9 +404,21 @@ class SmoothQuantCalibrator:
                             batch_texts, return_tensors="pt", padding=True,
                             truncation=True, max_length=512,
                         ).to(self.device)
-                        # CausalLM forward: use input_ids + attention_mask
+                        
+                        kwargs = {}
+                        if self.model.config.is_encoder_decoder:
+                            if hasattr(self.model, "_shift_right"):
+                                kwargs["decoder_input_ids"] = self.model._shift_right(encoded.input_ids)
+                            else:
+                                pad_token_id = self.model.config.pad_token_id or 0
+                                kwargs["decoder_input_ids"] = torch.full(
+                                    (encoded.input_ids.shape[0], 1), pad_token_id,
+                                    dtype=torch.long, device=encoded.input_ids.device
+                                )
+                        
                         self.model(input_ids=encoded.input_ids,
-                                   attention_mask=encoded.attention_mask)
+                                   attention_mask=encoded.attention_mask,
+                                   **kwargs)
                         total_tokens += encoded.input_ids.numel()
                         batch_texts.clear()
 
@@ -417,8 +431,21 @@ class SmoothQuantCalibrator:
                         batch_texts, return_tensors="pt", padding=True,
                         truncation=True, max_length=512,
                     ).to(self.device)
+                    
+                    kwargs = {}
+                    if self.model.config.is_encoder_decoder:
+                        if hasattr(self.model, "_shift_right"):
+                            kwargs["decoder_input_ids"] = self.model._shift_right(encoded.input_ids)
+                        else:
+                            pad_token_id = self.model.config.pad_token_id or 0
+                            kwargs["decoder_input_ids"] = torch.full(
+                                (encoded.input_ids.shape[0], 1), pad_token_id,
+                                dtype=torch.long, device=encoded.input_ids.device
+                            )
+                    
                     self.model(input_ids=encoded.input_ids,
-                               attention_mask=encoded.attention_mask)
+                               attention_mask=encoded.attention_mask,
+                               **kwargs)
         finally:
             capture.stop()
 
