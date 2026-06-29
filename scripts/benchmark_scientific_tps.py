@@ -2,29 +2,18 @@
 r"""Scientific TPS benchmark — measure every optimization in isolation.
 
 Runs a matrix of controlled experiments on H200 GPUs:
-
-  Optimizations tested (each in isolation + combined):
-    - BF16 baseline (no optimizations)
-    - SmoothQuant + static FP8 weight quantization
-    - torch.compile (reduce-overhead mode)
-    - Flash SDPA (scaled_dot_product_attention)
-    - Data parallelism (dp=1 vs dp=2)
-    - Speculative decoding (K=3, self-speculative)
-    - PagedAttention KV-cache
-    - Continuous batching
-
-  Models:
-    NLLB-600M, NLLB-1.3B, NLLB-3.3B, MADLAD-3B, TranslateGemma-4B
-
-Each experiment runs for 60 seconds in translate-only mode to capture
-steady-state TPS.
+  - Causal models (TranslateGemma-4B) evaluate the full 2³ factorial combinations of
+    FP8, torch.compile, and Flash attention, as well as speculative decoding,
+    PagedAttention, and continuous batching.
+  - Encoder-decoder models (NLLB, MADLAD) evaluate BF16 baseline vs eager attention.
+    Invalid combinations (FP8/compile) are skipped to avoid crashes and false labeling.
 
 Output: data/output/scientific_tps_matrix.csv
 
 Usage:
     python3 scripts/benchmark_scientific_tps.py
 """
-import json, csv, os, sys, gc, time, tempfile, atexit, subprocess
+import json, csv, os, sys, time, tempfile, atexit, subprocess
 from pathlib import Path
 from datetime import datetime, timezone
 
@@ -32,6 +21,7 @@ ROOT = Path(__file__).resolve().parent.parent
 OUTPUT = ROOT / "data" / "output" / "scientific_tps_matrix.csv"
 
 # ── Models to benchmark ──────────────────────────────────────────
+# Format: (model_id, huggingface_path, architecture_type)
 MODELS = [
     ("nllb_600m",    "facebook/nllb-200-distilled-600M", "nllb"),
     ("nllb_1.3b",    "facebook/nllb-200-distilled-1.3B", "nllb"),
@@ -40,9 +30,7 @@ MODELS = [
     ("gemma_4b",     "google/translategemma-4b-it",      "gemma"),
 ]
 
-# ── Experiment matrix ────────────────────────────────────────────
-# Each experiment is a dict describing which optimizations are ON.
-# Causal-only optimizations are skipped for encoder-decoder models.
+# ── Optimization Matrix Definitions ──────────────────────────────
 EXPERIMENTS = [
     {
         "label": "baseline_bf16",
@@ -52,6 +40,7 @@ EXPERIMENTS = [
         "speculative": False,
         "paged": False,
         "continuous": False,
+        "safe_mode": False,
         "description": "BF16 baseline with Flash SDPA, no compile, no FP8",
     },
     {
@@ -62,6 +51,7 @@ EXPERIMENTS = [
         "speculative": False,
         "paged": False,
         "continuous": False,
+        "safe_mode": False,
         "description": "SmoothQuant + static FP8, no compile",
     },
     {
@@ -72,6 +62,7 @@ EXPERIMENTS = [
         "speculative": False,
         "paged": False,
         "continuous": False,
+        "safe_mode": False,
         "description": "torch.compile only, BF16, Flash SDPA on",
     },
     {
@@ -82,7 +73,8 @@ EXPERIMENTS = [
         "speculative": False,
         "paged": False,
         "continuous": False,
-        "description": "BF16, Flash SDPA disabled (eager attention)",
+        "safe_mode": True,  # True zero-optimization baseline via safe-mode
+        "description": "Safe-mode baseline (BF16, Flash SDPA disabled, eager attention)",
     },
     {
         "label": "fp8_plus_compile",
@@ -92,6 +84,7 @@ EXPERIMENTS = [
         "speculative": False,
         "paged": False,
         "continuous": False,
+        "safe_mode": False,
         "description": "FP8 + torch.compile + Flash SDPA (all core optimizations)",
     },
     {
@@ -102,6 +95,7 @@ EXPERIMENTS = [
         "speculative": False,
         "paged": False,
         "continuous": False,
+        "safe_mode": False,
         "description": "FP8 + eager attention (isolate FP8 without Flash SDPA)",
     },
     {
@@ -112,6 +106,7 @@ EXPERIMENTS = [
         "speculative": False,
         "paged": False,
         "continuous": False,
+        "safe_mode": False,
         "description": "torch.compile + eager attention (isolate compile without Flash SDPA)",
     },
     {
@@ -122,6 +117,7 @@ EXPERIMENTS = [
         "speculative": False,
         "paged": False,
         "continuous": False,
+        "safe_mode": False,
         "description": "FP8 + torch.compile, Flash SDPA off (all opts except flash)",
     },
     {
@@ -132,6 +128,7 @@ EXPERIMENTS = [
         "speculative": True,
         "paged": False,
         "continuous": False,
+        "safe_mode": False,
         "description": "Speculative decoding (K=3, self-speculative draft layers)",
     },
     {
@@ -142,6 +139,7 @@ EXPERIMENTS = [
         "speculative": False,
         "paged": True,
         "continuous": False,
+        "safe_mode": False,
         "description": "PagedAttention KV-cache optimization",
     },
     {
@@ -152,12 +150,12 @@ EXPERIMENTS = [
         "speculative": False,
         "paged": True,
         "continuous": True,
+        "safe_mode": False,
         "description": "Continuous Batching (with PagedAttention)",
     },
 ]
 
 GPU_COUNTS = [1, 2]
-
 DURATION_SECONDS = 60
 
 FIELD_NAMES = [
@@ -202,7 +200,6 @@ def _build_config(
     num_gpus: int,
 ) -> dict:
     """Build a benchmark config dict for one experiment cell."""
-
     backend_type = "encoder_decoder" if model_type in ("nllb", "madlad") else "auto"
 
     cfg = {
@@ -254,7 +251,6 @@ def _build_config(
             "gpu_cost_per_hour_usd": None,
         },
     }
-
     return cfg
 
 
@@ -266,7 +262,6 @@ def run_experiment(
     num_gpus: int,
 ) -> dict | None:
     """Run one benchmark cell. Returns a dict row for the CSV, or None on failure."""
-
     exp_label = experiment["label"]
     dp = num_gpus
 
@@ -301,9 +296,17 @@ def run_experiment(
     if not experiment["compile"]:
         cmd.append("--no-compile")
 
+    if experiment.get("safe_mode"):
+        cmd.append("--safe-mode")
+
+    # Force batch sizes explicitly to bypass the BatchSizeTuner search
+    # This prevents tuner time-waste and CUDA/MPS OOMs during exploration runs.
     if experiment.get("continuous"):
-        # Force batch size override on the CLI to ensure continuous batching runs
         cmd.extend(["--batch-size", "16"])
+    else:
+        # dp=2 gets half the batch size to keep cumulative GPU workload identical
+        bs = "64" if num_gpus == 2 else "128"
+        cmd.extend(["--batch-size", bs])
 
     # For NLLB/MADLAD, tell the CLI it's an encoder-decoder model
     if model_type in ("nllb", "madlad"):
@@ -338,7 +341,6 @@ def run_experiment(
     if result.stdout:
         for line in result.stdout.split("\n"):
             if "Run dir:" in line:
-                # Format is: "  Run dir:    ./output/scientific/2026-06-29_21-00-49"
                 parts = line.split("Run dir:")
                 if len(parts) > 1:
                     report_dir = Path(parts[1].strip())
@@ -346,7 +348,6 @@ def run_experiment(
 
     if not report_dir:
         print("  ⚠ Could not parse Run dir from stdout")
-        # Print stdout and stderr for debugging
         print("--- STDOUT ---")
         print(result.stdout)
         print("--- STDERR ---")
@@ -375,7 +376,7 @@ def run_experiment(
     std_tps = batch_metrics.get("std_tps")
 
     if mean_tps is not None:
-        print(f"  ✓ TPS: mean={mean_tps:.1f}, median={median_tps or 0.0:.1f}, std={std_tps or 0.0:.1f}")
+        print(f"  ✓ TPS: mean={mean_tps:.1f}, median={median_tps if median_tps is not None else 0.0:.1f}, std={std_tps if std_tps is not None else 0.0:.1f}")
     else:
         print(f"  ⚠ No TPS data found in report")
 
@@ -408,7 +409,11 @@ def run_experiment(
 
 
 def _write_csv(rows: list[dict]):
-    """Write rows to the output CSV (atomic: temp + rename)."""
+    """Write rows to the output CSV.
+
+    Uses tempfile + rename for atomic write on local storage.
+    Note: Renaming may not be atomic on network filesystems (NFS).
+    """
     OUTPUT.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = OUTPUT.with_suffix(".csv.tmp")
     with open(tmp_path, "w", newline="") as f:
@@ -419,14 +424,28 @@ def _write_csv(rows: list[dict]):
 
 
 def _get_active_runs() -> list[tuple]:
-    """Generate all valid runs. Factors out configuration logic to avoid duplication."""
+    """Generate the exact list of valid runs to execute.
+
+    Filters experiments based on architectural compatibility:
+      - Gemma (Causal): supports all experiments.
+      - NLLB/MADLAD (Enc-Dec): only evaluates baseline vs eager (safe mode).
+        Compiles and FP8 quantizations are excluded to avoid DynamicCache crashes
+        and misleading labels.
+    """
     runs = []
     for model_id, model_path, model_type in MODELS:
         for experiment in EXPERIMENTS:
-            # Skip causal-only experiments for encoder-decoder models
-            if experiment.get("speculative") or experiment.get("paged") or experiment.get("continuous"):
-                if model_type != "gemma":
-                    continue
+            # Skip invalid optimizations for encoder-decoder models
+            is_causal_opt = (
+                experiment["fp8"] or
+                experiment["compile"] or
+                experiment.get("speculative") or
+                experiment.get("paged") or
+                experiment.get("continuous")
+            )
+            if is_causal_opt and model_type != "gemma":
+                continue
+
             for num_gpus in GPU_COUNTS:
                 runs.append((model_id, model_path, model_type, experiment, num_gpus))
     return runs
@@ -465,8 +484,6 @@ def main() -> int:
         else:
             print("  ⚠ Failed cell run recorded as None")
             failures += 1
-
-        time.sleep(5)
 
     print(f"\n{'=' * 72}")
     print(f"DONE — {len(rows)}/{total} experiments completed (failures={failures}) → {OUTPUT}")
