@@ -23,8 +23,13 @@ from transformers import (
 ROOT = Path(__file__).resolve().parent.parent.parent
 INFILE = ROOT / "data" / "output" / "model_selection" / "source_sentences.json"
 OUTFILE = ROOT / "data" / "output" / "model_selection" / "translations.json"
-DEVICE = "mps" if torch.backends.mps.is_available() else "cpu"
-DTYPE = torch.bfloat16 if DEVICE == "mps" else torch.float32
+if torch.cuda.is_available():
+    DEVICE = "cuda"
+elif torch.backends.mps.is_available():
+    DEVICE = "mps"
+else:
+    DEVICE = "cpu"
+DTYPE = torch.bfloat16 if DEVICE in ("mps", "cuda") else torch.float32
 
 with open(INFILE) as f:
     sentences = json.load(f)
@@ -43,12 +48,12 @@ for mid, mpath in [
 ]:
     print(f"\n=== {mid} ===")
     tok = AutoTokenizer.from_pretrained(mpath, src_lang="eng_Latn")
-    device_map = "auto" if "moe" in mpath else (DEVICE if DEVICE == "mps" else None)
+    device_map = "auto" if "moe" in mpath else None
     m = AutoModelForSeq2SeqLM.from_pretrained(
         mpath, torch_dtype=DTYPE, trust_remote_code=False,
         device_map=device_map,
     ).eval()
-    if device_map != "auto" and DEVICE != "mps":
+    if device_map != "auto":
         m = m.to(DEVICE)
     for e in output:
         t0 = time.time()
@@ -84,12 +89,12 @@ for mid, mpath in [
 ]:
     print(f"\n=== {mid} ===")
     tok = T5Tokenizer.from_pretrained(mpath)
-    device_map = "auto" if "10b" in mpath else (DEVICE if DEVICE == "mps" else None)
+    device_map = "auto" if "10b" in mpath else None
     m = T5ForConditionalGeneration.from_pretrained(
         mpath, torch_dtype=DTYPE,
         device_map=device_map,
     ).eval()
-    if device_map != "auto" and DEVICE != "mps":
+    if device_map != "auto":
         m = m.to(DEVICE)
     # Tie embedding weights manually to resolve scale mismatch and gibberish outputs
     m.shared.weight = m.decoder.embed_tokens.weight
@@ -118,11 +123,13 @@ for mid, mpath in [
 ]:
     print(f"\n=== {mid} ===")
     tok = AutoTokenizer.from_pretrained(mpath)
-    device_map = "auto" if "12b" in mpath or "27b" in mpath else (DEVICE if DEVICE == "mps" else None)
+    device_map = "auto" if "12b" in mpath or "27b" in mpath else None
     m = AutoModelForCausalLM.from_pretrained(
         mpath, torch_dtype=DTYPE, trust_remote_code=False,
         device_map=device_map,
     ).eval()
+    if device_map != "auto":
+        m = m.to(DEVICE)
     for e in output:
         prompt = (
             f"<start_of_turn>user\n"
