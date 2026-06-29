@@ -1,0 +1,17 @@
+{
+  "model": "NLLB-200-distilled-600M",
+  "model_path": "facebook/nllb-200-distilled-600M",
+  "backend_type": "encoder_decoder",
+  "mean_tps": 229.5,
+  "median_tps": 244.7,
+  "p95_tps": 259.0,
+  "mean_latency_ms": 2058.3,
+  "batches_completed": 64,
+  "total_tokens_translated": 29304,
+  "run_duration_seconds": 171.0,
+  "batch_size": 4,
+  "load_seconds": 7.7,
+  "bertscore": 0.6484,
+  "quality_num_refs": 32,
+  "platform": "mps"
+}

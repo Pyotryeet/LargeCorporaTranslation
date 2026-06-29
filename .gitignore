@@ -80,28 +80,20 @@ dmypy.json
 *~
 .DS_Store
 
-# Benchmark run output (data files are large)
-output/
-data/output/
-
-# Model checkpoints (large, tracked separately)
+# Model checkpoints (large)
 data/model/
 /data/model/
 models/
-
-# Data files (large)
-*.jsonl.gz
-*.parquet
-*.bin
 *.safetensors
-*.model
 *.pt
 *.pth
 *.ckpt
 
-# Log files
-*.log
-logs/
+# Raw data files (large, regenerate-able)
+*.jsonl.gz
+*.model
+*.parquet   # pre-tokenized cache — 300MB+, regenerate with --pretokenize
+*.bin       # external sort run files — regenerate-able
 
 # Docker
 .docker/
@@ -112,11 +104,6 @@ logs/
 .LSOverride
 Icon
 ._*
-
-# Thumbnails
-._*
-
-# Files that might appear on network volumes
 Network Trash Folder
 Temporary Items
 .apdisk
@@ -127,3 +114,13 @@ docs/H200_SETUP.md
 # Claude Code
 .claude/settings.local.json
 .claude/worktrees/
+.claude/settings.local.json.tmp
+sync_to_h200.sh
+
+# Stale benchmark results (pre-v3.9 models)
+data/output/bm_DiffusionGemma*/
+data/output/bm_Gemma*QAT*/
+data/output/bm_SmolLM2*/
+data/output/bm_TranslateGemma_4B_04*/
+data/output/result_gemma_*.json
+data/output/result_smollm2.json

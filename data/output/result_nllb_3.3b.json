@@ -1,0 +1,17 @@
+{
+  "model": "NLLB-200-3.3B",
+  "model_path": "facebook/nllb-200-3.3B",
+  "backend_type": "encoder_decoder",
+  "mean_tps": 87.5,
+  "median_tps": 87.3,
+  "p95_tps": 89.5,
+  "mean_latency_ms": 5744.0,
+  "batches_completed": 21,
+  "total_tokens_translated": 10544,
+  "run_duration_seconds": 174.0,
+  "batch_size": 4,
+  "load_seconds": 10.0,
+  "bertscore": 0.682,
+  "quality_num_refs": 32,
+  "platform": "mps"
+}

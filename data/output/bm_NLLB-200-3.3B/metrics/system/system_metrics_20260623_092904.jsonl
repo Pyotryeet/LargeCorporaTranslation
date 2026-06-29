@@ -1,0 +1,9 @@
+{"timestamp": "2026-06-23T09:29:04.194Z", "elapsed_s": 0.001, "cpu_util_pct": 0.0, "ram_used_mib": 26400, "ram_total_mib": 49152, "disk_read_mbps": 0.0, "disk_write_mbps": 0.0, "swap_used_mib": 5197}
+{"timestamp": "2026-06-23T09:29:05.262Z", "elapsed_s": 1.07, "cpu_util_pct": 18.3, "ram_used_mib": 26727, "ram_total_mib": 49152, "disk_read_mbps": 113.01, "disk_write_mbps": 7.41, "swap_used_mib": 5197}
+{"timestamp": "2026-06-23T09:29:06.197Z", "elapsed_s": 2.005, "cpu_util_pct": 16.4, "ram_used_mib": 26141, "ram_total_mib": 49152, "disk_read_mbps": 2.28, "disk_write_mbps": 4.43, "swap_used_mib": 5197}
+{"timestamp": "2026-06-23T09:29:07.199Z", "elapsed_s": 3.006, "cpu_util_pct": 17.9, "ram_used_mib": 25084, "ram_total_mib": 49152, "disk_read_mbps": 3.27, "disk_write_mbps": 6.86, "swap_used_mib": 5197}
+{"timestamp": "2026-06-23T09:29:08.199Z", "elapsed_s": 4.006, "cpu_util_pct": 14.6, "ram_used_mib": 26905, "ram_total_mib": 49152, "disk_read_mbps": 0.63, "disk_write_mbps": 3.7, "swap_used_mib": 5197}
+{"timestamp": "2026-06-23T09:29:09.199Z", "elapsed_s": 5.006, "cpu_util_pct": 13.1, "ram_used_mib": 27360, "ram_total_mib": 49152, "disk_read_mbps": 1.55, "disk_write_mbps": 2.59, "swap_used_mib": 5189}
+{"timestamp": "2026-06-23T09:29:10.197Z", "elapsed_s": 6.005, "cpu_util_pct": 12.7, "ram_used_mib": 28012, "ram_total_mib": 49152, "disk_read_mbps": 0.45, "disk_write_mbps": 0.56, "swap_used_mib": 5189}
+{"timestamp": "2026-06-23T09:29:11.199Z", "elapsed_s": 7.006, "cpu_util_pct": 11.9, "ram_used_mib": 28164, "ram_total_mib": 49152, "disk_read_mbps": 0.12, "disk_write_mbps": 0.11, "swap_used_mib": 5189}
+{"timestamp": "2026-06-23T09:29:12.198Z", "elapsed_s": 8.005, "cpu_util_pct": 12.7, "ram_used_mib": 27382, "ram_total_mib": 49152, "disk_read_mbps": 1.13, "disk_write_mbps": 2.24, "swap_used_mib": 5189}

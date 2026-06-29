@@ -1,0 +1,962 @@
+[
+  {
+    "source_id": 4,
+    "source_text": "So, I wanted to pass along this great social idea to all of you that may not know about bead guilds in your area.",
+    "source_char_len": 113,
+    "models": {
+      "nllb_600m": {
+        "text": "Bu yüzden, bölgenizdeki muhteşem sosyal fikirleri bilmediğiniz herkese aktarmak istedim.",
+        "output_tokens": 24,
+        "latency_ms": 673.4
+      },
+      "nllb_1.3b": {
+        "text": "Bu yüzden, bölgenizdeki boncuk loncaları hakkında bilmediğiniz herkese bu harika sosyal fikri iletmek istedim.",
+        "output_tokens": 29,
+        "latency_ms": 1015.6
+      },
+      "nllb_3.3b": {
+        "text": "Bu yüzden, bu harika sosyal fikri bölgenizdeki boncuk loncalarını bilmeyen herkese aktarmak istedim.",
+        "output_tokens": 26,
+        "latency_ms": 2121.5
+      },
+      "madlad_3b": {
+        "text": "Bu yüzden, bu harika sosyal fikri, bölgenizdeki boncukçular derneklerini bilmeyen herkese aktarmak istedim.",
+        "output_tokens": 31,
+        "latency_ms": 2187.0
+      },
+      "translategemma_4b": {
+        "text": "Bu nedenle, bölgenizde boncuk loncalarının olup olmadığını bilmeyen herkese, bu harika sosyal fikri aktarmak istedim.",
+        "output_tokens": 31,
+        "latency_ms": 2704.2
+      }
+    }
+  },
+  {
+    "source_id": 26,
+    "source_text": "Ken Johnson, a spokesman for Tauzin, said the congressman does want to fund the do-not-call registry for one or two years.",
+    "source_char_len": 122,
+    "models": {
+      "nllb_600m": {
+        "text": "Tauzin'in sözcüsü Ken Johnson, kongre üyesinin bir ya da iki yıl için arama yapma rejistrisini finanse etmek istediğini söyledi.",
+        "output_tokens": 38,
+        "latency_ms": 845.9
+      },
+      "nllb_1.3b": {
+        "text": "Tauzin'in sözcüsü Ken Johnson, kongre üyesinin bir ya da iki yıl boyunca arama yapma kayıtlarını finanse etmek istediğini söyledi.",
+        "output_tokens": 36,
+        "latency_ms": 1153.3
+      },
+      "nllb_3.3b": {
+        "text": "Tauzin'in sözcüsü Ken Johnson, kongre üyesinin bir ya da iki yıl boyunca aramayı yasaklayan kayıt defterini finanse etmek istediğini söyledi.",
+        "output_tokens": 41,
+        "latency_ms": 2409.6
+      },
+      "madlad_3b": {
+        "text": "Tauzin'in sözcüsü Ken Johnson, kongre üyesinin bir ya da iki yıl boyunca aramak isteme kayıt sistemini finanse etmek istediğini söyledi.",
+        "output_tokens": 37,
+        "latency_ms": 1682.0
+      },
+      "translategemma_4b": {
+        "text": "Ken Johnson, Tauzin'in sözcüsü, kongre üyesinin, \"ara-açma\" kaydını bir veya iki yıl boyunca finanse etmek istediğini belirtti.",
+        "output_tokens": 39,
+        "latency_ms": 1940.0
+      }
+    }
+  },
+  {
+    "source_id": 13,
+    "source_text": "Dear Heavenly Father, give me 'sense' like Abigail had, and help me to avoid the foolishness and selfishness that Nabal displayed.",
+    "source_char_len": 130,
+    "models": {
+      "nllb_600m": {
+        "text": "Sevgili Gökteki Baba, Abigail gibi bana 'ahlak' ver ve Nabal'ın gösterdiği akılsızlık ve bencillikten kaçınmama yardım et.",
+        "output_tokens": 38,
+        "latency_ms": 860.7
+      },
+      "nllb_1.3b": {
+        "text": "Sevgili gökteki Babam, Abigail gibi bana 'akıl ver' ve Nabal'ın gösterdiği aptallık ve bencillikten kaçınmama yardım et.",
+        "output_tokens": 38,
+        "latency_ms": 1212.2
+      },
+      "nllb_3.3b": {
+        "text": "Sevgili Gökteki Babamız, Abigail gibi bana da 'akıl' ver ve Nabal'ın sergilediği akılsızlık ve bencillikten kaçınmama yardım et.",
+        "output_tokens": 42,
+        "latency_ms": 2681.3
+      },
+      "madlad_3b": {
+        "text": "Sevgili gökteki Baba, Abigail'ın sahip olduğu gibi bana da \"mantık\" ver ve Nabal'ın gösterdiği aptallık ve bencillikten kaçınmama yardım et.",
+        "output_tokens": 42,
+        "latency_ms": 1886.1
+      },
+      "translategemma_4b": {
+        "text": "Sevgili Tanrım, Abigail'in sahip olduğu \"anlam\"ı bana ver ve Nabal'ın sergilediği aptallık ve bencilliikten kaçınmama yardım et.",
+        "output_tokens": 42,
+        "latency_ms": 2158.3
+      }
+    }
+  },
+  {
+    "source_id": 19,
+    "source_text": "Monday, April 6, 2009\nThe groom may feel like a prop compared to his lovely bride, but he (and his groomsmen) has still got to dress the part.",
+    "source_char_len": 142,
+    "models": {
+      "nllb_600m": {
+        "text": "Pazartesi, 6 Nisan 2009\nDamat, güzel gelinle karşılaştırıldığında kendini bir prop gibi hissedebilir, ancak o (ve gelin adamları) hala rolü giymek zorundalar.",
+        "output_tokens": 47,
+        "latency_ms": 1322.3
+      },
+      "nllb_1.3b": {
+        "text": "Pazartesi, 6 Nisan 2009\nDamat, sevimli geliniyle karşılaştırıldığında bir alet gibi hissedebilir, ama o (ve damatları) hala rolü giymek zorunda.",
+        "output_tokens": 48,
+        "latency_ms": 1609.4
+      },
+      "nllb_3.3b": {
+        "text": "Pazartesi, 6 Nisan 2009\nDamat, sevgili geline kıyasla bir süs eşyası gibi hissedebilir, ama o (ve damatları) hala rolü giymek zorunda.",
+        "output_tokens": 49,
+        "latency_ms": 3064.4
+      },
+      "madlad_3b": {
+        "text": "Pazartesi, 6 Nisan 2009 Gelin, sevimli gelinine kıyasla kendisini bir eşya gibi hissedebilir, ama o (ve gelin adamları) hala rolünü giymek zorunda.",
+        "output_tokens": 50,
+        "latency_ms": 2310.6
+      },
+      "translategemma_4b": {
+        "text": "6 Nisan 2009, Pazartesi\nDamad, eşiyle karşılaştırıldığında sadece bir aksesuar gibi hissedebilir, ancak yine de uygun şekilde giyinmesi gerekiyor (ve arkadaşlarının da öyle).",
+        "output_tokens": 47,
+        "latency_ms": 2458.6
+      }
+    }
+  },
+  {
+    "source_id": 5,
+    "source_text": "We are looking for Customer Service Representatives (Full time) for our calling process who are looking for a company where they can learn and grow.",
+    "source_char_len": 148,
+    "models": {
+      "nllb_600m": {
+        "text": "Arama işimiz için öğrenme ve büyüyebilecekleri bir şirket arayan Müşteri Hizmetleri Temsilcileri (Tüm zamanlı) arıyoruz.",
+        "output_tokens": 38,
+        "latency_ms": 923.7
+      },
+      "nllb_1.3b": {
+        "text": "Müşteri Hizmetleri Temsilcileri (Tam zamanlı) arıyoruz. Öğrenebilecekleri ve büyüyebilecekleri bir şirket arıyorlar.",
+        "output_tokens": 36,
+        "latency_ms": 1208.1
+      },
+      "nllb_3.3b": {
+        "text": "Çağrı sürecimiz için Müşteri Hizmetleri Temsilcileri (Tam zamanlı) arıyoruz. Öğrenebilecekleri ve gelişebilecekleri bir şirket arıyorlar.",
+        "output_tokens": 43,
+        "latency_ms": 2461.7
+      },
+      "madlad_3b": {
+        "text": "Çağrı işlemlerimiz için öğrenip büyüyebilecekleri bir şirket arayan tam zamanlı Müşteri Hizmetleri Temsilcileri arıyoruz.",
+        "output_tokens": 33,
+        "latency_ms": 1600.5
+      },
+      "translategemma_4b": {
+        "text": "Çağrı süreçlerimizde görev alacak, öğrenme ve gelişme imkanı sunan bir şirket arayan Müşteri Hizmetleri Temsilcileri (Tam zamanlı) arıyoruz.",
+        "output_tokens": 43,
+        "latency_ms": 2176.4
+      }
+    }
+  },
+  {
+    "source_id": 15,
+    "source_text": "I learned that if you give introverts an assignment at a meeting (live tweeting, taking pics, helping at the registration table), it eases our anxiety.",
+    "source_char_len": 151,
+    "models": {
+      "nllb_600m": {
+        "text": "İntrovertlere bir toplantıda bir görev vermenin (canlı tweet, fotoğraf çekmek, kayıt masasında yardım etmek) kaygımızı hafifleteceğini öğrendim.",
+        "output_tokens": 41,
+        "latency_ms": 928.1
+      },
+      "nllb_1.3b": {
+        "text": "Bir toplantıda içe dönük insanlara bir görev verirseniz (direk tweet atmak, fotoğraf çekmek, kayıt masasında yardım etmek) endişelerimizi hafiflettiğini öğrendim.",
+        "output_tokens": 44,
+        "latency_ms": 1410.6
+      },
+      "nllb_3.3b": {
+        "text": "İçe dönüklere bir toplantıda bir görev verirseniz (canlı tweet atmak, fotoğraf çekmek, kayıt masasında yardım etmek) kaygımızı hafifleteceğini öğrendim.",
+        "output_tokens": 44,
+        "latency_ms": 2555.6
+      },
+      "madlad_3b": {
+        "text": "Öğrendim ki, eğer toplantıda içe dönüklere bir görev verirseniz (canlı tweet atmak, fotoğraf çekmek, kayıt masasında yardım etmek), bu endişemizi hafifletir.",
+        "output_tokens": 50,
+        "latency_ms": 2483.0
+      },
+      "translategemma_4b": {
+        "text": "Anketörlere toplantıda (canlı tweet atmak, fotoğraf çekmek, kayıt masasında yardım etmek gibi) görevler vermek, endişemizi azaltır.",
+        "output_tokens": 36,
+        "latency_ms": 1802.4
+      }
+    }
+  },
+  {
+    "source_id": 2,
+    "source_text": "This consortium has made possible the discovery that some diabetics die with a small residual islet function, and these tend to have fewer complications.",
+    "source_char_len": 153,
+    "models": {
+      "nllb_600m": {
+        "text": "Bu konsorsiyum, bazı diyabetiklerin küçük bir adalık işlev ile öldüğünü keşfetmelerini mümkün kıldı ve bunlar daha az komplikasyonlara sahip olma eğilimindedir.",
+        "output_tokens": 45,
+        "latency_ms": 1002.5
+      },
+      "nllb_1.3b": {
+        "text": "Bu konsorsiyum, bazı diyabetiklerin küçük bir geri kalan ada fonksiyonu ile öldüğünü keşfetmeyi mümkün kıldı ve bunlar daha az komplikasyona sahip olma eğilimindedir.",
+        "output_tokens": 46,
+        "latency_ms": 1440.2
+      },
+      "nllb_3.3b": {
+        "text": "Bu konsorsiyum, bazı diyabetlilerin küçük bir kalıntı ada fonksiyonu ile öldüklerini keşfetmeyi mümkün kıldı ve bunlar daha az komplikasyona sahip olma eğilimindedir.",
+        "output_tokens": 46,
+        "latency_ms": 2772.1
+      },
+      "madlad_3b": {
+        "text": "Bu konsorsiyum bazı diyabet hastalarının küçük bir kalıntı adacık fonksiyonuyla öldüklerini ve bu hastaların daha az komplikasyona sahip olduklarını keşfetmeyi mümkün kıldı.",
+        "output_tokens": 43,
+        "latency_ms": 2046.6
+      },
+      "translategemma_4b": {
+        "text": "Bu konsorsiyum, bazı diyabet hastalarının küçük bir residual pankreas fonksiyonu ile yaşayarak öldürdüklerini ve bu hastaların daha az komplikasyon yaşadıklarını ortaya çıkarmayı sağlamıştır.",
+        "output_tokens": 45,
+        "latency_ms": 2222.3
+      }
+    }
+  },
+  {
+    "source_id": 16,
+    "source_text": "It is great with a traditional ‘blackening’ spice on the grill and also takes very well to techniques such as beer-battered and sautéed for tacos as well.",
+    "source_char_len": 154,
+    "models": {
+      "nllb_600m": {
+        "text": "Grill'de geleneksel bir blackening baharatı ile harika ve tacos için de bira battered ve sautéed gibi tekniklere çok iyi uyar.",
+        "output_tokens": 39,
+        "latency_ms": 952.7
+      },
+      "nllb_1.3b": {
+        "text": "Grille geleneksel bir  karalama  baharatı ile harika ve ayrıca bira ile dövülmüş ve taco için sautéed gibi teknikleri de çok iyi alır.",
+        "output_tokens": 40,
+        "latency_ms": 1282.1
+      },
+      "nllb_3.3b": {
+        "text": "Grilde geleneksel blackening baharatı ile harika ve aynı zamanda tacolar için bira ile dövülmüş ve soslanmış gibi tekniklere de çok iyi uyum sağlar.",
+        "output_tokens": 41,
+        "latency_ms": 2469.5
+      },
+      "madlad_3b": {
+        "text": "Grilde geleneksel bir \"karalama\" baharatı ile harika bir şey ve aynı zamanda bira hamurları ve tacos için soyumuş gibi tekniklere de çok iyi uyum sağlar.",
+        "output_tokens": 44,
+        "latency_ms": 1983.7
+      },
+      "translategemma_4b": {
+        "text": "Grilde geleneksel \"kararmış baharat\" ile harika lezzeti vardır ve ayrıca tacos için kızartılmış ve kavrulmuş olarak da çok iyi sonuç verir.",
+        "output_tokens": 38,
+        "latency_ms": 1905.7
+      }
+    }
+  },
+  {
+    "source_id": 0,
+    "source_text": "ALSO READ: Home Bargains Bracknell: New store opening at Peel Center\nThere is also a front garden where you can plant flowerbeds or place pots on the patio.",
+    "source_char_len": 156,
+    "models": {
+      "nllb_600m": {
+        "text": "Ayrıca okuyun: Başlangıç pazarlıklar Bracknell: Peel Center'da yeni bir mağaza açılıyor\nÖn bahçe de var, orada çiçek yatakları ekmek ya da bahçede küfler yerleştirebilirsiniz.",
+        "output_tokens": 58,
+        "latency_ms": 1296.6
+      },
+      "nllb_1.3b": {
+        "text": "Ayrıca okuyun: Bracknell: Peel Center'da yeni bir mağaza açıldı\nAyrıca ön bahçede çiçek bahçeleri dikmek veya avluya tencereler yerleştirmek için bir bahçe var.",
+        "output_tokens": 54,
+        "latency_ms": 1711.9
+      },
+      "nllb_3.3b": {
+        "text": "Home Bargains Bracknell: Peel Center'da yeni bir mağaza açılıyor\nÖn bahçede de çiçek döşekleri dikilebilir ya da patiyoya çömlekler yerleştirilebilir.",
+        "output_tokens": 55,
+        "latency_ms": 3425.6
+      },
+      "madlad_3b": {
+        "text": "Ayrıca oku: Home Bargains Bracknell: Peel Center'da yeni mağaza açılış Ayrıca çiçek yatakları ektiğiniz veya terasta poşetler koyduğunuz bir ön bahçe de var.",
+        "output_tokens": 50,
+        "latency_ms": 2223.2
+      },
+      "translategemma_4b": {
+        "text": "Ayrıca, çiçek yataklar dikebileceğiniz veya verandada saksılar yerleştirebileceğiniz ön bahçe de bulunmaktadır.",
+        "output_tokens": 31,
+        "latency_ms": 1586.2
+      }
+    }
+  },
+  {
+    "source_id": 11,
+    "source_text": "Econbrowser estimates that the deal means that GDP will be 0.6-1% (depending on the sequester talks) higher than it would have been if the cliff had taken full effect.",
+    "source_char_len": 167,
+    "models": {
+      "nllb_600m": {
+        "text": "Econbrowser, anlaşmanın, GSYİH'nin %0.6-1'ün (sequester görüşmelerine bağlı olarak) tamamen yürürlüğe girseydi olduğundan daha yüksek olacağı anlamına geldiğini tahmin ediyor.",
+        "output_tokens": 50,
+        "latency_ms": 1141.3
+      },
+      "nllb_1.3b": {
+        "text": "Econbrowser, anlaşmanın GSYİH'nın, uçurumun tam olarak etkisini gösterseydi olabileceğinden %0.6-1 (sequester görüşmelerine bağlı olarak) daha yüksek olacağı anlamına geldiğini tahmin ediyor.",
+        "output_tokens": 53,
+        "latency_ms": 1714.3
+      },
+      "nllb_3.3b": {
+        "text": "Econbrowser, anlaşmanın, GSYİH'nın, uçurumun tam olarak etkisini gösterseydi olacağından% 0.6-1 daha yüksek olacağı anlamına geldiğini tahmin ediyor (sequester görüşmelerine bağlı olarak).",
+        "output_tokens": 52,
+        "latency_ms": 3543.0
+      },
+      "madlad_3b": {
+        "text": "Econbrowser, anlaşmanın GSYİH'nın (sequester müzakerelerine bağlı olarak) uçurumun tam olarak etki altına girmiş olsaydı daha yüksek olacağı anlamına geldiğini tahmin ediyor.",
+        "output_tokens": 50,
+        "latency_ms": 2172.2
+      },
+      "translategemma_4b": {
+        "text": "Econbrowser, bu anlaşmanın, \"cliff\"in tam etkisini göstermesi durumunda GDP'nin 0,6-1% daha yüksek olacağını tahmin ediyor.",
+        "output_tokens": 38,
+        "latency_ms": 1950.2
+      }
+    }
+  },
+  {
+    "source_id": 1,
+    "source_text": "But that mashed pea mayhem doesn’t have to survive the next wash. Ivory Snow Stage 2: Active Baby laundry detergent is specially designed for your crawling, active baby.",
+    "source_char_len": 169,
+    "models": {
+      "nllb_600m": {
+        "text": "İvory Snow Stage 2: Aktif Bebek Çamaşır Çamaşır deterjanı, sürünen, aktif bebeğiniz için özel olarak tasarlanmıştır.",
+        "output_tokens": 37,
+        "latency_ms": 824.6
+      },
+      "nllb_1.3b": {
+        "text": "Fildişi Kar Aşaması 2: Aktif Bebek çamaşır deterjanı özellikle sürünen, aktif bebeğiniz için tasarlanmıştır.",
+        "output_tokens": 33,
+        "latency_ms": 1081.7
+      },
+      "nllb_3.3b": {
+        "text": "Ivory Snow Stage 2: Active Baby çamaşır deterjanı özellikle sürünen, aktif bebeğiniz için tasarlanmıştır.",
+        "output_tokens": 30,
+        "latency_ms": 2179.4
+      },
+      "madlad_3b": {
+        "text": "Ama bu bezelye püresi karışımının bir sonraki yıkama sırasında hayatta kalması gerekmiyor. Ivory Snow Stage 2: Active Baby çamaşır deterjanı özellikle aktif, sürünen bebeğiniz için tasarlanmıştır.",
+        "output_tokens": 56,
+        "latency_ms": 3022.7
+      },
+      "translategemma_4b": {
+        "text": "Ama bu haşlanmış bez çorbası karışıklığı, bir sonraki yıkamadan kurtulmak zorunda değil. Ivory Snow 2. Aşama: Aktif Bebek çamaşır deterjanı, hareketli ve aktif bebeğiniz için özel olarak tasarlanmıştır.",
+        "output_tokens": 61,
+        "latency_ms": 3022.7
+      }
+    }
+  },
+  {
+    "source_id": 20,
+    "source_text": "All is well with this \"self-chummed\" construct because the forces that would normally seek to debunk this rationale have a vested interest in marketing it to the Black masses.",
+    "source_char_len": 175,
+    "models": {
+      "nllb_600m": {
+        "text": "Bu \"kendini beğenmiş\" yapı ile her şey yolunda çünkü normalde bu mantığı ortaya çıkarmaya çalışan güçlerin siyah kitlelere pazarlama konusunda özel bir ilgisi var.",
+        "output_tokens": 41,
+        "latency_ms": 956.7
+      },
+      "nllb_1.3b": {
+        "text": "Bu \"kendini beğenmiş\" yapı ile her şey yolunda çünkü normalde bu mantığı çürütmeye çalışan güçlerin siyah kitlelere pazarlama yapma konusunda özel bir çıkarları var.",
+        "output_tokens": 44,
+        "latency_ms": 1481.6
+      },
+      "nllb_3.3b": {
+        "text": "Bu \"kendini kandırmış\" yapıda her şey yolunda çünkü normalde bu mantığı çürütmeye çalışan güçler, onu Siyah kitlelere pazarlamakla ilgileniyorlar.",
+        "output_tokens": 43,
+        "latency_ms": 3148.6
+      },
+      "madlad_3b": {
+        "text": "Bu \"kendini kandıran\" yapı ile her şey yolunda çünkü normalde bu mantıkı reddetmek isteyen güçler, bunu Siyahi kitlelere pazarlamada bir çıkara sahiptir.",
+        "output_tokens": 45,
+        "latency_ms": 2498.6
+      },
+      "translategemma_4b": {
+        "text": "Bu \"kendine yönelik\" yapının her şeyi yolunda olduğu, çünkü bu mantığı çürütmeye çalışan güçler, bunun siyah topluma pazarlanmasından doğrudan fayda sağlarlar.",
+        "output_tokens": 42,
+        "latency_ms": 2132.0
+      }
+    }
+  },
+  {
+    "source_id": 28,
+    "source_text": "If you own this domain, log in to the Site Administrator interface, then go to the Quick-start guide in the online Help for more information about publishing Web pages to your site.",
+    "source_char_len": 181,
+    "models": {
+      "nllb_600m": {
+        "text": "Bu alanın sahibiyseniz, Site Yöneticisi arayüzüne giriş yapın ve sitenize web sayfalarını yayınlamak hakkında daha fazla bilgi için çevrimiçi Yardım'daki Hızlı Başlatma kılavuzuna gidin.",
+        "output_tokens": 56,
+        "latency_ms": 1193.2
+      },
+      "nllb_1.3b": {
+        "text": "Bu etki alanına sahipseniz, Site Yöneticisi arayüzüne giriş yapın ve sitenize Web sayfaları yayınlama hakkında daha fazla bilgi için çevrimiçi Yardım'daki Hızlı Başlatma kılavuzuna gidin.",
+        "output_tokens": 57,
+        "latency_ms": 1908.4
+      },
+      "nllb_3.3b": {
+        "text": "Bu etki alanına sahipseniz, Site Yöneticisi arayüzüne giriş yapın, daha sonra sitenize Web sayfaları yayınlamak hakkında daha fazla bilgi için çevrimiçi Yardımdaki Hızlı Başlatma kılavuzuna gidin.",
+        "output_tokens": 58,
+        "latency_ms": 4116.2
+      },
+      "madlad_3b": {
+        "text": "Eğer bu alan adının sahibiyseniz, Site Yöneticisi arayüzüne giriş yapın, sonra sitenize Web sayfaları yayınlama hakkında daha fazla bilgi için çevrimiçi Yardım' daki Hızlı Başlama kılavuzuna gidin.",
+        "output_tokens": 59,
+        "latency_ms": 3339.9
+      },
+      "translategemma_4b": {
+        "text": "Eğer bu alan adını kullanıyorsanız, Site Yöneticisi arayüzüne giriş yapın, ardından web sayfalarınızı sitenize yayınlamakla ilgili daha fazla bilgi için çevrimiçi Yardım bölümündeki \"Hızlı Başlangıç\" kılavusuna gidin.",
+        "output_tokens": 61,
+        "latency_ms": 3031.3
+      }
+    }
+  },
+  {
+    "source_id": 17,
+    "source_text": "Wilson was among the first golfers to tee it up at the Crowne Plaza Invitational yesterday and made the most of it with a 4-under 66 to move up 24 spots to a tie for 28th at 3-under 207.",
+    "source_char_len": 186,
+    "models": {
+      "nllb_600m": {
+        "text": "Wilson, dün Crowne Plaza davetli maçında ilk golculardan biriydi ve bunu en iyi şekilde 4-66'la 24 noktaya yükseltti ve 3--207'ye eşleşerek 28. oldu.",
+        "output_tokens": 47,
+        "latency_ms": 1189.7
+      },
+      "nllb_1.3b": {
+        "text": "Wilson dün Crowne Plaza Invitational'da ilk golfçülerden biriydi ve 4'ün altındaki 66'yla en iyisini yaptı. 24 pozisyon yükseldi ve 3'ün altındaki 207'yle 28. sırada yer aldı.",
+        "output_tokens": 53,
+        "latency_ms": 1666.9
+      },
+      "nllb_3.3b": {
+        "text": "Wilson dün Crowne Plaza Invitational'da golfe giren ilk golfçilerden biriydi ve 4 alt 66 ile 24 puan yükselerek 28'inci sırada 3 alt 207'ye ulaştı.",
+        "output_tokens": 46,
+        "latency_ms": 2795.5
+      },
+      "madlad_3b": {
+        "text": "Wilson dün Crowne Plaza Invitational'da ilk 16'ya giren ilk golfçülerden biriydi ve 66'nın 4'ü altında bir dereceyle 24 sıra yükselerek 207'nin 3'ü altına düşerek 18. sırada yer aldı.",
+        "output_tokens": 68,
+        "latency_ms": 3877.8
+      },
+      "translategemma_4b": {
+        "text": "Wilson, dün Crowne Plaza Invitational'da ilk tee'ye çıkan golfçülerden biriydi ve 4 under 66 ile harika bir performans sergileyerek 24 sıra yükselerek 3 under 207 ile 28. sırada bir puana denk geldi.",
+        "output_tokens": 63,
+        "latency_ms": 3141.6
+      }
+    }
+  },
+  {
+    "source_id": 3,
+    "source_text": "A social organism of number indicating how many volcanic fast shipping cialis soft pile up brush copolymer was synthesized that would otherwise not be seen without the of the pain and particles.",
+    "source_char_len": 194,
+    "models": {
+      "nllb_600m": {
+        "text": "Bir toplumsal organizma sayısı, ne kadar çok volkanik hızlı nakliye cialis yumuşak yığın fırça copolymer sentez edildiğini gösterir, aksi takdirde ağrı ve parçacıklar olmadan görülemezdi.",
+        "output_tokens": 55,
+        "latency_ms": 1240.3
+      },
+      "nllb_1.3b": {
+        "text": "Bir toplumsal organizma sayısını göstermek için ne kadar volkanik hızlı nakliye cialis yumuşak yığılmış fırça kopolymeri sentezlenmiştir, aksi takdirde acı ve parçacıklar olmadan görülemez.",
+        "output_tokens": 55,
+        "latency_ms": 1740.9
+      },
+      "nllb_3.3b": {
+        "text": "Bir toplumsal organizma sayısı kaç volkanik hızlı nakliye cialis yumuşak yığın yukarı fırça copolymer sintez edildi ki aksi takdirde ağrı ve parçacıklar olmadan görülemez.",
+        "output_tokens": 50,
+        "latency_ms": 3177.6
+      },
+      "madlad_3b": {
+        "text": "Bir sosyal organizma sayısı, kaç tane volkanik hızlı kargo cialis yumuşak yığın fırça kopolimerden sentezlendiğini gösterir. Aksi takdirde acı ve parçacıklar olmadan görülmezdi.",
+        "output_tokens": 52,
+        "latency_ms": 2681.8
+      },
+      "translategemma_4b": {
+        "text": "Bir sosyal organizma, sayı ifade eden, bu sayede başka bir şekilde görülmeyen, ancak ağrının ve parçacıkların etkisiyle sentezlenen volkanik hızlı gönderim, Cialis soft, polimer karışımı.",
+        "output_tokens": 49,
+        "latency_ms": 2537.6
+      }
+    }
+  },
+  {
+    "source_id": 22,
+    "source_text": "“He played a very, very critical role in formulating a defense for the region not to downsize or realign the sub base,” said Mark Oefinger, chairman of the SeCTer board of directors and Groton’s town manager.",
+    "source_char_len": 208,
+    "models": {
+      "nllb_600m": {
+        "text": "SeCTer yönetim kurulunun başkanı ve Groton'un kasaba yöneticisi Mark Oefinger, bölgenin alt üssü küçültmemesi veya yeniden düzenlemesi için bir savunma formu oluşturmasında çok, çok kritik bir rol oynadı.",
+        "output_tokens": 61,
+        "latency_ms": 1326.6
+      },
+      "nllb_1.3b": {
+        "text": "SeCTer yönetim kurulu başkanı ve Groton'un belediye yöneticisi Mark Oefinger, bölgenin alt üssü küçültmemesi veya yeniden hizalamaması için bir savunma oluşturmada çok, çok kritik bir rol oynadı.",
+        "output_tokens": 60,
+        "latency_ms": 1967.0
+      },
+      "nllb_3.3b": {
+        "text": "SeCTer yönetim kurulu başkanı ve Groton'un şehir müdürü Mark Oefinger, \"O, bölgenin alt üssü küçültmemesi veya yeniden düzenlememesi için bir savunma oluşturmada çok, çok kritik bir rol oynadı\" dedi.",
+        "output_tokens": 63,
+        "latency_ms": 4562.2
+      },
+      "madlad_3b": {
+        "text": "SeCTer yönetim kurulu başkanı ve Groton Belediye Başkanı Mark Oefinger, \"Bölge için savunma oluşturmada çok ama çok kritik bir rol oynadı. Alt üssün küçültülmemesi veya yeniden düzenlemesi için.\" dedi.",
+        "output_tokens": 57,
+        "latency_ms": 3127.2
+      },
+      "translategemma_4b": {
+        "text": "\"Bölgenin, sub tabanının küçültülmemesi veya yeniden yapılandırılmaması için bir savunma oluşturmada çok önemli bir rol oynadı,\" dedi SeCTer yönetim kurulu başkanı ve Groton'un belediye başkanı Mark Oefinger.",
+        "output_tokens": 58,
+        "latency_ms": 2923.9
+      }
+    }
+  },
+  {
+    "source_id": 27,
+    "source_text": "To set credentials for filers in DFM, click on Edit\nelse, from cli, run\n# dfm host add <storage system ip>\n2012-07-11 12:00 AM\nThe discovery of storage systems on the network depends on the prefix length too.",
+    "source_char_len": 208,
+    "models": {
+      "nllb_600m": {
+        "text": "DFM'deki dosyalar için kimlik bilgileri ayarlamak için Düzenleme'ye tıklayın\nYoksa, cli, run'dan\n# dfm host ekle < depolama sistemi ip>\n2012-07-11 12:00 AM\nAğdaki depolama sistemlerinin keşfi, önbellek uzunluğuna da bağlıdır.",
+        "output_tokens": 83,
+        "latency_ms": 2372.3
+      },
+      "nllb_1.3b": {
+        "text": "DFM'de dosyalar için kimlik bilgileri ayarlamak için Düzenleme'ye tıklayın\nelse, from cli, run (başka türlü, cli'den, koş)\n# dfm host ekle <storage system ip>\n2012-07-11 12:00 AM\nAğdaki depolama sistemlerinin keşfi de önek uzunluğuna bağlıdır.",
+        "output_tokens": 91,
+        "latency_ms": 3032.9
+      },
+      "nllb_3.3b": {
+        "text": "DFM'de dosyalayıcılar için kimlik bilgilerini ayarlamak için Düzenle'yi tıklayın\nelse, cli, run'dan\n# dfm host add <depolama sistemi ip>\n2012-07-11 12:00 AM\nAğdaki depolama sistemlerinin keşfi de önek uzunluğuna bağlıdır.",
+        "output_tokens": 83,
+        "latency_ms": 5291.0
+      },
+      "madlad_3b": {
+        "text": "DFM'de dosyaları gönderenler için kimlik bilgilerini ayarlamak için Edit else'e tıklayın, cli'den, yürütün # dfm host add <storage system ip> 2012-07-11 12:00 AM Ağın üzerindeki depolama sistemlerinin keşfi önek uzunluğuna da bağlıdır.",
+        "output_tokens": 87,
+        "latency_ms": 5063.3
+      },
+      "translategemma_4b": {
+        "text": "DFM'de dosyalayıcılar için kimlik bilgilerini ayarlamak için \"Düzenle\"ye tıklayın. Aksi takdirde, komut satırından şu komutu çalıştırın:\n# dfm host add <depolama sistemi IP adresi>\n11 Temmuz 2012 00:00\nAğdaki depolama sistemlerinin bulunması, ön ek uzunluğuna da bağlıdır.",
+        "output_tokens": 96,
+        "latency_ms": 4871.6
+      }
+    }
+  },
+  {
+    "source_id": 9,
+    "source_text": "They manner in which they arbitrarily play around with these peices of history is sickening.Visit my blog at www.riveroffun.blospot.com\nIs this the same one where Popeye literally knocks Bluto across the globe?",
+    "source_char_len": 210,
+    "models": {
+      "nllb_600m": {
+        "text": "Tarihin bu parçalarıyla kendiliğinden oynama şekli iğrenç . Blogumu www.riveroffun.blospot.com adresinde ziyaret edin .\nPopeye'nin Bluto'yu dünya çapında vurduğu bu mu?",
+        "output_tokens": 58,
+        "latency_ms": 1396.5
+      },
+      "nllb_1.3b": {
+        "text": "Tarihin bu parçalarıyla keyfi bir şekilde oynamaları iğrenç.Blogumu www.riveroffun.blospot.com adresinde ziyaret edin.\nPopeye'nin Bluto'yu dünya çapında vurduğu filmle aynı mı?",
+        "output_tokens": 61,
+        "latency_ms": 2134.8
+      },
+      "nllb_3.3b": {
+        "text": "Tarihin bu parçalarıyla keyfi olarak oynamaları iğrenç. www.riveroffun.blospot.com adresindeki blogumu ziyaret edin.\nBu Popeye'nin Bluto'yu küre çapında yere serdiği filmle aynı mı?",
+        "output_tokens": 62,
+        "latency_ms": 3698.0
+      },
+      "madlad_3b": {
+        "text": "Tarihin bu parçalarıyla oynamalarının şekli iğrenç. www.riveroffun.blospot.com adresindeki blogumu ziyaret edin. Bu, Popeye'nin Bluto'yu gerçekten dünya çapında dövdüğü blog mu?",
+        "output_tokens": 56,
+        "latency_ms": 3147.8
+      },
+      "translategemma_4b": {
+        "text": "Bu tarihi eserleri keyfi bir şekilde manipüle etme biçimi rahatsız edici. Bloguma www.riveroffun.blospot.com adresinden göz atın.\nBu, Popeye'nin aslında Bluto'yu dünyadaki her yere vurduğu aynı blog mu?",
+        "output_tokens": 61,
+        "latency_ms": 3092.9
+      }
+    }
+  },
+  {
+    "source_id": 7,
+    "source_text": "Embraced in this view, which has the financial industry, has a handful of employees, follow the procedures in signing foreclosure-related affidavits, but the facts underlying the affidavits are demonstrably accurate.",
+    "source_char_len": 216,
+    "models": {
+      "nllb_600m": {
+        "text": "Finans sektörünün bu görüşünü benimseyen, bir avuç çalışanı olan, soyutlama ile ilgili yemin ifadeleri imzalama prosedürlerini izler, ancak yemin ifadelerin altında bulunan gerçekler kanıtlanmış olarak doğru.",
+        "output_tokens": 54,
+        "latency_ms": 1176.7
+      },
+      "nllb_1.3b": {
+        "text": "Bu bakış açısını benimseyen finans sektörü, bir avuç çalışanı var, tecavüzle ilgili yeminli ifadeleri imzalamak için prosedürleri takip ediyor, ama yeminli ifadelerin altında yatan gerçekler kanıtlanabilir derecede doğrudur.",
+        "output_tokens": 60,
+        "latency_ms": 1939.9
+      },
+      "nllb_3.3b": {
+        "text": "Bu görüşü benimseyen finans endüstrisi, bir avuç çalışanı var, kapatma ile ilgili yeminli ifadeleri imzalama prosedürlerini takip ediyorlar, ancak yeminli ifadelerin altında yatan gerçekler kanıtlanmış olarak doğru.",
+        "output_tokens": 56,
+        "latency_ms": 3373.8
+      },
+      "madlad_3b": {
+        "text": "Bu görüşe sahip olan finans sektörü, bir avuç çalışanı var, ipotek ile ilgili yeminli ifadeleri imzalamada prosedürleri izliyor, ama yeminlerin altında yatan gerçekler kanıtlanarak doğru.",
+        "output_tokens": 51,
+        "latency_ms": 2767.2
+      },
+      "translategemma_4b": {
+        "text": "Bu bakış açısıyla, finans sektöründe çalışan, birkaç kişiden oluşan bir ekibin, ipoteğe dayalı beyanlarla ilgili prosedürleri takip etmesi, ancak bu beyanların altında yatan gerçeklerin açıkça doğru olması.",
+        "output_tokens": 51,
+        "latency_ms": 2502.7
+      }
+    }
+  },
+  {
+    "source_id": 14,
+    "source_text": "That dude Steven might be the most honest person I've ever spoken to - If I were local I'd find reasons to take my car there\nWe went on a busy Saturday with two cars, short notice that we needed oil changes and tire rotations.",
+    "source_char_len": 226,
+    "models": {
+      "nllb_600m": {
+        "text": "Bu adam Steven şimdiye kadar konuştuğum en dürüst insan olabilir.\nÇok yoğun bir Cumartesi günü iki arabayla yola çıktık, kısa bir süre sonra yağ değişimi ve lastik dönüşümleri gerektiği farkına vardık.",
+        "output_tokens": 55,
+        "latency_ms": 1541.3
+      },
+      "nllb_1.3b": {
+        "text": "Şu Steven denen herif, şimdiye kadar konuştuğum en dürüst insan olabilir.\nÇok yoğun bir Cumartesi günü iki araba ile yola çıktık, kısa sürede yağ değiştirmemiz ve lastik değiştirmemiz gerekti.",
+        "output_tokens": 50,
+        "latency_ms": 1727.1
+      },
+      "nllb_3.3b": {
+        "text": "Steven, belki de bugüne kadar konuştuğum en dürüst insan.\nİki arabayla meşgul bir cumartesi günü yola çıktık. Yağ değişikliği ve lastik değişikliği yapmamız gerektiği için kısa bir süre önce haber verdik.",
+        "output_tokens": 58,
+        "latency_ms": 3580.9
+      },
+      "madlad_3b": {
+        "text": "O adam Steven belki de konuştuğum en dürüst insandır. Eğer yerel olsaydım arabamı oraya götürmek için bir neden bulurdum. Zorlu bir Cumartesi günü iki arabayla gittik, yağ değişimi ve lastik değişmesi gerektiğini kısa bir süre önce duyduk.",
+        "output_tokens": 73,
+        "latency_ms": 3856.6
+      },
+      "translategemma_4b": {
+        "text": "O adam Steven, hiç tanımadığım en dürüst insanlardan biri olabilir - Eğer ben de o bölgede yaşasaydım, arabamı oraya götürmek için sebepler bulurdum.\n\nYoğun bir Cumartesi günü, iki arayla gittik. Motor yağı ve lastik değişimi için kısa bir sürede haber verdik.",
+        "output_tokens": 75,
+        "latency_ms": 3867.6
+      }
+    }
+  },
+  {
+    "source_id": 6,
+    "source_text": "New and improved, the G. Loomis GLX Cranking Series Casting Rods still deliver the same incredible lightweight characteristics and sensitivity GLX is known for, as well as, the ideal actions and tapers for a variety of cranking applications.",
+    "source_char_len": 241,
+    "models": {
+      "nllb_600m": {
+        "text": "Yeni ve geliştirilmiş olan G. Loomis GLX Cranking Serisi Casting Rods hala aynı inanılmaz hafif özellikleri ve hassasiyetlerini sunar. GLX, çeşitli cranking uygulamaları için ideal hareketler ve kaplamalar için bilinir.",
+        "output_tokens": 61,
+        "latency_ms": 1454.4
+      },
+      "nllb_1.3b": {
+        "text": "Yeni ve iyileştirilmiş olan G. Loomis GLX Cranking Serisi döküm çubukları hala aynı inanılmaz hafif ağırlık özelliklerini ve hassasiyetini sunar.",
+        "output_tokens": 44,
+        "latency_ms": 2182.3
+      },
+      "nllb_3.3b": {
+        "text": "Yeni ve geliştirilmiş olan G. Loomis GLX Cranking Series Casting Rods, aynı inanılmaz hafif özellikleri ve duyarlılığı GLX'in yanı sıra, çeşitli cranking uygulamaları için ideal eylemler ve tapers sunar.",
+        "output_tokens": 59,
+        "latency_ms": 3450.0
+      },
+      "madlad_3b": {
+        "text": "Yeni ve geliştirilmiş, G. Loomis GLX Cranking Serisi Çelik Soketleri hala GLX'in bilinen aynı inanılmaz hafif özellikleri ve hassasiyetini, çeşitli cranking uygulamaları için ideal eylemleri ve taperleri sağlar.",
+        "output_tokens": 60,
+        "latency_ms": 3347.5
+      },
+      "translategemma_4b": {
+        "text": "Yeni ve geliştirilmiş olan G. Loomis GLX Cranking Serisi Casting Rod'lar, GLX'nin bilinen inanılmaz hafiflik ve hassasiyet özelliklerini ve aynı zamanda, çeşitli crank uygulamaları için ideal eylemleri ve eğimleri korumaktadır.",
+        "output_tokens": 57,
+        "latency_ms": 2911.7
+      }
+    }
+  },
+  {
+    "source_id": 25,
+    "source_text": "The Tolkien\nSarcasm Page, one of the oldest bastions of Tolkien humor on the Web,\nis here to help Middle-earth historians everywhere take a\nbreak from those heated arguments about Glorfindel's bloodline and\nwhether or not Thingol was a wise King.",
+    "source_char_len": 246,
+    "models": {
+      "nllb_600m": {
+        "text": "Tolkien\nSarkasm Page, İnternet'teki Tolkien'in en eski mizah bastionlarından biri,\nOrtadoğu tarihçilerine yardım etmek için buradayız.\nGlorfindel'in soyundan gelen bu tartışmayı bırakın.\nThingol bilge bir kral olup olmadığını.",
+        "output_tokens": 75,
+        "latency_ms": 2193.7
+      },
+      "nllb_1.3b": {
+        "text": "Tolkien\nİnternetteki Tolkien mizahının en eski kalelerinden biri olan Sarkasm Sayfası,\nOrtadoğu tarihçilerine yardım etmek için burada.\nGlorfindel'in soy hattı ve\nThingol'un bilge bir kral olup olmadığı.",
+        "output_tokens": 71,
+        "latency_ms": 2701.4
+      },
+      "nllb_3.3b": {
+        "text": "Tolkien\nSarkasm Sayfası, İnternet'teki en eski Tolkien mizah kalelerinden biri.\nOrtadoğu tarihçilerinin her yerde bir araştırma yapmalarına yardımcı olmak için buradayız.\nGlorfindel'in soyundan gelen kızgın tartışmalardan kurtulmak için...\nThingol'un bilge bir kral olup olmadığı.",
+        "output_tokens": 87,
+        "latency_ms": 5201.0
+      },
+      "madlad_3b": {
+        "text": "Tolkien'in mizahının en eski kalelerinden biri olan Tolkien İzlenimcilik Sayfası, Orta Dünya tarihçilerine Glorfindel'in soyundan olup olmadığı ve Thingol'un bilge bir kral olup olmadığı hakkındaki ateşli tartışmalardan bir süreliğine vazgeçmelerine yardımcı olmak için burada.",
+        "output_tokens": 76,
+        "latency_ms": 4229.4
+      },
+      "translategemma_4b": {
+        "text": "The Tolkien\nSarcasm Page, Tolkien'un internet üzerindeki en eski mizah köşelerinden biri,\nMiddle-earth tarihçilerinin, Glorfindel'in soyu ve Thingol'un bilge bir kral olup olmadığı gibi tartışmalardan uzaklaşmalarına yardımcı olmak için burada.",
+        "output_tokens": 62,
+        "latency_ms": 3185.3
+      }
+    }
+  },
+  {
+    "source_id": 21,
+    "source_text": "On the remote chance he’s reading this, I’d just like to say to him – “Nice one Centurion !”\nAnyway – here it is – Axiom – 8 golden rules to apply to whatever bloated or crazy methodolgy you’re tied to :-\nRULE 1 – Do what works\nPragmatism is the watchword here.",
+    "source_char_len": 261,
+    "models": {
+      "nllb_600m": {
+        "text": "Bunu okuyor olması ihtimaliyle ona güzel bir yüzbaşı demeliydim.\nHer neyse, işte burada, Axiom'da, hangi şişmiş ya da çılgın metodolojiye bağlandığınız için 8 altın kural uygulanıyor.\nKUTSAL KİTAP 1  Çalışanları yapın\nPragmatizm burada ana kelime.",
+        "output_tokens": 89,
+        "latency_ms": 2117.4
+      },
+      "nllb_1.3b": {
+        "text": "Bunu okuyor olması ihtimaliyle, ona şunu söylemek istiyorum: İyi bir yüzbaşı!\nHer neyse  işte bu  Aksyom  8 altın kural her ne kadar şişmiş ya da çılgın bir metodolojiye bağlıysan da uygulanabilir :-\nKural 1  İşe yarayan şeyi yap\nPragmatizm burada anahtar kelimedir.",
+        "output_tokens": 91,
+        "latency_ms": 2942.2
+      },
+      "nllb_3.3b": {
+        "text": "Eğer bu mektubu okuyorsa, ona şunu söylemek istiyorum:\nHer neyse  İşte  Axiom  8 altın kural, bağlı olduğunuz şişirilmiş veya çılgın metodolojiye uygulanabilir :-\nKURAL 1  İşe yarayan şeyi yap\nPragmatizm buradaki sloganımız.",
+        "output_tokens": 82,
+        "latency_ms": 4801.8
+      },
+      "madlad_3b": {
+        "text": "Bunu okuduğunda, ona şunu söylemek istiyorum – “İyi bir Centurion!” Her neyse – işte – Axiom – bağlı olduğunuz her türlü şişkin veya çılgın yönteme uygulayabileceğiniz 8 altın kural :- KURAL 1 – Çalışan şeyi yap Pragmatizm burada anahtar kelimedir.",
+        "output_tokens": 81,
+        "latency_ms": 4431.5
+      },
+      "translategemma_4b": {
+        "text": "Eğer bu metni okuyorsa, sadece ona şunu söylemek istiyorum: \"Harika, Centurion!\"\nNe olursa olsun – işte – Axiom: Herhangi bir karmaşık veya tuhaf metodolojiye uygulayabileceğiniz 8 temel kural:\nKURAL 1 – Çalışan şeyi yap\nBurada pragmatizm ön planda.",
+        "output_tokens": 75,
+        "latency_ms": 3815.8
+      }
+    }
+  },
+  {
+    "source_id": 8,
+    "source_text": "Increasing patient satisfaction strengthens their business, and any dollars they save stay in house)\nThose of us who contract with vendors and operate provider payment mechanisms really ought to get ourselves in gear to remove the barriers to widespread adoption of SMDM.",
+    "source_char_len": 271,
+    "models": {
+      "nllb_600m": {
+        "text": "Hasta memnuniyetinin artması işlerini güçlendirir ve biriktirdikleri paralar evde kalır)\nSatıcılarla sözleşme yapan ve sağlayıcı ödeme mekanizmaları işleten bizler, SMDM'nin yaygın olarak kabul edilmesine engel olan engelleri ortadan kaldırmak için gerçekten hazırlıklı olmalıyız.",
+        "output_tokens": 75,
+        "latency_ms": 1754.5
+      },
+      "nllb_1.3b": {
+        "text": "Hasta memnuniyetinin artması işlerini güçlendirir ve tasarruf ettikleri para evde kalır)\nSatıcılarla sözleşme yapan ve sağlayıcı ödeme mekanizmalarını işleten bizler, SMDM'nin yaygın olarak benimsenmesine engel olan engelleri kaldırmak için kendimizi hazırlamalıyız.",
+        "output_tokens": 74,
+        "latency_ms": 2330.7
+      },
+      "nllb_3.3b": {
+        "text": "Hasta memnuniyetinin artması onların işini güçlendirir ve tasarruf ettikleri tüm dolarlar evde kalır)\nSatıcılarla sözleşme yapan ve tedarikçi ödeme mekanizmalarını işleten bizler gerçekten kendimizi SMDM'nin yaygın olarak benimsenmesine engel olan engelleri kaldırmak için hazırlamalıyız.",
+        "output_tokens": 77,
+        "latency_ms": 4497.8
+      },
+      "madlad_3b": {
+        "text": "Hasta memnuniyetini artırmak, işlerini güçlendirir ve tasarruf ettikleri her dolar evde kalır) Satıcılarla sözleşme yapan ve sağlayıcı ödeme mekanizmalarını işleten bizler, SMDM'nin yaygın olarak kabul edilmesine engel olan engelleri kaldırmak için gerçekten kendimizi döndürmeliyiz.",
+        "output_tokens": 71,
+        "latency_ms": 3729.6
+      },
+      "translategemma_4b": {
+        "text": "Hastaların memnuniyetini artırmak, onların işlerini güçlendirir ve bu sayede elde ettikleri her dolar şirketin içinde kalır.\n\nBizler, tedarikçilerle sözleşme yapan ve sağlık hizmeti sağlayıcıların ödeme mekanizmalarını yöneten kişiler olarak, SMDM'nin yaygın olarak benimsenmesini engelleyen engelleri ortadan kaldırmak için harekete geçmeliyiz.",
+        "output_tokens": 88,
+        "latency_ms": 4793.0
+      }
+    }
+  },
+  {
+    "source_id": 10,
+    "source_text": "In what is believed to be \"a first\" for this region's short track racing industry, co-promoters Rich Tobias and Doug Rose have announced that Wyomissing realtor Jeffrey Hogue has purchased the naming rights to Action Track USA at the Kutztown Fairgrounds in Kutztown, Pa.",
+    "source_char_len": 271,
+    "models": {
+      "nllb_600m": {
+        "text": "Bu bölgenin kısa pist yarış endüstrisi için \"birinci\" olduğu düşünülürken, ortak promotorlar Rich Tobias ve Doug Rose, Wyomissing emlakçı Jeffrey Hogue'nin Kutztown, Pa'daki Kutztown Fairgrounds'ta Action Track USA'ya isim verme haklarını satın aldığını duyurdu.",
+        "output_tokens": 78,
+        "latency_ms": 1870.4
+      },
+      "nllb_1.3b": {
+        "text": "Bu bölgenin kısa pist yarış endüstrisi için \"bir ilk\" olduğu düşünülen şeyde, ortak promotorlar Rich Tobias ve Doug Rose, Wyomissing emlakçısı Jeffrey Hogue'un Kutztown, Pa'daki Kutztown Fuar Alanı'ndaki Action Track USA'nın isim haklarını satın aldığını duyurdu.",
+        "output_tokens": 79,
+        "latency_ms": 2558.8
+      },
+      "nllb_3.3b": {
+        "text": "Bu bölgenin kısa pist yarış endüstrisi için \"ilk\" olduğuna inanılan, ortak promotorlar Rich Tobias ve Doug Rose, Wyomissing emlakcısı Jeffrey Hogue'un Kutztown, Kutztown Fairgrounds'daki Action Track USA'nın isim hakkını satın aldığını duyurdu.",
+        "output_tokens": 72,
+        "latency_ms": 4186.8
+      },
+      "madlad_3b": {
+        "text": "Bu bölgenin kısa pist yarış endüstrisi için \"ilk\" olduğuna inanılan bir şeyde, ortak promotörler Rich Tobias ve Doug Rose, Wyomissing gayrimenkul danışmanı Jeffrey Hogue'un Kutztown, Pa'daki Kutz Town Fairgrounds'ta Action Track USA'nın isim haklarını satın aldığını duyurdu.",
+        "output_tokens": 80,
+        "latency_ms": 4321.6
+      },
+      "translategemma_4b": {
+        "text": "Bu, bölgedeki kısa mesafe yarış endüstrisi için \"ilk\" olduğu düşünülen bir olaydır. Ortak organizatörler Rich Tobias ve Doug Rose, Wyomissing emlak uzmanı Jeffrey Hogue'un, Kutztown, Pennsylvania'daki Kutztown Fuari alanındaki Action Track USA'nın isim hakkını satın aldığını duyurdu.",
+        "output_tokens": 79,
+        "latency_ms": 4134.6
+      }
+    }
+  },
+  {
+    "source_id": 23,
+    "source_text": "r\nJ. Bruce Kremer, Raymond Ruble c\n,nd Trevor Bowen, it was announced \"\n'esterday, have purchased the drug \"\n$id sundries businesses operated on d\nforth Main and West Park streets r'\ninde' the 'firm name of Paxson & n\nlockefeller and in the future will\nonduct the business.",
+    "source_char_len": 273,
+    "models": {
+      "nllb_600m": {
+        "text": "R\nJ. Bruce Kremer, Raymond Ruble c\n, ve Trevor Bowen, duyuruldu \"\n'dün, uyuşturucu satın aldık'\nD'de faaliyet gösteren çeşitli işletmeler\nBaş ve Batı Park sokakları r'\ninde' Paxson & n'ın \"şirket adı\"\nlockefeller ve gelecekte\nİşten çıkar.",
+        "output_tokens": 104,
+        "latency_ms": 2858.0
+      },
+      "nllb_1.3b": {
+        "text": "r\nJ. Bruce Kremer, Raymond Ruble c\n\"ve Trevor Bowen, duyuruldu\".\n\"Dün, uyuşturucuyu satın aldım\"\n$id çeşitli işletmeler\nAna ve Batı Park sokakları r'\nPaxson & n'in şirket adı\nLockefeller ve gelecekte olacak\nİşleri durdurmak için.",
+        "output_tokens": 98,
+        "latency_ms": 3209.0
+      },
+      "nllb_3.3b": {
+        "text": "r r\nJ. Bruce Kremer, Raymond Ruble c\n\"Ve Trevor Bowen, duyuruldu\".\n\"Dün, ilacı satın aldım\".\nD'de faaliyet gösteren çeşitli işletmeler\nAna ve Batı Park Caddesi'nde.\nPaxson & apos; ın firma adı\nLockefeller ve gelecekte olacak\nİşleri yürüt.",
+        "output_tokens": 103,
+        "latency_ms": 6296.1
+      },
+      "madlad_3b": {
+        "text": "J. Bruce Kremer, Raymond Ruble ve Trevor Bowen, dün açıklanan haberlere göre, 4. Ana ve Batı Park sokaklarında Paxson & Lockefeller firması adı altında faaliyet gösteren uyuşturucu ticareti yapan şirketleri satın aldılar ve gelecekte de bu işi sürdürecekler.",
+        "output_tokens": 72,
+        "latency_ms": 4097.7
+      },
+      "translategemma_4b": {
+        "text": "J. Bruce Kremer, Raymond Ruble ve Trevor Bowen, dün, \"Main ve West Park caddelerindeki ve Paxson & Rockefeller adında faaliyet gösteren eczane ve diğer işletmeleri satın aldıklarını\" duyurdu.",
+        "output_tokens": 49,
+        "latency_ms": 2538.2
+      }
+    }
+  },
+  {
+    "source_id": 24,
+    "source_text": "5-STARS Stocks with Highest 12-Month Price Appreciation Potential\nStatoil ASA ADS\nICON Plc ADS\nThermo Fisher Scientific\nSource: Standard & Poor's Equity Research; Data as of 8/10/07\nShould we get the relief rally we expect, don't get too complacent and put everything on autopilot.",
+    "source_char_len": 281,
+    "models": {
+      "nllb_600m": {
+        "text": "En yüksek 12 aylık fiyat değerlendirme potansiyeline sahip 5 yıldızlı hisse senetleri\nStatoil ASA ADS\nICON Plc ADS\nThermo Fisher Bilimsel\nKaynak: Standard & Poor's Equity Research; 8/10/07 tarihli veriler\nBeklediğimiz yardıma ulaşırsak, çok memnun olmayın ve her şeyi otomatik pilotla çalıştırın.",
+        "output_tokens": 102,
+        "latency_ms": 2230.8
+      },
+      "nllb_1.3b": {
+        "text": "5-STARS En yüksek 12 aylık fiyat değerlendirme potansiyeline sahip hisse senetleri\nStatoil ASA ADS\nICON Plc ADS\nTermo Fisher Bilimsel\nKaynak: Standard & Poor's Equity Research; 8/10/07 itibariyle veriler\nBeklediğimiz yardımı almamız gerekiyorsa, fazla kendini beğenmiş olmayın ve her şeyi otomatik pilotta koyun.",
+        "output_tokens": 106,
+        "latency_ms": 3509.8
+      },
+      "nllb_3.3b": {
+        "text": "En yüksek 12 aylık fiyat artış potansiyeli olan 5-STARS hisse senetleri\nStatoil ASA ADS\nICON Plc ADS\nThermo Fisher Scientific\nKaynak: Standard & Poor's Equity Research; 8/10/07 tarihli veriler\nBeklediğimiz yardım toplantısını yaparsak, fazla kendini beğenmiş olmayın ve her şeyi otomatik pilot üzerine koyun.",
+        "output_tokens": 101,
+        "latency_ms": 6665.7
+      },
+      "madlad_3b": {
+        "text": "5-STARS En Yüksek 12 Aylık Fiyat Artışı Potansiyeline Sahip Hisseler Statoil ASA ADS ICON Plc ADS Thermo Fisher Scientific Kaynak: Standard & Poor's Equity Research; 8/10/07 verileri Beklediğimiz rahatlama rallisini elde etsek, çok memnun olma ve her şeyi otomatik pilota koyma.",
+        "output_tokens": 96,
+        "latency_ms": 5281.6
+      },
+      "translategemma_4b": {
+        "text": "5 Yıldız Değerine Sahip, En Yüksek 12 Aylık Fiyat Artış Potansiyeline Sahip Hisse Senetler\nStatoil ASA ADS\nICON Plc ADS\nThermo Fisher Scientific\nKaynak: Standard & Poor's Equity Research; Veriler 10/08/07 itibarıyla\nBeklediğimiz toparlanma dalgasını yakalarsak, aşırı rahatlamayın ve her şeyi otomatik modda bırakmayın.",
+        "output_tokens": 101,
+        "latency_ms": 5125.0
+      }
+    }
+  },
+  {
+    "source_id": 12,
+    "source_text": "Ereinion did not say anything, just continued to look at him with those bright eyes that shone like stars even in the darkness until another abrupt clap of thunder suddenly made him jump and grab hold of the hem on Cirdan's nightclothes until his small knuckles were white with the effort.",
+    "source_char_len": 289,
+    "models": {
+      "nllb_600m": {
+        "text": "Ereinion hiçbir şey söylemedi, sadece karanlıkta bile yıldızlar gibi parlayan parlak gözleriyle ona bakmaya devam etti. Birdenbire bir gök gürlemesi daha onu atlatıp, Cirdan'ın gece kıyafetlerinin kenarını tutmaya zorladı.",
+        "output_tokens": 62,
+        "latency_ms": 1701.0
+      },
+      "nllb_1.3b": {
+        "text": "Ereinion hiçbir şey söylemedi, sadece karanlıkta bile yıldızlar gibi parlayan parlak gözleriyle ona bakmaya devam etti ta ki bir başka ani gök gürlemesi birdenbire atlamasına ve Cirdan'ın geceliklerinin kenarına sarılmasına neden olana kadar.",
+        "output_tokens": 62,
+        "latency_ms": 2329.4
+      },
+      "nllb_3.3b": {
+        "text": "Ereinion hiçbir şey söylemedi, sadece karanlıkta bile yıldızlar gibi parlayan o parlak gözlerle ona bakmaya devam etti. Bir başka ani gök gürültüsü ona aniden atlayıp Cirdan'ın geceliklerinin kenarına tutunmasını sağladı.",
+        "output_tokens": 60,
+        "latency_ms": 5032.9
+      },
+      "madlad_3b": {
+        "text": "Ereinion hiçbir şey söylemedi, sadece karanlıkta bile yıldızlar gibi parlayan parlak gözleri ile ona bakmaya devam etti. Bir başka ani gök gürültüsü onu aniden atlatıp Cirdan'ın gece elbisesinin kenarından tutmaya zorladı. Küçük parmak uçları çaba ile beyazlaştı.",
+        "output_tokens": 76,
+        "latency_ms": 4021.0
+      },
+      "translategemma_4b": {
+        "text": "Ereinion bir şey söylemedi, sadece o parlak gözlerle ona baktı, bu gözler karanlıkta bile yıldızlar gibi parlıyordu. Sonra ani bir gürültü sesi onu aniden sıçratıp, Cirdan'ın geceliklerinin yakasına tutundu, küçük parmakları çabasıyla beyazlaştı.",
+        "output_tokens": 77,
+        "latency_ms": 3950.2
+      }
+    }
+  },
+  {
+    "source_id": 18,
+    "source_text": "- At ShopNBC Website, as with any ShopNBC transaction, you'll find well-trained staff committed to quality service\nThe enviable reputation of ShopNBC\nhas been established over many years, and is built upon the well-founded principles of respecting one's customers and offering value for money.",
+    "source_char_len": 293,
+    "models": {
+      "nllb_600m": {
+        "text": "- ShopNBC Web sitesinde, her ShopNBC işleminde olduğu gibi, kaliteli hizmete bağlı iyi eğitilmiş personel bulacaksınız.\nShopNBC'nin kıskanç itibarı\nUzun yıllar boyunca kurulmuş ve müşterilere saygı gösterme ve para karşılığında değer sunma temelinde kurulmuştur.",
+        "output_tokens": 76,
+        "latency_ms": 1823.7
+      },
+      "nllb_1.3b": {
+        "text": "- ShopNBC Web sitesinde, herhangi bir ShopNBC işleminde olduğu gibi, kaliteli hizmete adanmış iyi eğitimli personel bulacaksınız\nShopNBC'nin kıskanabilir itibarı\nYıllar boyunca kurulmuştur ve müşterilere saygı gösterme ve para karşılığında değer sunma ilkeleri üzerine kurulmuştur.",
+        "output_tokens": 81,
+        "latency_ms": 2556.0
+      },
+      "nllb_3.3b": {
+        "text": "- ShopNBC Web sitesinde, her ShopNBC işleminde olduğu gibi, kaliteli hizmete adanmış iyi eğitimli personel bulacaksınız.\nShopNBC'nin itibarı\nuzun yıllar boyunca kurulmuştur ve müşterilerine saygı göstermek ve para için değer sunmak gibi sağlam ilkeler üzerine kurulmuştur.",
+        "output_tokens": 78,
+        "latency_ms": 5598.3
+      },
+      "madlad_3b": {
+        "text": "- ShopNBC Web Sitesi'nde, herhangi bir ShopNCB işleminde olduğu gibi, kaliteli hizmete bağlı iyi eğitimli personel bulabilirsiniz. ShopNbc'nin kıskanç itibarı yıllardır kuruldu ve müşterilere saygı duyma ve para karşılığı değer sunma gibi iyi temelli ilkelere dayanır.",
+        "output_tokens": 72,
+        "latency_ms": 4096.6
+      },
+      "translategemma_4b": {
+        "text": "- ShopNBC web sitesinde, diğer ShopNBC işlemlerinde olduğu gibi, kaliteli hizmete kendini adamış, iyi eğitimli personel bulacaksınız.\nShopNBC'nin saygın itibarı, uzun yıllar boyunca kurulmuş ve müşterilere saygı gösterme ve para karşılığında değer sunma gibi sağlam prensipler üzerine inşa edilmiştir.",
+        "output_tokens": 73,
+        "latency_ms": 3636.0
+      }
+    }
+  },
+  {
+    "source_id": 29,
+    "source_text": "Continue reading\nWould whip So for this mother of two, there is nothing on this list that force me, my checkbook.Am I good, frugal Companies Who knows, maybe it will be up to the original Tickle Me Elmo doll, back and exclusively at Toys R Us in order to stage a one – monster save the season?",
+    "source_char_len": 293,
+    "models": {
+      "nllb_600m": {
+        "text": "Okumaya devam edin\nBu iki çocuk annesi için, bu listede beni zorlayacak bir şey yok, çek defterim. Ben iyi miyim, sersem şirketler Kim bilir, belki de orijinal Tickle Me Elmo bebeğine kadar olacak, Toys R Us'a geri dönüp sadece sezon kurtarmak için bir  canavarı sahnelemek için?",
+        "output_tokens": 82,
+        "latency_ms": 2003.1
+      },
+      "nllb_1.3b": {
+        "text": "Okumaya devam et\nBu yüzden iki çocuk annesi için, bu listede beni zorlayacak bir şey yok. Çek defterim. İyi, tasarruflu bir şirket miyim? Kim bilir, belki de orijinal Tickle Me Elmo bebeğine bağlı olabilir.",
+        "output_tokens": 60,
+        "latency_ms": 1952.4
+      },
+      "nllb_3.3b": {
+        "text": "Okumaya devam et\nYani bu iki çocuğun annesi için, bu listede beni, çek defterimi zorlayacak hiçbir şey yok. İyi, paralı Şirketler Kim bilir, belki de orijinal Tickle Me Elmo bebeği, Toys R Us'a geri dönecek ve sezonun bir canavarını kurtaracak mı?",
+        "output_tokens": 77,
+        "latency_ms": 5085.3
+      },
+      "madlad_3b": {
+        "text": "Continue reading Would whip Yani iki çocuk annesi olarak, bu listede beni zorlayan hiçbir şey yok, benim çek defterim. İyi miyim, tasarruflu şirketler Kim bilir, belki de bu orijinal Tickle Me Elmo bebeğine bağlı olacak, geri ve yalnızca Toys R Us'ta bir sezon kurtarmak için bir canavar sahnelemek için?",
+        "output_tokens": 84,
+        "latency_ms": 4661.4
+      },
+      "translategemma_4b": {
+        "text": "Devam et\nBu iki çocuk annesi için, bu listedeki hiçbir şey benim cebimi zorlamıyor. Ben mi iyi, cimri? Kim bilir, belki orijinal Tickle Me Elmo oyuncak, geri dönüp sadece Toys R Us'ta, sezonda bir \"tek canavarı kurtarma\" etkinliğini düzenlemek için?",
+        "output_tokens": 71,
+        "latency_ms": 3566.6
+      }
+    }
+  }
+]
