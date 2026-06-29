@@ -1,0 +1,79 @@
+{
+  "title": "TR Corpus Translation Benchmark — Final Results",
+  "generated_at": "2026-06-23T13:27:10Z",
+  "platform": "MPS (Apple Silicon)",
+  "config": {
+    "run_duration_per_model_s": 120,
+    "quality_max_references": 32
+  },
+  "models_tested": 15,
+  "models_succeeded": 12,
+  "models_failed": 3,
+  "succeeded": {
+    "Gemma-4-26B-A4B-QAT-Q4_0-GGUF (Google)": {
+      "mean_tps": 0.0,
+      "bertscore": null,
+      "total_tokens": 0
+    },
+    "Gemma-4-E4B-QAT-Q4_0-GGUF (Google)": {
+      "mean_tps": 0.0,
+      "bertscore": null,
+      "total_tokens": 0
+    },
+    "Gemma-4-E2B-QAT-Q4_0-GGUF (Google)": {
+      "mean_tps": 0.0,
+      "bertscore": null,
+      "total_tokens": 0
+    },
+    "Gemma-4-E2B-QAT-w4a16-ct": {
+      "mean_tps": 64.7,
+      "bertscore": 0.7044,
+      "total_tokens": 7680
+    },
+    "Gemma-4-E4B-QAT-w4a16-ct": {
+      "mean_tps": 31.3,
+      "bertscore": 0.6932,
+      "total_tokens": 4096
+    },
+    "Gemma-4-E2B-QAT-mobile-transformers": {
+      "mean_tps": 9.4,
+      "bertscore": 0.7016,
+      "total_tokens": 1536
+    },
+    "Gemma-4-E4B-QAT-mobile-transformers": {
+      "mean_tps": 5.0,
+      "bertscore": 0.6953,
+      "total_tokens": 1024
+    },
+    "TranslateGemma-4B": {
+      "mean_tps": 35.9,
+      "bertscore": 0.6171,
+      "total_tokens": 4608
+    },
+    "SmolLM2-1.7B-Instruct": {
+      "mean_tps": 84.5,
+      "bertscore": 0.7012,
+      "total_tokens": 10240
+    },
+    "NLLB-200-3.3B": {
+      "mean_tps": 87.5,
+      "bertscore": 0.682,
+      "total_tokens": 10544
+    },
+    "NLLB-200-distilled-1.3B": {
+      "mean_tps": 145.2,
+      "bertscore": 0.6693,
+      "total_tokens": 18264
+    },
+    "NLLB-200-distilled-600M": {
+      "mean_tps": 229.5,
+      "bertscore": 0.6484,
+      "total_tokens": 29304
+    }
+  },
+  "failed": {
+    "DiffusionGemma-26B-A4B-Q8_0": "No result file produced (model load likely failed)",
+    "Gemma-4-E4B-QAT-mobile-ct": "No result file produced (model load likely failed)",
+    "Gemma-4-E2B-QAT-mobile-ct": "No result file produced (model load likely failed)"
+  }
+}

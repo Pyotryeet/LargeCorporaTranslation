@@ -1,12 +1,16 @@
 {
   "model_ids": [
+    "madlad_10b",
     "madlad_3b",
     "nllb_1.3b",
     "nllb_3.3b",
     "nllb_600m",
+    "nllb_moe_54b",
+    "translategemma_12b",
+    "translategemma_27b",
     "translategemma_4b"
   ],
-  "models_per_source": 5,
+  "models_per_source": 9,
   "sources": [
     {
       "id": 4,
@@ -14,22 +18,38 @@
       "translations": [
         {
           "model_label": "A",
-          "text": "Bu yüzden, bölgenizdeki muhteşem sosyal fikirleri bilmediğiniz herkese aktarmak istedim."
+          "text": "Bu yüzden bu harika sosyal fikri bölgenizdeki boncuk loncasını bilmeyen herkese aktarmak istedim."
         },
         {
           "model_label": "B",
-          "text": "Bu yüzden, bölgenizdeki boncuk loncaları hakkında bilmediğiniz herkese bu harika sosyal fikri iletmek istedim."
+          "text": "Bu harika sosyal fikri, bölgenizdeki boncuk üreticileri dernekleri hakkında bilgi sahibi olmayan herkesle paylaşmak istedim."
         },
         {
           "model_label": "C",
-          "text": "Bu yüzden, bu harika sosyal fikri bölgenizdeki boncuk loncalarını bilmeyen herkese aktarmak istedim."
+          "text": "Bu nedenle, bölgenizdeki boncuk zanaatı dernekleri hakkında bilgisi olmayanlarınız için bu harika sosyal fikir hakkında sizi bilgilendirmek istedim."
         },
         {
           "model_label": "D",
-          "text": "Bu nedenle, bölgenizde boncuk loncalarının olup olmadığını bilmeyen herkese, bu harika sosyal fikri aktarmak istedim."
+          "text": "Bu yüzden, bölgenizdeki muhteşem sosyal fikirleri bilmediğiniz herkese aktarmak istedim."
         },
         {
           "model_label": "E",
+          "text": "Bu nedenle, bu harika sosyal fikri, bölgenizde boncuk loncalarının olup olmadığını bilmeyen herkese aktarmak istedim."
+        },
+        {
+          "model_label": "F",
+          "text": "Bu yüzden, bölgenizdeki boncuk grubu hakkında bilmediğiniz herkese bu harika sosyal fikri iletmek istedim."
+        },
+        {
+          "model_label": "G",
+          "text": "Bu yüzden bu harika sosyal fikri bölgenizdeki boncuk loncalarını bilmeyen herkese aktarmak istedim."
+        },
+        {
+          "model_label": "H",
+          "text": "Bu yüzden, bu harika sosyal fikri, belki de bölgenizdeki boncuk dernekleri hakkında hiçbir şey bilmeyen sizlere aktarmak istedim."
+        },
+        {
+          "model_label": "I",
           "text": "Bu yüzden, bu harika sosyal fikri, bölgenizdeki boncukçular derneklerini bilmeyen herkese aktarmak istedim."
         }
       ]
@@ -40,23 +60,39 @@
       "translations": [
         {
           "model_label": "A",
-          "text": "Tauzin'in sözcüsü Ken Johnson, kongre üyesinin bir ya da iki yıl için arama yapma rejistrisini finanse etmek istediğini söyledi."
+          "text": "Tauzin'in sözcüsü Ken Johnson, kongre üyesinin, \"asla aramayın\" listesi için bir veya iki yıl daha finansman sağlamak istediğini söyledi."
         },
         {
           "model_label": "B",
-          "text": "Tauzin'in sözcüsü Ken Johnson, kongre üyesinin bir ya da iki yıl boyunca aramayı yasaklayan kayıt defterini finanse etmek istediğini söyledi."
+          "text": "Tauzin'in sözcüsü Ken Johnson, kongre üyesinin bir ya da iki yıl boyunca arama yapma kayıtlarını finanse etmek istediğini söyledi."
         },
         {
           "model_label": "C",
-          "text": "Tauzin'in sözcüsü Ken Johnson, kongre üyesinin bir ya da iki yıl boyunca aramak isteme kayıt sistemini finanse etmek istediğini söyledi."
+          "text": "Tauzin'in sözcüsü Ken Johnson, kongre üyesinin bir veya iki yıl için aramayın kayıt defterini finanse etmek istediğini söyledi."
         },
         {
           "model_label": "D",
-          "text": "Ken Johnson, Tauzin'in sözcüsü, kongre üyesinin, \"ara-açma\" kaydını bir veya iki yıl boyunca finanse etmek istediğini belirtti."
+          "text": "Tauzin'in sözcüsü Ken Johnson, kongre üyesinin \"aranmama\" sicilini bir veya iki yıl boyunca finanse etmek istediğini söyledi."
         },
         {
           "model_label": "E",
-          "text": "Tauzin'in sözcüsü Ken Johnson, kongre üyesinin bir ya da iki yıl boyunca arama yapma kayıtlarını finanse etmek istediğini söyledi."
+          "text": "Tauzin'in sözcüsü Ken Johnson, kongre üyesinin bir veya iki yıl süreyle aramayın kayıt sistemine kaynak sağlamak istediğini söyledi."
+        },
+        {
+          "model_label": "F",
+          "text": "Tauzin'in sözcüsü Ken Johnson, kongre üyesinin bir ya da iki yıl boyunca aramayı yasaklayan kayıt defterini finanse etmek istediğini söyledi."
+        },
+        {
+          "model_label": "G",
+          "text": "Tauzin'in sözcüsü Ken Johnson, kongre üyesinin bir ya da iki yıl için arama yapma rejistrisini finanse etmek istediğini söyledi."
+        },
+        {
+          "model_label": "H",
+          "text": "Tauzin'in sözcüsü Ken Johnson, kongre üyesinin bir ya da iki yıl boyunca aramak isteme kayıt sistemini finanse etmek istediğini söyledi."
+        },
+        {
+          "model_label": "I",
+          "text": "Ken Johnson, Tauzin'in sözcüsü, kongre üyesinin, \"ara-ama kayıt\" sistemini bir veya iki yıl boyunca finanse etmek istediğini belirtti."
         }
       ]
     },
@@ -66,23 +102,39 @@
       "translations": [
         {
           "model_label": "A",
-          "text": "Sevgili Gökteki Baba, Abigail gibi bana 'ahlak' ver ve Nabal'ın gösterdiği akılsızlık ve bencillikten kaçınmama yardım et."
+          "text": "Sevgili Gökteki Babam, Abigail gibi bana da 'akıl ver' ve Nabal'ın sergilediği akılsızlık ve bencillikten kaçınmama yardım et."
         },
         {
           "model_label": "B",
-          "text": "Sevgili gökteki Babam, Abigail gibi bana 'akıl ver' ve Nabal'ın gösterdiği aptallık ve bencillikten kaçınmama yardım et."
+          "text": "Sevgili Cennetteki Baba, Abigail gibi bana 'akıl' ver ve Nabal'ın sergilediği aptallık ve bencillikten kaçınmama yardım et."
         },
         {
           "model_label": "C",
-          "text": "Sevgili Gökteki Babamız, Abigail gibi bana da 'akıl' ver ve Nabal'ın sergilediği akılsızlık ve bencillikten kaçınmama yardım et."
+          "text": "Sevgili Göksel Babam, bana Abigail'in sahip olduğu gibi bir \"akıl ve basiret\" ver ve Nabal'ın sergilediği aptallıktan ve bencillikten kaçınmama yardım et."
         },
         {
           "model_label": "D",
-          "text": "Sevgili gökteki Baba, Abigail'ın sahip olduğu gibi bana da \"mantık\" ver ve Nabal'ın gösterdiği aptallık ve bencillikten kaçınmama yardım et."
+          "text": "Sevgili Tanrım, Abigail'in sahip olduğu \"anlam\"ı bana ver ve Nabal'ın sergilediği aptallık ve bencilliikten kaçınmama yardım et."
         },
         {
           "model_label": "E",
-          "text": "Sevgili Tanrım, Abigail'in sahip olduğu \"anlam\"ı bana ver ve Nabal'ın sergilediği aptallık ve bencilliikten kaçınmama yardım et."
+          "text": "Sevgili İlahi Baba, bana Abigail'ın sahip olduğu gibi bir \"akıl\" bahşet ve Nabal'ın sergilediği aptallığı ve bencilliği yaşamaktan beni koru."
+        },
+        {
+          "model_label": "F",
+          "text": "Sevgili gökteki Baba, Abigail'ın sahip olduğu gibi bana da \"mantık\" ver ve Nabal'ın gösterdiği aptallık ve bencillikten kaçınmama yardım et."
+        },
+        {
+          "model_label": "G",
+          "text": "Sevgili Gökteki Baba, Abigail gibi bana 'ahlak' ver ve Nabal'ın gösterdiği akılsızlık ve bencillikten kaçınmama yardım et."
+        },
+        {
+          "model_label": "H",
+          "text": "Sevgili Kutsal Babam, bana Abigail'in olduğu gibi bir \"akıl\" ver ve Nabal'ın gösterdiği aptallık ve bencillikten kaçınmama yardım et."
+        },
+        {
+          "model_label": "I",
+          "text": "Sevgili Gökteki Babamız, Abigail gibi bana da 'akıl' ver ve Nabal'ın sergilediği akılsızlık ve bencillikten kaçınmama yardım et."
         }
       ]
     },
@@ -92,23 +144,39 @@
       "translations": [
         {
           "model_label": "A",
-          "text": "Pazartesi, 6 Nisan 2009\nDamat, sevimli geliniyle karşılaştırıldığında bir alet gibi hissedebilir, ama o (ve damatları) hala rolü giymek zorunda."
+          "text": "6 Nisan 2009, Pazartesi\nDamad, eşiyle karşılaştırıldığında sadece bir aksesuar gibi hissedebilir, ancak yine de uygun şekilde giyinmek zorundadır (ve damad arkadaşları da)."
         },
         {
           "model_label": "B",
-          "text": "Pazartesi, 6 Nisan 2009\nDamat, sevgili geline kıyasla bir süs eşyası gibi hissedebilir, ama o (ve damatları) hala rolü giymek zorunda."
+          "text": "6 Nisan 2009, Pazartesi\n\nDamat, sevimli geliniyle kıyaslandığında biraz önemsiz hissedebilir, ancak yine de (ve damat arkadaşları da) bu özel gün için uygun şekilde giyinmelidir."
         },
         {
           "model_label": "C",
-          "text": "Pazartesi, 6 Nisan 2009\nDamat, güzel gelinle karşılaştırıldığında kendini bir prop gibi hissedebilir, ancak o (ve gelin adamları) hala rolü giymek zorundalar."
+          "text": "Pazartesi, 6 Nisan 2009\nDamat, sevimli geliniyle karşılaştırıldığında kendini bir sahne parçası gibi hissedebilir ama yine de o (ve sağdıçları) uygun şekilde giyinmelidir."
         },
         {
           "model_label": "D",
-          "text": "6 Nisan 2009, Pazartesi\nDamad, eşiyle karşılaştırıldığında sadece bir aksesuar gibi hissedebilir, ancak yine de uygun şekilde giyinmesi gerekiyor (ve arkadaşlarının da öyle)."
+          "text": "Pazartesi, 6 Nisan 2009\nDamat, sevimli geliniyle karşılaştırıldığında kendini bir alet gibi hissedebilir, ama o (ve damatları) hala rolü giymek zorundalar."
         },
         {
           "model_label": "E",
-          "text": "Pazartesi, 6 Nisan 2009 Gelin, sevimli gelinine kıyasla kendisini bir eşya gibi hissedebilir, ama o (ve gelin adamları) hala rolünü giymek zorunda."
+          "text": "Pazartesi, 6 Nisan 2009\nDamat, sevgili geline kıyasla bir süs eşyası gibi hissedebilir, ama o (ve damatları) hala rolü giymek zorunda."
+        },
+        {
+          "model_label": "F",
+          "text": "10:00 am\\tReply\\tThe bride and groom are the most important part of a wedding, and they are the ones who are going to be the most involved in it.TheTheThe bridesmaid may feel like a prop compared to her lovely bride, but he (and his)…TheThe TheTheThetheTheTheTHETheTheThisTheTheThatTheThe\\tThisTheThis\\tAdd a comment Cancel reply\\tYour email addressTheThe THETheThe…TheThis…The…This…This\\tInsert a comment\\tRelated Posts\\tGrooming is a part of the weddingTheThe...TheTheTeTheThe (The)TheThe(The)ThisTheGroom is a...The The TheThe TheThisThe The…TheGrooming is part of...TheThis TheTheThis is a piece of clothing that is not yet dressedThe"
+        },
+        {
+          "model_label": "G",
+          "text": "6 Nisan 2009, Pazartesi\nDüğün sahibi, sevimli eşiyle kıyaslandığında kendini bir aksesuar gibi hissedebilir, ancak yine de (ve damat sohbettarları da) o (ve onlar) kıyafetleriyle uygun görünmelidir."
+        },
+        {
+          "model_label": "H",
+          "text": "11:00 PM\\tReply\\tThe groom may feel like a prop compared to his lovely bride, but he (and the groomsmen) still has to dress the part.The"
+        },
+        {
+          "model_label": "I",
+          "text": "Pazartesi, 6 Nisan 2009\nDamat, güzel gelinle karşılaştırıldığında kendini bir prop gibi hissedebilir, ancak o (ve gelin adamları) hala rolü giymek zorundalar."
         }
       ]
     },
@@ -118,23 +186,39 @@
       "translations": [
         {
           "model_label": "A",
-          "text": "Çağrı süreçlerimizde görev alacak, öğrenme ve gelişme imkanı sunan bir şirket arayan Müşteri Hizmetleri Temsilcileri (Tam zamanlı) arıyoruz."
-        },
-        {
-          "model_label": "B",
           "text": "Arama işimiz için öğrenme ve büyüyebilecekleri bir şirket arayan Müşteri Hizmetleri Temsilcileri (Tüm zamanlı) arıyoruz."
         },
         {
+          "model_label": "B",
+          "text": "Müşteri Hizmetleri Temsilcileri (Tam zamanlı) arıyoruz. Öğrenebilecekleri ve büyüyebilecekleri bir şirket arıyorlar."
+        },
+        {
           "model_label": "C",
-          "text": "Çağrı sürecimiz için Müşteri Hizmetleri Temsilcileri (Tam zamanlı) arıyoruz. Öğrenebilecekleri ve gelişebilecekleri bir şirket arıyorlar."
+          "text": "Çağrı işlemlerimiz için öğrenip büyüyebilecekleri bir şirket arayan Müşteri Hizmetleri Temsilcileri (Tam Zamanlı) arıyoruz."
         },
         {
           "model_label": "D",
-          "text": "Çağrı işlemlerimiz için öğrenip büyüyebilecekleri bir şirket arayan tam zamanlı Müşteri Hizmetleri Temsilcileri arıyoruz."
+          "text": "Çağrı merkezimizde görev alacak, öğrenmeye ve gelişime açık, tam zamanlı Müşteri Hizmetleri Temsilcileri arıyoruz."
         },
         {
           "model_label": "E",
-          "text": "Müşteri Hizmetleri Temsilcileri (Tam zamanlı) arıyoruz. Öğrenebilecekleri ve büyüyebilecekleri bir şirket arıyorlar."
+          "text": "Çağrı merkezimizde, öğrenme ve gelişme imkanı sunan bir şirket arayan, tam zamanlı Müşteri Hizmetleri Temsilcileri arıyoruz."
+        },
+        {
+          "model_label": "F",
+          "text": "Çağrı merkezimiz için, öğrenme ve gelişme fırsatı sunan bir şirkette çalışmak isteyen, tam zamanlı Müşteri Hizmetleri Temsilcileri arıyoruz."
+        },
+        {
+          "model_label": "G",
+          "text": "Çağrı sürecimiz için öğrenme ve gelişme imkanı sunan bir şirket arayan Müşteri Hizmetleri Temsilcileri (Tam Zamanlı) arıyoruz."
+        },
+        {
+          "model_label": "H",
+          "text": "Çağrı sürecimiz için, öğrenebilecekleri ve büyüyebilecekleri bir şirket arayan Müşteri Hizmetleri Temsilcileri (Tam zamanlı) arıyoruz."
+        },
+        {
+          "model_label": "I",
+          "text": "Çağrı sürecimiz için Müşteri Hizmetleri Temsilcileri (Tam zamanlı) arıyoruz. Öğrenebilecekleri ve gelişebilecekleri bir şirket arıyorlar."
         }
       ]
     },
@@ -144,11 +228,11 @@
       "translations": [
         {
           "model_label": "A",
-          "text": "İçe dönüklere bir toplantıda bir görev verirseniz (canlı tweet atmak, fotoğraf çekmek, kayıt masasında yardım etmek) kaygımızı hafifleteceğini öğrendim."
+          "text": "Bir toplantıda içe dönüklere bir görev verirseniz (direk tweet atmak, fotoğraf çekmek, kayıt masasında yardım etmek) endişelerimizi hafiflettiğini öğrendim."
         },
         {
           "model_label": "B",
-          "text": "Bir toplantıda içe dönük insanlara bir görev verirseniz (direk tweet atmak, fotoğraf çekmek, kayıt masasında yardım etmek) endişelerimizi hafiflettiğini öğrendim."
+          "text": "İçe dönük kişilere bir toplantıda bir görev verildiğinde (örneğin, canlı yayın yapmak, fotoğraf çekmek, kayıt masasında yardımcı olmak), bu onların kaygılarını azaltıyor."
         },
         {
           "model_label": "C",
@@ -156,11 +240,27 @@
         },
         {
           "model_label": "D",
-          "text": "İntrovertlere bir toplantıda bir görev vermenin (canlı tweet, fotoğraf çekmek, kayıt masasında yardım etmek) kaygımızı hafifleteceğini öğrendim."
+          "text": "İçe dönük kişilere bir toplantıda görev verildiğinde (canlı tweet atmak, fotoğraf çekmek, kayıt masasında yardımcı olmak gibi), bunun kaygılarımızı azalttığını öğrendim."
         },
         {
           "model_label": "E",
-          "text": "Anketörlere toplantıda (canlı tweet atmak, fotoğraf çekmek, kayıt masasında yardım etmek gibi) görevler vermek, endişemizi azaltır."
+          "text": "Anladım ki, toplantılarda içe dönük kişilere görev vermek (canlı tweet göndermek, fotoğraf çekmek, kayıt masasında yardım etmek gibi), onların kaygılarını azaltır."
+        },
+        {
+          "model_label": "F",
+          "text": "Öğrendim ki eğer içe dönüklere bir toplantıda bir görev verirseniz (canlı tweet atmak, fotoğraf çekmek, kayıt masasında yardım etmek), kaygımızı hafifletir."
+        },
+        {
+          "model_label": "G",
+          "text": "İçedönüklere bir toplantıda bir görev verirseniz (canlı tweet atmak, fotoğraf çekmek, kayıt masasında yardım etmek) endişelerimizi hafiflettiğini öğrendim."
+        },
+        {
+          "model_label": "H",
+          "text": "Öğrendim ki, toplantıda içe dönüklere bir görev verirseniz (yayınla, resim çek, kayıt masasında yardım et), bu endişemizi hafifletir."
+        },
+        {
+          "model_label": "I",
+          "text": "İntrovertlere bir toplantıda bir görev vermenin (canlı tweet, fotoğraf çekmek, kayıt masasında yardım etmek) kaygımızı hafifleteceğini öğrendim."
         }
       ]
     },
@@ -170,23 +270,39 @@
       "translations": [
         {
           "model_label": "A",
-          "text": "Bu konsorsiyum, bazı diyabetiklerin küçük bir geri kalan ada fonksiyonu ile öldüğünü keşfetmeyi mümkün kıldı ve bunlar daha az komplikasyona sahip olma eğilimindedir."
-        },
-        {
-          "model_label": "B",
-          "text": "Bu konsorsiyum, bazı diyabetiklerin küçük bir adalık işlev ile öldüğünü keşfetmelerini mümkün kıldı ve bunlar daha az komplikasyonlara sahip olma eğilimindedir."
-        },
-        {
-          "model_label": "C",
           "text": "Bu konsorsiyum bazı diyabet hastalarının küçük bir kalıntı adacık fonksiyonuyla öldüklerini ve bu hastaların daha az komplikasyona sahip olduklarını keşfetmeyi mümkün kıldı."
         },
         {
-          "model_label": "D",
+          "model_label": "B",
+          "text": "Bu konsorsiyum, bazı diyabetlilerin küçük bir geri kalan adacık fonksiyonuyla öldüğünü ve bunların daha az komplikasyona sahip olduğunu keşfetmeyi mümkün kıldı."
+        },
+        {
+          "model_label": "C",
           "text": "Bu konsorsiyum, bazı diyabetlilerin küçük bir kalıntı ada fonksiyonu ile öldüklerini keşfetmeyi mümkün kıldı ve bunlar daha az komplikasyona sahip olma eğilimindedir."
         },
         {
+          "model_label": "D",
+          "text": "Bu konsorsiyum, bazı diyabetiklerin küçük bir geri kalan ada fonksiyonu ile öldüklerini keşfetmeyi mümkün kıldı ve bunlar daha az komplikasyona sahip olma eğilimindedir."
+        },
+        {
           "model_label": "E",
-          "text": "Bu konsorsiyum, bazı diyabet hastalarının küçük bir residual pankreas fonksiyonu ile yaşayarak öldürdüklerini ve bu hastaların daha az komplikasyon yaşadıklarını ortaya çıkarmayı sağlamıştır."
+          "text": "Bu konsorsiyum, bazı diyabet hastalarının azalan bir pankreas adacığı fonksiyonuyla öldüğünü ve bu hastaların daha az komplikasyon yaşadığını ortaya çıkaran bir keşif yapılmasına olanak sağladı."
+        },
+        {
+          "model_label": "F",
+          "text": "Bu konsorsiyum, bazı şeker hastalarının küçük bir kalıntı adacık fonksiyonu ile öldüklerini ve bunların daha az komplikasyona sahip olma eğiliminde olduklarını keşfetmeyi mümkün kıldı."
+        },
+        {
+          "model_label": "G",
+          "text": "Bu konsorsiyum, bazı diyabet hastalarının küçük bir oranda insülin üreten hücre fonksiyonuna sahip olarak öldüğünü ve bu hastaların genellikle daha az komplikasyon yaşadığını ortaya koymuştur."
+        },
+        {
+          "model_label": "H",
+          "text": "Bu konsorsiyum, bazı diyabetiklerin küçük bir adalık işlev ile öldüğünü keşfetmelerini mümkün kıldı ve bunlar daha az komplikasyonlara sahip olma eğilimindedir."
+        },
+        {
+          "model_label": "I",
+          "text": "Bu konsorsiyum, bazı diyabet hastalarının küçük bir residual pankreas fonksiyonu ile yaşamalarına olan keşfi mümkün kılmıştır ve bu hastaların daha az komplikasyon yaşadığı görülmektedir."
         }
       ]
     },
@@ -196,23 +312,39 @@
       "translations": [
         {
           "model_label": "A",
-          "text": "Grilde geleneksel \"kararmış baharat\" ile harika lezzeti vardır ve ayrıca tacos için kızartılmış ve kavrulmuş olarak da çok iyi sonuç verir."
+          "text": "Izgarada geleneksel \"baharat karışımı\" ile harika, aynı zamanda taco yapmak için bira hamuruna bulanırıp kızartmak gibi yöntemlerle de çok yakışıyor."
         },
         {
           "model_label": "B",
-          "text": "Grilde geleneksel bir \"karalama\" baharatı ile harika bir şey ve aynı zamanda bira hamurları ve tacos için soyumuş gibi tekniklere de çok iyi uyum sağlar."
+          "text": "Grill'de geleneksel bir blackening baharatı ile harika ve tacos için de bira battered ve sautéed gibi tekniklere çok iyi uyar."
         },
         {
           "model_label": "C",
-          "text": "Grille geleneksel bir  karalama  baharatı ile harika ve ayrıca bira ile dövülmüş ve taco için sautéed gibi teknikleri de çok iyi alır."
+          "text": "Grilde geleneksel blackening baharatı ile harika ve aynı zamanda tacolar için bira ile çarpılmış ve sautéed gibi tekniklere de çok iyi gider."
         },
         {
           "model_label": "D",
-          "text": "Grilde geleneksel blackening baharatı ile harika ve aynı zamanda tacolar için bira ile dövülmüş ve soslanmış gibi tekniklere de çok iyi uyum sağlar."
+          "text": "Izgarada geleneksel \"karartma\" baharatıyla çok lezzetli oluyor ve ayrıca bira hamuruyla kaplanarak veya sotelenerek taco yapımında da çok iyi sonuç veriyor."
         },
         {
           "model_label": "E",
-          "text": "Grill'de geleneksel bir blackening baharatı ile harika ve tacos için de bira battered ve sautéed gibi tekniklere çok iyi uyar."
+          "text": "Grille geleneksel bir karartma  baharatı ile harika ve ayrıca bira ile dövülmüş ve taco için salte edilmiş gibi teknikleri de çok iyi alır."
+        },
+        {
+          "model_label": "F",
+          "text": "Grilde geleneksel \"karamelize etme\" baharatıyla harika lezzet verir ve ayrıca tacos için kızartılmış ve kavrulmuş olarak da çok iyi sonuç verir."
+        },
+        {
+          "model_label": "G",
+          "text": "Izgarada geleneksel bir siyahlatma baharatı ile harikadır ve aynı zamanda tacolar için bira ezmeli ve kızartılmış gibi tekniklere de çok iyi uyar."
+        },
+        {
+          "model_label": "H",
+          "text": "Gril üzerinde geleneksel bir \"karalama\" baharatı ile harikadır ve birayla kavrulmuş ve tacolar için kızartılmış gibi tekniklere de çok iyi uygular."
+        },
+        {
+          "model_label": "I",
+          "text": "Grilde geleneksel bir \"karalama\" baharatı ile harika bir şey ve aynı zamanda bira hamurları ve tacos için soyumuş gibi tekniklere de çok iyi uyum sağlar."
         }
       ]
     },
@@ -222,23 +354,39 @@
       "translations": [
         {
           "model_label": "A",
-          "text": "Ayrıca, çiçek yataklar dikebileceğiniz veya verandada saksılar yerleştirebileceğiniz ön bahçe de bulunmaktadır."
+          "text": "2019. The property is located in a quiet neighbourhood, with a small garden and a covered patio where you can relax and enjoy the sunshine and the views.The"
         },
         {
           "model_label": "B",
-          "text": "Ayrıca okuyun: Başlangıç pazarlıklar Bracknell: Peel Center'da yeni bir mağaza açılıyor\nÖn bahçe de var, orada çiçek yatakları ekmek ya da bahçede küfler yerleştirebilirsiniz."
+          "text": "AYRICA ŞUNLARI OKUYUN: Home Bargains Bracknell: Peel Center'da yeni mağaza açılıyor.\n\nAyrıca, çiçek tarhları oluşturabileceğiniz veya terasta saksılar yerleştirebileceğiniz bir ön bahçe de bulunmaktadır."
         },
         {
           "model_label": "C",
-          "text": "Ayrıca oku: Home Bargains Bracknell: Peel Center'da yeni mağaza açılış Ayrıca çiçek yatakları ektiğiniz veya terasta poşetler koyduğunuz bir ön bahçe de var."
+          "text": "Ayrıca, çiçek yataklar dikebileceğiniz veya verandada saksılar yerleştirebileceğiniz ön bahçe de bulunmaktadır."
         },
         {
           "model_label": "D",
-          "text": "Home Bargains Bracknell: Peel Center'da yeni bir mağaza açılıyor\nÖn bahçede de çiçek döşekleri dikilebilir ya da patiyoya çömlekler yerleştirilebilir."
+          "text": "1000 sq ft.There is a large living room with a fireplace and a dining area, a kitchen with a dishwasher and a dishwasher, and a bathroom with a shower.TheTheThe front garden is a beautiful garden where you can plant flowers or place pots on the patio.The patioTheThetheTheTheTHETheTheThisTheThe There is a front garden where your can plant plants or place putts on the terrace.The front patio is a gardenTheThe TheTheThe"
         },
         {
           "model_label": "E",
-          "text": "Ayrıca okuyun: Bracknell: Peel Center'da yeni bir mağaza açıldı\nAyrıca ön bahçede çiçek bahçeleri dikmek veya avluya tencereler yerleştirmek için bir bahçe var."
+          "text": "Ayrıca okuyun: Bracknell: Peel Center'da yeni bir mağaza açıldı\nAyrıca ön bahçede çiçek bahçeleri dikmek ya da avluya kaplar yerleştirmek için bir bahçe var."
+        },
+        {
+          "model_label": "F",
+          "text": "Ayrıca okuyun: Home Bargains Bracknell: Peel Center'da yeni mağaza açılışı\nAyrıca ön bahçede çiçek tarhları dikebilir veya bahçeye saksı yerleştirebilirsiniz."
+        },
+        {
+          "model_label": "G",
+          "text": "Bracknell: Peel Center'da yeni bir mağaza açılıyor\nÖn bahçede de çiçek döşekleri dikilebilir ya da patiyoya çömlekler yerleştirilebilir."
+        },
+        {
+          "model_label": "H",
+          "text": "Ayrıca okuyun: Başlangıç pazarlıklar Bracknell: Peel Center'da yeni bir mağaza açılıyor\nÖn bahçenizde çiçek yatakları ekmek ya da bahçede küfler yerleştirmek için bir bahçe de var."
+        },
+        {
+          "model_label": "I",
+          "text": "AYRICA OKUYUN: Home Bargains Bracknell: Peel Center'da yeni mağaza açılıyor.\nAyrıca, çiçek yetiştirebileceğiniz veya saksıları yerleştirebileceğiniz bir ön bahçe de bulunmaktadır."
         }
       ]
     },
@@ -248,15 +396,15 @@
       "translations": [
         {
           "model_label": "A",
-          "text": "Econbrowser, bu anlaşmanın, \"cliff\"in tam etkisini göstermesi durumunda GDP'nin 0,6-1% daha yüksek olacağını tahmin ediyor."
+          "text": "Econbrowser, bu anlaşmanın, \"cliff\" etkisinin tam olarak uygulanması durumuna göre, GSYİH'nin 0,6-1% daha yüksek olacağını tahmin ediyor."
         },
         {
           "model_label": "B",
-          "text": "Econbrowser, anlaşmanın, GSYİH'nın, uçurumun tam olarak etkisini gösterseydi olacağından% 0.6-1 daha yüksek olacağı anlamına geldiğini tahmin ediyor (sequester görüşmelerine bağlı olarak)."
+          "text": "Econbrowser'a göre bu anlaşma, bütçe kesintilerinin tam olarak uygulanması durumunda olabilecek duruma kıyasla, GSYİH'nin %0,6-1 oranında daha yüksek olacağı anlamına geliyor (bu oran, bütçe kesintileriyle ilgili görüşmelere bağlı olarak değişebilir)."
         },
         {
           "model_label": "C",
-          "text": "Econbrowser, anlaşmanın GSYİH'nın, uçurumun tam olarak etkisini gösterseydi olabileceğinden %0.6-1 (sequester görüşmelerine bağlı olarak) daha yüksek olacağı anlamına geldiğini tahmin ediyor."
+          "text": "Econbrowser'ın tahminine göre anlaşma, GSYİH'nın, uçurumun tam olarak etkisini göstermesi durumunda olabileceğinden %0.6-1 (sequester görüşmelerine bağlı olarak) daha yüksek olacağı anlamına geliyor."
         },
         {
           "model_label": "D",
@@ -264,7 +412,23 @@
         },
         {
           "model_label": "E",
-          "text": "Econbrowser, anlaşmanın, GSYİH'nin %0.6-1'ün (sequester görüşmelerine bağlı olarak) tamamen yürürlüğe girseydi olduğundan daha yüksek olacağı anlamına geldiğini tahmin ediyor."
+          "text": "Econbrowser, anlaşmanın GSYİH'nın uçurumun tam etkisini gösterdiği takdirde GSYÎH'dan %0,6-1 (sıkılaştırma görüşmelerine bağlı olarak) daha yüksek olacağı anlamına geldiğini tahmin ediyor."
+        },
+        {
+          "model_label": "F",
+          "text": "Econbrowser'a göre, bu anlaşma, eğer kriz tam olarak yaşansaydı, GSYH'nin 0.6-1% daha düşük olacağına kıyasla, GSYH'nin 0.6-1% daha yüksek olmasına neden olacak. (Bu oran, kısıtlama görüşmelerinin sonucuna bağlı olarak değişebilir.)"
+        },
+        {
+          "model_label": "G",
+          "text": "Econbrowser, anlaşmanın, uçurumun tam etkisini alması durumunda olacağından GSYİH'nın% 0,6-1 (sistem görüşmelerine bağlı olarak) daha yüksek olacağı anlamına geldiğini tahmin ediyor."
+        },
+        {
+          "model_label": "H",
+          "text": "Econbrowser, anlaşmanın, GSYİH'nin %0.6-1'ün (sequester görüşmelerine bağlı olarak) tamamen yürürlüğe girseydi daha yüksek olacağı anlamına geldiğini tahmin ediyor."
+        },
+        {
+          "model_label": "I",
+          "text": "Econbrowser, anlaşmanın GSYİH'nın, uçurumun tam etkisini gösterseydi olacağından% 0.6-1 daha yüksek olacağı anlamına geldiğini tahmin ediyor (sequester görüşmelerine bağlı olarak)."
         }
       ]
     },
@@ -274,23 +438,39 @@
       "translations": [
         {
           "model_label": "A",
-          "text": "İvory Snow Stage 2: Aktif Bebek Çamaşır Çamaşır deterjanı, sürünen, aktif bebeğiniz için özel olarak tasarlanmıştır."
+          "text": "Ama o bezelye püresi bir sonraki yıkama seansında da ayakta kalmak zorunda değil. Ivory Snow Stage 2: Active Baby çamaşır deterjanı, özellikle tırmanan, aktif bebeğiniz için tasarlanmıştır."
         },
         {
           "model_label": "B",
-          "text": "Fildişi Kar Aşaması 2: Aktif Bebek çamaşır deterjanı özellikle sürünen, aktif bebeğiniz için tasarlanmıştır."
+          "text": "Ancak o bezelye lekesi bir sonraki yıkamada yok olmak zorunda değil. Ivory Snow Stage 2: Active Baby çamaşır deterjanı, emeklemeye başlayan ve hareketli bebeğiniz için özel olarak tasarlanmıştır."
         },
         {
           "model_label": "C",
-          "text": "Ama bu bezelye püresi karışımının bir sonraki yıkama sırasında hayatta kalması gerekmiyor. Ivory Snow Stage 2: Active Baby çamaşır deterjanı özellikle aktif, sürünen bebeğiniz için tasarlanmıştır."
+          "text": "Ivory Snow 2. Aşama: Aktif Bebek çamaşır deterjanı özellikle emekleyen, aktif bebeğiniz için tasarlanmıştır."
         },
         {
           "model_label": "D",
-          "text": "Ivory Snow Stage 2: Active Baby çamaşır deterjanı özellikle sürünen, aktif bebeğiniz için tasarlanmıştır."
+          "text": "Ama bu bezelye püresi karışımının bir sonraki yıkama sırasında hayatta kalması gerekmiyor. Ivory Snow Stage 2: Active Baby çamaşır deterjanı özellikle aktif, sürünen bebeğiniz için tasarlanmıştır."
         },
         {
           "model_label": "E",
-          "text": "Ama bu haşlanmış bez çorbası karışıklığı, bir sonraki yıkamadan kurtulmak zorunda değil. Ivory Snow 2. Aşama: Aktif Bebek çamaşır deterjanı, hareketli ve aktif bebeğiniz için özel olarak tasarlanmıştır."
+          "text": "İvory Snow Stage 2: Aktif Bebek Çamaşır Çamaşır deterjanı, sürünen, aktif bebeğiniz için özel olarak tasarlanmıştır."
+        },
+        {
+          "model_label": "F",
+          "text": "Ama bu haşlanmış bez çorbası karışıklığı, bir sonraki yıkamadan kurtulmak zorunda değil. Ivory Snow 2. Aşama: Aktif Bebek çamaşırı deterjanı, hareketli ve aktif bebeğiniz için özel olarak tasarlanmıştır."
+        },
+        {
+          "model_label": "G",
+          "text": "Ivory Snow Stage 2: Active Baby çamaşır deterjanı özellikle sürünen, aktif bebeğiniz için tasarlanmıştır."
+        },
+        {
+          "model_label": "H",
+          "text": "Ancak, bezelye püresiyle yapılan o karmaşa, bir sonraki yıkamada sona erebilir. Ivory Snow 2. Aşama: Aktif Bebek deterjanı, emekleyen ve hareketli bebeğiniz için özel olarak formüle edilmiştir."
+        },
+        {
+          "model_label": "I",
+          "text": "Fildişi Kar Aşaması 2: Aktif Bebek çamaşır deterjanı özellikle sürünen, aktif bebeğiniz için tasarlanmıştır."
         }
       ]
     },
@@ -300,23 +480,39 @@
       "translations": [
         {
           "model_label": "A",
-          "text": "Bu \"kendini kandırmış\" yapıda her şey yolunda çünkü normalde bu mantığı çürütmeye çalışan güçler, onu Siyah kitlelere pazarlamakla ilgileniyorlar."
-        },
-        {
-          "model_label": "B",
           "text": "Bu \"kendini beğenmiş\" yapı ile her şey yolunda çünkü normalde bu mantığı ortaya çıkarmaya çalışan güçlerin siyah kitlelere pazarlama konusunda özel bir ilgisi var."
         },
         {
-          "model_label": "C",
-          "text": "Bu \"kendini beğenmiş\" yapı ile her şey yolunda çünkü normalde bu mantığı çürütmeye çalışan güçlerin siyah kitlelere pazarlama yapma konusunda özel bir çıkarları var."
+          "model_label": "B",
+          "text": "Bu \"kendi kendini kandırma\" yapısı ile her şey yolunda çünkü normalde bu mantığı çürütmeye çalışan güçlerin onu Siyah kitlelere pazarlamada özel bir çıkarı var."
         },
         {
-          "model_label": "D",
+          "model_label": "C",
           "text": "Bu \"kendini kandıran\" yapı ile her şey yolunda çünkü normalde bu mantıkı reddetmek isteyen güçler, bunu Siyahi kitlelere pazarlamada bir çıkara sahiptir."
         },
         {
+          "model_label": "D",
+          "text": "Bu \"kendi kendine dayatılan\" yaklaşımın her şeyiyle sorunsuz olması, çünkü normalde bu mantığı çürütmeye çalışan güçlerin, bu yaklaşımı geniş Afro-Amerikan kitlelerine pazarlamaktan çıkarı olduğu için kaynaklanmaktadır."
+        },
+        {
           "model_label": "E",
-          "text": "Bu \"kendine yönelik\" yapının her şeyi yolunda olduğu, çünkü bu mantığı çürütmeye çalışan güçler, bunun siyah topluma pazarlanmasından doğrudan fayda sağlarlar."
+          "text": "Bu \"kendini beğenmiş\" yapı ile her şey yolunda çünkü normalde bu mantığı çürütmeye çalışan güçlerin siyah kitlelere pazarlama yapma konusunda özel bir çıkarları var."
+        },
+        {
+          "model_label": "F",
+          "text": "Bu \"kendine kanıt bulan\" yapısıyla her şey yolunda çünkü, bu mantığı genellikle çürütmeye çalışan güçler, bunu Siyah topluma pazarlamakla kişisel bir çıkar ilişkisine sahiptir."
+        },
+        {
+          "model_label": "G",
+          "text": "Bu \"kendi kendini destekleyen\" yapıyla her şey yolunda çünkü, normalde bu mantığı çürütmeye çalışan güçler, bunu siyahilere pazarlamaktan çıkar sağlamaktadır."
+        },
+        {
+          "model_label": "H",
+          "text": "Bu \"kendini kandırmış\" yapıda her şey yolunda çünkü normalde bu mantığı çürütmeye çalışan güçler, onu Siyah kitlelere pazarlamakla ilgileniyorlar."
+        },
+        {
+          "model_label": "I",
+          "text": "Bu \"kendini beğenmiş\" yapı ile her şey yolunda, çünkü normalde bu mantığı yıkmaya çalışan güçler, siyah kitlelere pazarlamada kendi çıkarlarına sahipler."
         }
       ]
     },
@@ -326,23 +522,39 @@
       "translations": [
         {
           "model_label": "A",
-          "text": "Eğer bu alan adının sahibiyseniz, Site Yöneticisi arayüzüne giriş yapın, sonra sitenize Web sayfaları yayınlama hakkında daha fazla bilgi için çevrimiçi Yardım' daki Hızlı Başlama kılavuzuna gidin."
+          "text": "Bu alan adının sahibiyseniz, Site Yöneticisi arayüzüne giriş yapın, sonra sitenize web sayfaları yayınlamak hakkında daha fazla bilgi için çevrimiçi Yardım' daki Hızlı Başlangıç kılavuzuna gidin."
         },
         {
           "model_label": "B",
-          "text": "Bu etki alanına sahipseniz, Site Yöneticisi arayüzüne giriş yapın ve sitenize Web sayfaları yayınlama hakkında daha fazla bilgi için çevrimiçi Yardım'daki Hızlı Başlatma kılavuzuna gidin."
+          "text": "Bu alan adının sahibiyseniz, Site Yönetici arayüzüne giriş yapın, ardından sitenize web sayfaları yayınlama hakkında daha fazla bilgi için çevrimiçi yardım bölümündeki \"Hızlı başlangıç\" kılavuzuna gidin."
         },
         {
           "model_label": "C",
-          "text": "Bu alanın sahibiyseniz, Site Yöneticisi arayüzüne giriş yapın ve sitenize web sayfalarını yayınlamak hakkında daha fazla bilgi için çevrimiçi Yardım'daki Hızlı Başlatma kılavuzuna gidin."
+          "text": "Bu etki alanına sahipseniz, Site Yöneticisi arayüzüne giriş yapın ve sitenize Web sayfaları yayınlama hakkında daha fazla bilgi için çevrimiçi Yardım'daki Hızlı Başlatma kılavuzuna gidin."
         },
         {
           "model_label": "D",
-          "text": "Bu etki alanına sahipseniz, Site Yöneticisi arayüzüne giriş yapın, daha sonra sitenize Web sayfaları yayınlamak hakkında daha fazla bilgi için çevrimiçi Yardımdaki Hızlı Başlatma kılavuzuna gidin."
+          "text": "Bu alanın sahibiyseniz, Site Yöneticisi arayüzüne giriş yapın ve sitenize web sayfalarını yayınlamak hakkında daha fazla bilgi için çevrimiçi Yardım'daki Hızlı Başlatma kılavuzuna gidin."
         },
         {
           "model_label": "E",
-          "text": "Eğer bu alan adını kullanıyorsanız, Site Yöneticisi arayüzüne giriş yapın, ardından web sayfalarınızı sitenize yayınlamakla ilgili daha fazla bilgi için çevrimiçi Yardım bölümündeki \"Hızlı Başlangıç\" kılavusuna gidin."
+          "text": "Eğer bu alan adını kullanıyorsanız, Site Yöneticisi arayüzüne giriş yapın, ardından web sayfalarını sitenize yayınlama hakkında daha fazla bilgi için çevrimiçi Yardım bölümündeki \"Hızlı Başlangıç\" kılavarına gidin."
+        },
+        {
+          "model_label": "F",
+          "text": "Bu alan adının sahibiyseniz, Site Yöneticisi arayüzüne giriş yapın ve ardından web sayfalarını sitenize nasıl yayınlayacağınız hakkında daha fazla bilgi için çevrimiçi Yardım bölümündeki Hızlı Başlangıç Kılavuzu'na gidin."
+        },
+        {
+          "model_label": "G",
+          "text": "Eğer bu alan adının sahibiyseniz, Site Yöneticisi arayüzüne giriş yapın, sonra sitenize Web sayfaları yayınlama hakkında daha fazla bilgi için çevrimiçi Yardım' daki Hızlı Başlama kılavuzuna gidin."
+        },
+        {
+          "model_label": "H",
+          "text": "Bu etki alanının sahibiyseniz, Site Yöneticisi arayüzüne giriş yapın ve ardından sitenize Web sayfaları yayınlama hakkında daha fazla bilgi için çevrimiçi Yardım'daki Hızlı Başlangıç kılavuzuna gidin."
+        },
+        {
+          "model_label": "I",
+          "text": "Bu etki alanına sahipseniz, Site Yöneticisi arayüzüne giriş yapın, daha sonra sitenize Web sayfaları yayınlamak hakkında daha fazla bilgi için çevrimiçi Yardımdaki Hızlı Başlatma kılavuzuna gidin."
         }
       ]
     },
@@ -352,23 +564,39 @@
       "translations": [
         {
           "model_label": "A",
-          "text": "Wilson, dün Crowne Plaza davetli maçında ilk golculardan biriydi ve bunu en iyi şekilde 4-66'la 24 noktaya yükseltti ve 3--207'ye eşleşerek 28. oldu."
+          "text": "Wilson, dün Crowne Plaza Invitational'da tee atan ilk golfçülerden biriydi ve 4'ün altında 66 ile 24 sıra yükselerek 3'ün altına 207 ile eşitlik kurarak 28. sıraya yükseldi."
         },
         {
           "model_label": "B",
-          "text": "Wilson dün Crowne Plaza Invitational'da ilk 16'ya giren ilk golfçülerden biriydi ve 66'nın 4'ü altında bir dereceyle 24 sıra yükselerek 207'nin 3'ü altına düşerek 18. sırada yer aldı."
+          "text": "Wilson, dün Crowne Plaza Davet Turnuvası'nda golfe başlayan ilk golfçüler arasında yer aldı ve 4'ün altında 66 sayı ile 24 basamak yükselerek 3'ün altında 207 sayı ile 28. sıraya yükseldi."
         },
         {
           "model_label": "C",
-          "text": "Wilson dün Crowne Plaza Invitational'da golfe giren ilk golfçilerden biriydi ve 4 alt 66 ile 24 puan yükselerek 28'inci sırada 3 alt 207'ye ulaştı."
+          "text": "Wilson dün Crowne Plaza Invitational'da golfe giren ilk golfçülerden biriydi ve 4-under 66 ile 24 puan yükselerek 3-under 207'de 28. sırada yer aldı."
         },
         {
           "model_label": "D",
-          "text": "Wilson dün Crowne Plaza Invitational'da ilk golfçülerden biriydi ve 4'ün altındaki 66'yla en iyisini yaptı. 24 pozisyon yükseldi ve 3'ün altındaki 207'yle 28. sırada yer aldı."
+          "text": "Wilson, dün Crowne Plaza Invitational'da ilk tee'ye çıkan golfçülerden biriydi ve 4 under 66 ile 3 under 207'de 28. sırada yer alarak 24 sıra yükseldi."
         },
         {
           "model_label": "E",
-          "text": "Wilson, dün Crowne Plaza Invitational'da ilk tee'ye çıkan golfçülerden biriydi ve 4 under 66 ile harika bir performans sergileyerek 24 sıra yükselerek 3 under 207 ile 28. sırada bir puana denk geldi."
+          "text": "Wilson, dün Crowne Plaza Invitational'da ilk tee vuruşunu yapan golfçülerden biriydi ve 4 vuruş altında 66 skor yaparak 24 sıra yükseldi ve toplamda 3 vuruş altında 207 skorla 28. sırada yer aldı."
+        },
+        {
+          "model_label": "F",
+          "text": "Wilson, dün Crowne Plaza Invitational'da sahaya çıkan ilk golfçülerden biriydi ve bu fırsatı değerlendirerek 4 vuruş altı, yani 66 vuruşla oynadı. Bu sayede 24 sıra yükselerek 3 vuruş altı, yani 207 vuruşla 28. sırada yer aldı."
+        },
+        {
+          "model_label": "G",
+          "text": "Wilson dün Crowne Plaza Invitational'da ilk 16'ya giren ilk golfçülerden biriydi ve 66'nın 4'ü altında bir dereceyle 24 sıra yükselerek 207'nin 3'ü altına düşerek 18. sırada yer aldı."
+        },
+        {
+          "model_label": "H",
+          "text": "Wilson, dün Crowne Plaza davetli maçında oyunculuk yapan ilk golfçilerden biriydi ve bunu en iyi şekilde 4-66'la 24 noktaya yükseltti ve 3-207'ye 28'inci sıraya çıktı."
+        },
+        {
+          "model_label": "I",
+          "text": "Wilson, dün Crowne Plaza Invitational'da ilk golferlerden biriydi ve 4'ün altındaki 66'yla en iyisini yaptı. 24 pozisyon yükseldi ve 3'ün altındaki 207'yle 28. sırada yer aldı."
         }
       ]
     },
@@ -378,23 +606,39 @@
       "translations": [
         {
           "model_label": "A",
-          "text": "Bir toplumsal organizma sayısı kaç volkanik hızlı nakliye cialis yumuşak yığın yukarı fırça copolymer sintez edildi ki aksi takdirde ağrı ve parçacıklar olmadan görülemez."
+          "text": "Ağrı ve partiküller olmasaydı, aksi takdirde gözlemlenemeyecek olan, volkanik hızlı sevkiyat sialis yumuşak yığın fırça kopolimerinin sentezlendiği, sayısal bir sosyal organizma."
         },
         {
           "model_label": "B",
-          "text": "Bir sosyal organizma, sayı ifade eden, bu sayede başka bir şekilde görülmeyen, ancak ağrının ve parçacıkların etkisiyle sentezlenen volkanik hızlı gönderim, Cialis soft, polimer karışımı."
-        },
-        {
-          "model_label": "C",
-          "text": "Bir toplumsal organizma sayısı, ne kadar çok volkanik hızlı nakliye cialis yumuşak yığın fırça copolymer sentez edildiğini gösterir, aksi takdirde ağrı ve parçacıklar olmadan görülemezdi."
-        },
-        {
-          "model_label": "D",
           "text": "Bir toplumsal organizma sayısını göstermek için ne kadar volkanik hızlı nakliye cialis yumuşak yığılmış fırça kopolymeri sentezlenmiştir, aksi takdirde acı ve parçacıklar olmadan görülemez."
         },
         {
+          "model_label": "C",
+          "text": "Bir sosyal organizma, başka türlü acı ve parçacıklar olmadan görülemeyecek olan, ne kadar volkanik hızlı teslimat cialis soft pile up brush kopolimeri sentezlendiğini gösteren bir sayı."
+        },
+        {
+          "model_label": "D",
+          "text": "Bir toplumsal organizma sayısı kaç volkanik hızlı nakliye cialis yumuşak yığın yukarı fırça copolymer sintez edildi ki aksi takdirde ağrı ve parçacıklar olmadan görülemez."
+        },
+        {
           "model_label": "E",
+          "text": "Bir toplumsal organizma sayısı, ne kadar çok volkanik hızlı nakliye cialis yumuşak yığın fırça copolymer sentez edildiğini gösterir, aksi takdirde ağrı ve parçacıklar olmadan görülemezdi."
+        },
+        {
+          "model_label": "F",
+          "text": "Bir sosyal organizma, volkanik hızlı gönderim, Cialis soft, polimer, biriktirme, birleşimi, bu durumun aksi halde gözle görülmemesi için ağrı ve parçacıkların varlığına işaret eden bir sayı."
+        },
+        {
+          "model_label": "G",
           "text": "Bir sosyal organizma sayısı, kaç tane volkanik hızlı kargo cialis yumuşak yığın fırça kopolimerden sentezlendiğini gösterir. Aksi takdirde acı ve parçacıklar olmadan görülmezdi."
+        },
+        {
+          "model_label": "H",
+          "text": "Toplumsal bir organizma. Kaç tane volkanik kopolymer sentezlendiğini gösteren sayı. Acı ve parçacıklar olmadan başka türlü görülmeyecekti."
+        },
+        {
+          "model_label": "I",
+          "text": "Ağrı ve parçacıkların olmadığı durumlarda normalde gözlemlenmeyecek sayıda volkanik, hızlı gönderim sağlayan, yumuşak bir polimer bileşiği sentezlendi."
         }
       ]
     },
@@ -404,23 +648,39 @@
       "translations": [
         {
           "model_label": "A",
-          "text": "SeCTer yönetim kurulunun başkanı ve Groton'un kasaba yöneticisi Mark Oefinger, bölgenin alt üssü küçültmemesi veya yeniden düzenlemesi için bir savunma formu oluşturmasında çok, çok kritik bir rol oynadı."
+          "text": "SeCTer yönetim kurulu başkanı ve Groton'un kasaba yöneticisi Mark Oefinger, bölgenin alt üssü küçültmemesi veya yeniden düzenlemesi için bir savunma formu oluşturmada çok, çok kritik bir rol oynadı."
         },
         {
           "model_label": "B",
-          "text": "SeCTer yönetim kurulu başkanı ve Groton'un şehir müdürü Mark Oefinger, \"O, bölgenin alt üssü küçültmemesi veya yeniden düzenlememesi için bir savunma oluşturmada çok, çok kritik bir rol oynadı\" dedi."
+          "text": "SeCTer yönetim kurulu başkanı ve Groton kasaba yöneticisi Mark Oefinger, \"Bölgedeki askeri üssün küçültülmesini veya yeniden yapılandırılmasını engellemek için bir savunma stratejisi oluşturulmasında çok önemli bir rol oynadı\" dedi."
         },
         {
           "model_label": "C",
-          "text": "\"Bölgenin, sub tabanının küçültülmemesi veya yeniden yapılandırılmaması için bir savunma oluşturmada çok önemli bir rol oynadı,\" dedi SeCTer yönetim kurulu başkanı ve Groton'un belediye başkanı Mark Oefinger."
+          "text": "\"Bölgedeki askeri üssün küçültülmesini veya yeniden yapılandırılmasını engellemek için bir savunma stratejisi oluşturmada çok, çok önemli bir rol oynadı,\" dedi SeCTer yönetim kurulu başkanı ve Groton belediye yöneticisi Mark Oefinger."
         },
         {
           "model_label": "D",
-          "text": "SeCTer yönetim kurulu başkanı ve Groton Belediye Başkanı Mark Oefinger, \"Bölge için savunma oluşturmada çok ama çok kritik bir rol oynadı. Alt üssün küçültülmemesi veya yeniden düzenlemesi için.\" dedi."
+          "text": "SeCTer yönetim kurulu başkanı ve Groton belediye başkanı Mark Oefinger, \"Bölgenin alt üssü küçültmemesi veya yeniden düzenlememesi için savunma oluşturmada çok çok kritik bir rol oynadı.\" dedi."
         },
         {
           "model_label": "E",
-          "text": "SeCTer yönetim kurulu başkanı ve Groton'un belediye yöneticisi Mark Oefinger, bölgenin alt üssü küçültmemesi veya yeniden hizalamaması için bir savunma oluşturmada çok, çok kritik bir rol oynadı."
+          "text": "SeCTer yönetim kurulu başkanı ve Groton'un şehir müdürü Mark Oefinger, \"O, bölgenin alt üssü küçültmemesi veya yeniden düzenlememesi için bir savunma oluşturmada çok, çok kritik bir rol oynadı\" dedi."
+        },
+        {
+          "model_label": "F",
+          "text": "\"Bölgenin, sub tabanının küçültülmemesi veya yeniden yapılandırılmaması için bir savunma oluşturmada çok önemli bir rol oynadı,\" dedi SeCTer yönetim kurulu başkanı ve Groton'un belediye başkanı Mark Oefinger."
+        },
+        {
+          "model_label": "G",
+          "text": "SeCTer yönetim kurulu başkanı ve Groton'un şehir yöneticisi Mark Oefinger, \"Bölgenin denizaltı üssünü küçültmemesi veya yeniden düzenlememesi için bir savunma oluşturmada çok, çok kritik bir rol oynadı\" dedi."
+        },
+        {
+          "model_label": "H",
+          "text": "SeCTer yönetim kurulunun başkanı ve Groton'un belediye yöneticisi Mark Oefinger, bölgenin alt üssü küçültmemesi veya yeniden düzenlememesi için bir savunma oluşturmada çok, çok kritik bir rol oynadı."
+        },
+        {
+          "model_label": "I",
+          "text": "SeCTer yönetim kurulu başkanı ve Groton belediye başkanı Mark Oefinger, \"Bölge için savunma oluşturmada çok ama çok kritik bir rol oynadı. Alt üssün küçültülmemesi veya yeniden düzenlemesi için.\" dedi."
         }
       ]
     },
@@ -430,23 +690,39 @@
       "translations": [
         {
           "model_label": "A",
-          "text": "DFM'de dosyalayıcılar için kimlik bilgilerini ayarlamak için \"Düzenle\"ye tıklayın. Aksi takdirde, komut satırından şu komutu çalıştırın:\n# dfm host add <depolama sistemi IP adresi>\n11 Temmuz 2012 00:00\nAğdaki depolama sistemlerinin bulunması, ön ek uzunluğuna da bağlıdır."
+          "text": "DFM'deki dosya sunucuları için kimlik bilgilerini ayarlamak için \"Düzenle\" seçeneğine tıklayın.\nAksi takdirde, komut satırından şu komutu çalıştırın:\n# dfm host add <depolama sistemi IP adresi>\n2012-07-11 00:00\nAğ üzerindeki depolama sistemlerinin keşfi, ön ek uzunluğuna da bağlıdır."
         },
         {
           "model_label": "B",
-          "text": "DFM'de dosyalar için kimlik bilgileri ayarlamak için Düzenleme'ye tıklayın\nelse, from cli, run (başka türlü, cli'den, koş)\n# dfm host ekle <storage system ip>\n2012-07-11 12:00 AM\nAğdaki depolama sistemlerinin keşfi de önek uzunluğuna bağlıdır."
+          "text": "command: dfm host add <storage system ip># dfmsql add <server ip> # dfmauth add <username># add <password># set dfml host add 127.0.0,128.0 and 192.168.1.1# elseelseelse, else else, from cli, click on Edit, run the command:# dfsql add 2012-07-11 11:00 AM# dsql add dfsql# add dfsl# add else# add authentication# add credentials# add filename# add name# add password# add username# set credential# add key# add id# add prefix# add ip# add config# add security# add network# add storage# add server# add client# add service"
         },
         {
           "model_label": "C",
-          "text": "DFM'de dosyaları gönderenler için kimlik bilgilerini ayarlamak için Edit else'e tıklayın, cli'den, yürütün # dfm host add <storage system ip> 2012-07-11 12:00 AM Ağın üzerindeki depolama sistemlerinin keşfi önek uzunluğuna da bağlıdır."
+          "text": "DFM'de dosyalayıcılar için kimlik bilgileri ayarlamak için Düzenle'yi tıklayın\nelse, cli, run'dan\n# dfm host add <depolama sistemi ip>\n2012-07-11 12:00 AM\nAğdaki depolama sistemlerinin keşfi de önek uzunluğuna bağlıdır."
         },
         {
           "model_label": "D",
-          "text": "DFM'de dosyalayıcılar için kimlik bilgilerini ayarlamak için Düzenle'yi tıklayın\nelse, cli, run'dan\n# dfm host add <depolama sistemi ip>\n2012-07-11 12:00 AM\nAğdaki depolama sistemlerinin keşfi de önek uzunluğuna bağlıdır."
+          "text": "DFM'de dosyalar için kimlik bilgileri ayarlamak için Düzenleme'ye tıklayın\nelse, from cli, run (başka türlü, cli'den, koş)\n# dfm host ekle <storage system ip>\n2012-07-11 12:00 AM\nAğdaki depolama sistemlerinin keşfi de önek uzunluğuna bağlıdır."
         },
         {
           "model_label": "E",
+          "text": "DFM dosyalayıcılar için kimlik bilgilerini ayarlamak için, Düzenle'ye tıklayın\nAksi takdirde, Cli'den kaç.\n# dfm host add <depolama sistemi ip>\n2012-07-11 12:00 AM\nAğdaki depolama sistemlerinin bulunması da önek uzunluğuna bağlıdır."
+        },
+        {
+          "model_label": "F",
+          "text": "dfm host add <storage system ip> 2012-07-11 12:00 AM If you want to set credentials for a filer, from the command line, run: dfmip add <file system ip > 212.168.1.1 else"
+        },
+        {
+          "model_label": "G",
+          "text": "DFM'de dosyalayıcılar için kimlik bilgilerini ayarlamak için \"Düzenle\"ye tıklayın. Aksi takdirde, komut satırından şu komutu çalıştırın:\n# dfm host add <depolama sistemi ip adresi>\n11 Temmuz 2012 00:00\nAğdaki depolama sistemlerinin bulunması, ön ek uzunluğuna da bağlıdır."
+        },
+        {
+          "model_label": "H",
           "text": "DFM'deki dosyalar için kimlik bilgileri ayarlamak için Düzenleme'ye tıklayın\nYoksa, cli, run'dan\n# dfm host ekle < depolama sistemi ip>\n2012-07-11 12:00 AM\nAğdaki depolama sistemlerinin keşfi, önbellek uzunluğuna da bağlıdır."
+        },
+        {
+          "model_label": "I",
+          "text": "DFM'de kullanıcı kimlik bilgilerini ayarlamak için \"Düzenle\"ye tıklayın; aksi takdirde, komut satırından şunu çalıştırın:\n# dfm host add <depolama sistemi IP adresi>\n11.07.2012 00:00\n\nAğdaki depolama sistemlerinin bulunması, ön ek uzunluğuna da bağlıdır."
         }
       ]
     },
@@ -456,23 +732,39 @@
       "translations": [
         {
           "model_label": "A",
-          "text": "Tarihin bu parçalarıyla oynamalarının şekli iğrenç. www.riveroffun.blospot.com adresindeki blogumu ziyaret edin. Bu, Popeye'nin Bluto'yu gerçekten dünya çapında dövdüğü blog mu?"
+          "text": "Bu tarihi eserlerle keyfi bir şekilde nasıl oynadıkları mide bulandırıcı. Blogumu www.riveroffun.blospot.com adresinde ziyaret edin.\n\nBu, Popeye'nin Bluto'yu kelimenin tam anlamıyla dünyanın dört bir yanına fırlattığı bölüm mü?"
         },
         {
           "model_label": "B",
-          "text": "Tarihin bu parçalarıyla kendiliğinden oynama şekli iğrenç . Blogumu www.riveroffun.blospot.com adresinde ziyaret edin .\nPopeye'nin Bluto'yu dünya çapında vurduğu bu mu?"
+          "text": "Tarihin bu parçalarıyla keyfi olarak oynama şekilleri iğrenç. www.riveroffun.blospot.com adresindeki blogumu ziyaret edin.\nPopeye'ın Bluto'yu dünyanın öbür ucuna attığı filmle aynı film mi?"
         },
         {
           "model_label": "C",
-          "text": "Bu tarihi eserleri keyfi bir şekilde manipüle etme biçimi rahatsız edici. Bloguma www.riveroffun.blospot.com adresinden göz atın.\nBu, Popeye'nin aslında Bluto'yu dünyadaki her yere vurduğu aynı blog mu?"
-        },
-        {
-          "model_label": "D",
           "text": "Tarihin bu parçalarıyla keyfi bir şekilde oynamaları iğrenç.Blogumu www.riveroffun.blospot.com adresinde ziyaret edin.\nPopeye'nin Bluto'yu dünya çapında vurduğu filmle aynı mı?"
         },
         {
+          "model_label": "D",
+          "text": "I'm a fan of the 1980s and 1000s of the movie \"The Greatest Show on Earth\" and I'm sure you'll find a few of the scenes in this movie that you'd like to see.I"
+        },
+        {
           "model_label": "E",
+          "text": "Bu tarihi eserlerle keyfi bir şekilde oynama biçimleri mide bulandırıcı. Blogumu www.riveroffun.blospot.com adresinden ziyaret edebilirsiniz.\nBu, Popeye'ın Bluto'yu kelimenin tam anlamıyla dünyanın dört bir yanına savurduğu çizgi film mi?"
+        },
+        {
+          "model_label": "F",
+          "text": "Bu tarihi eserlerle keyfi bir şekilde oynama biçimi rahatsız edici. Benim bloguma www.riveroffun.blospot.com adresinden göz atın.\n\nBu, Popeye'nin aslında Bluto'yu dünyada yere serdiği aynı blog mu?"
+        },
+        {
+          "model_label": "G",
           "text": "Tarihin bu parçalarıyla keyfi olarak oynamaları iğrenç. www.riveroffun.blospot.com adresindeki blogumu ziyaret edin.\nBu Popeye'nin Bluto'yu küre çapında yere serdiği filmle aynı mı?"
+        },
+        {
+          "model_label": "H",
+          "text": "Tarihin bu parçalarıyla kendiliğinden oynama şekilleri iğrenç . Blogumu www.riveroffun.blospot.com adresinde ziyaret edin .\nPopeye'nin Bluto'yu dünya çapında vurduğu bu mu?"
+        },
+        {
+          "model_label": "I",
+          "text": "more information.I'm a 2008 graduate of the University of California, Berkeley.I have a 1999 graduate degree in History from the University Of California, San Diego.I am a graduate from the American University of Chicago.I wonderIs this the same one where Popeye knocks Bluto across the globe?Is it the same?I am not sure.Isn't this the one where Bluto knocks Popeye across the globus?I've got a question for you, Mr. President.I thinkIsI this the way they play around these peces of history?I think I have a questionIs not this the manner in which they play about these peeces of history.I don't knowIs that the same way in which this is played around?I don’t know.I knowI know I don'ts knowI don´t know"
         }
       ]
     },
@@ -482,23 +774,39 @@
       "translations": [
         {
           "model_label": "A",
-          "text": "Finans sektörünün bu görüşünü benimseyen, bir avuç çalışanı olan, soyutlama ile ilgili yemin ifadeleri imzalama prosedürlerini izler, ancak yemin ifadelerin altında bulunan gerçekler kanıtlanmış olarak doğru."
+          "text": "Bu görüşe göre, finans sektöründe faaliyet gösteren ve az sayıda çalışanı olan bir kuruluş, ipotekle ilgili yasal belgelerin hazırlanmasında prosedürleri izliyor, ancak bu belgelerin temelindeki bilgiler açıkça doğru."
         },
         {
           "model_label": "B",
-          "text": "Bu bakış açısıyla, finans sektöründe çalışan, birkaç kişiden oluşan bir ekibin, ipoteğe dayalı beyanlarla ilgili prosedürleri takip etmesi, ancak bu beyanların altında yatan gerçeklerin açıkça doğru olması."
-        },
-        {
-          "model_label": "C",
           "text": "Bu görüşü benimseyen finans endüstrisi, bir avuç çalışanı var, kapatma ile ilgili yeminli ifadeleri imzalama prosedürlerini takip ediyorlar, ancak yeminli ifadelerin altında yatan gerçekler kanıtlanmış olarak doğru."
         },
         {
+          "model_label": "C",
+          "text": "Bu görüşü benimseyen finans sektörü, bir avuç çalışanı var, hacizle ilgili yeminli ifadeleri imzalarken prosedürleri takip ediyorlar, ama yeminli ifadelerin altında yatan gerçekler kanıtlanabilir şekilde doğru."
+        },
+        {
           "model_label": "D",
-          "text": "Bu bakış açısını benimseyen finans sektörü, bir avuç çalışanı var, tecavüzle ilgili yeminli ifadeleri imzalamak için prosedürleri takip ediyor, ama yeminli ifadelerin altında yatan gerçekler kanıtlanabilir derecede doğrudur."
+          "text": "Bu görüşe sahip olan finans sektörü, bir avuç çalışanı var, ipotek ile ilgili yeminli ifadeleri imzalamada prosedürleri izliyor, ama yeminlerin altında yatan gerçekler kanıtlanarak doğru."
         },
         {
           "model_label": "E",
-          "text": "Bu görüşe sahip olan finans sektörü, bir avuç çalışanı var, ipotek ile ilgili yeminli ifadeleri imzalamada prosedürleri izliyor, ama yeminlerin altında yatan gerçekler kanıtlanarak doğru."
+          "text": "Bu görüşe göre, finans sektöründe faaliyet gösteren ve az sayıda çalışanı olan şirketler, ipotekle ilgili yeminli beyanların hazırlanması ve imzalanması süreçlerine uymaktadır, ancak bu beyanların dayandığı gerçekler açıkça doğrulanabilir niteliktedir."
+        },
+        {
+          "model_label": "F",
+          "text": "Finans sektöründeki bu görüşe sahip olan, bir avuç çalışanı olan, ipotek ile ilgili beyanname imzalama prosedürlerini izleyen, ancak beyannamesinde yer alan gerçekler kanıtlanabilir şekilde doğrudur."
+        },
+        {
+          "model_label": "G",
+          "text": "Finans sektörünün bu görüşünü benimseyen, bir avuç çalışanı olan, soyutlama ile ilgili yemin ifadeleri imzalama prosedürlerini izler, ancak yemin ifadelerin altında bulunan gerçekler kanıtlanmış olarak doğru."
+        },
+        {
+          "model_label": "H",
+          "text": "Bu bakış açısına sahip olan finans sektöründe, bir avuç çalışanı var, tecavüzle ilgili yeminli ifadeleri imzalamak için prosedürleri takip ediyorlar, ancak yeminli ifadelerin altında yatan gerçekler kanıtlanabilir derecede doğru."
+        },
+        {
+          "model_label": "I",
+          "text": "Bu bakış açısıyla, finans sektöründe çalışan ve ipoteğe ilişkin yeminlerin hazırlanmasıyla ilgili prosedürleri uygulayan, ancak bu yeminlerin altında yatan gerçeklerin açıkça doğru olduğunu gören bir grup çalışan bulunmaktadır."
         }
       ]
     },
@@ -508,22 +816,38 @@
       "translations": [
         {
           "model_label": "A",
-          "text": "O adam Steven belki de konuştuğum en dürüst insandır. Eğer yerel olsaydım arabamı oraya götürmek için bir neden bulurdum. Zorlu bir Cumartesi günü iki arabayla gittik, yağ değişimi ve lastik değişmesi gerektiğini kısa bir süre önce duyduk."
+          "text": "Bu Steven denen herif konuştuğum en dürüst insan olabilir.\nİki arabayla yoğun bir Cumartesi günü gittik. Yağ değişimi ve lastik değişimi yapmamız gerektiğine dair kısa bir bildirim aldık."
         },
         {
           "model_label": "B",
-          "text": "Steven, belki de bugüne kadar konuştuğum en dürüst insan.\nİki arabayla meşgul bir cumartesi günü yola çıktık. Yağ değişikliği ve lastik değişikliği yapmamız gerektiği için kısa bir süre önce haber verdik."
+          "text": "but he's a very good guy and he'll be happy to help you out.Thank 10001011102016-09-15T00:00,002+00.0We went on a busy Saturday with two cars, short notice that we needed oil changes and tire rotationsWe went to...We wentWe went We wentWe wereWe went we wentWe weren'tWe were notWe weren't We were not We weren’tWe weren’t We weren’WeWe wereNoWe were we were not"
         },
         {
           "model_label": "C",
-          "text": "O adam Steven, hiç tanımadığım en dürüst insanlardan biri olabilir - Eğer ben de o bölgede yaşasaydım, arabamı oraya götürmek için sebepler bulurdum.\n\nYoğun bir Cumartesi günü, iki arayla gittik. Motor yağı ve lastik değişimi için kısa bir sürede haber verdik."
+          "text": "Steven adlı o adam, konuştuğum en dürüst insan olabilir - Eğer o bölgede yaşasaydım, aracımı oraya götürmek için bahaneler bulurdum.\n\nYoğun bir Cumartesi günü, iki araçla gittik. Kısa bir süre önce yağ değişimleri ve lastik rotasyonları yaptırmak istediğimizi söylemiştik."
         },
         {
           "model_label": "D",
-          "text": "Bu adam Steven şimdiye kadar konuştuğum en dürüst insan olabilir.\nÇok yoğun bir Cumartesi günü iki arabayla yola çıktık, kısa bir süre sonra yağ değişimi ve lastik dönüşümleri gerektiği farkına vardık."
+          "text": "Steven adında o adam, şimdiye kadar konuştuğum en dürüst insan olabilir - Eğer o bölgede yaşıyor olsaydım, arabamı oraya götürmek için bahaneler uydururdum.\n\nYoğun bir Cumartesi günü iki arabayla oraya gittik ve yağ değişimi ile lastik rotasyonu yaptırmamız gerekiyordu, bunu da son anda haber vermiştik."
         },
         {
           "model_label": "E",
+          "text": "Şu Steven denen herif belki de konuştuğum en dürüst insan.\nİki arabayla meşgul bir cumartesi günü yola çıktık. Yağ değişikliği ve lastik değişikliği yapmamız gerektiğine dair kısa bir bildirim aldık."
+        },
+        {
+          "model_label": "F",
+          "text": "O adam Steven, daha önce konuştuğum en dürüst insanlardan biri olabilir - Eğer ben de o bölgede yaşasaydım, arabamı oraya götürmek için sebepler bulurdum.\n\nYoğun bir Cumartesi günü, iki arayla gittik, kısa sürede motor yağı ve lastik değişimi gerektiğini söyledik."
+        },
+        {
+          "model_label": "G",
+          "text": "Eğer yerel olsaydım arabamı oraya götürme sebepleri bulurdum.\nÇok yoğun bir Cumartesi günü iki arabayla yola çıktık, kısa bir süre sonra yağ değişimi ve lastik dönüşümleri gerektiği farkına vardık."
+        },
+        {
+          "model_label": "H",
+          "text": "but I'm not - I've been there 10 times and have never had a problem with them - they are very friendly and helpful - I have never been disappointed - I would recommend them to anyone looking to get a good service and service.We"
+        },
+        {
+          "model_label": "I",
           "text": "Şu Steven denen herif, şimdiye kadar konuştuğum en dürüst insan olabilir.\nÇok yoğun bir Cumartesi günü iki araba ile yola çıktık, kısa sürede yağ değiştirmemiz ve lastik değiştirmemiz gerekti."
         }
       ]
@@ -534,23 +858,39 @@
       "translations": [
         {
           "model_label": "A",
-          "text": "Yeni ve geliştirilmiş, G. Loomis GLX Cranking Serisi Çelik Soketleri hala GLX'in bilinen aynı inanılmaz hafif özellikleri ve hassasiyetini, çeşitli cranking uygulamaları için ideal eylemleri ve taperleri sağlar."
+          "text": "Yeni ve geliştirilmiş, G. Loomis GLX Cranking Serisi döküm çubukları hala aynı inanılmaz hafif ağırlık özelliklerini ve hassasiyetini sunar. GLX, çeşitli cranking uygulamaları için ideal eylemler ve kıvırcıklar ile tanınır."
         },
         {
           "model_label": "B",
-          "text": "Yeni ve geliştirilmiş olan G. Loomis GLX Cranking Serisi Casting Rods hala aynı inanılmaz hafif özellikleri ve hassasiyetlerini sunar. GLX, çeşitli cranking uygulamaları için ideal hareketler ve kaplamalar için bilinir."
+          "text": "Yeni ve geliştirilmiş, G. Loomis GLX Krank Serisi Döküm Çubukları hala aynı inanılmaz hafiflik özelliklerini ve GLX'in çeşitli krank uygulamaları için ideal eylemler ve konikler olarak bilinen hassasiyetini sunar."
         },
         {
           "model_label": "C",
-          "text": "Yeni ve geliştirilmiş olan G. Loomis GLX Cranking Series Casting Rods, aynı inanılmaz hafif özellikleri ve duyarlılığı GLX'in yanı sıra, çeşitli cranking uygulamaları için ideal eylemler ve tapers sunar."
+          "text": "Yeni ve geliştirilmiş G. Loomis GLX Cranking Serisi Olta Kamışları, GLX'in ünlü hafifliği ve hassasiyetini korurken, çeşitli olta teknikleri için ideal aksiyon ve koniklik sunmaya devam ediyor."
         },
         {
           "model_label": "D",
-          "text": "Yeni ve iyileştirilmiş olan G. Loomis GLX Cranking Serisi döküm çubukları hala aynı inanılmaz hafif ağırlık özelliklerini ve hassasiyetini sunar."
+          "text": "Yenilenmiş ve geliştirilmiş olan G. Loomis GLX Cranking Serisi olta kamışları, GLX'in sunduğu olağanüstü hafiflik ve hassasiyet özelliklerini korurken, aynı zamanda çeşitli olta atma teknikleri için ideal hareket ve kalınlık özelliklerine sahiptir."
         },
         {
           "model_label": "E",
-          "text": "Yeni ve geliştirilmiş olan G. Loomis GLX Cranking Serisi Casting Rod'lar, GLX'nin bilinen inanılmaz hafiflik ve hassasiyet özelliklerini ve aynı zamanda, çeşitli crank uygulamaları için ideal eylemleri ve eğimleri korumaktadır."
+          "text": "Yeni ve geliştirilmiş olan G. Loomis GLX Cranking Serisi Casting Rod'lar, GLX'nin bilinen inanılmaz hafiflik ve hassasiyet özelliklerini korurken, aynı zamanda çeşitli crank uygulamaları için ideal eylemleri ve eğimleri de sunmaktadır."
+        },
+        {
+          "model_label": "F",
+          "text": "Yeni ve geliştirilmiş, G. Loomis GLX Cranking Serisi Çelik Soketleri hala GLX'in bilinen aynı inanılmaz hafif özellikleri ve hassasiyetini, çeşitli cranking uygulamaları için ideal eylemleri ve taperleri sağlar."
+        },
+        {
+          "model_label": "G",
+          "text": "Yeni ve geliştirilmiş G. Loomis GLX Cranking Serisi Casting Rods, GLX'nin bilinen aynı inanılmaz hafif özellikleri ve hassasiyetini, ayrıca çeşitli cranking uygulamaları için ideal eylemleri ve konileri sağlar."
+        },
+        {
+          "model_label": "H",
+          "text": "Yeni ve geliştirilmiş olan G. Loomis GLX Cranking Series Casting Rods, aynı inanılmaz hafif özellikleri ve duyarlılığı GLX'in yanı sıra, çeşitli cranking uygulamaları için ideal eylemler ve tapers sunar."
+        },
+        {
+          "model_label": "I",
+          "text": "Yeni ve geliştirilmiş olan G. Loomis GLX Cranking Serisi Casting Rods hala aynı inanılmaz hafif özellikleri ve hassasiyeti sunar. GLX, aynı zamanda çeşitli cranking uygulamaları için ideal hareketler ve taperler için bilinir."
         }
       ]
     },
@@ -560,23 +900,39 @@
       "translations": [
         {
           "model_label": "A",
-          "text": "Tolkien\nSarkasm Sayfası, İnternet'teki en eski Tolkien mizah kalelerinden biri.\nOrtadoğu tarihçilerinin her yerde bir araştırma yapmalarına yardımcı olmak için buradayız.\nGlorfindel'in soyundan gelen kızgın tartışmalardan kurtulmak için...\nThingol'un bilge bir kral olup olmadığı."
+          "text": "at the 1990s, and the 2000s.The Tolkien Sarcasm Page, one of the oldest bastions of Tolkien humor on the Web, is here to help Middle-earth historians everywhere take a break from those heated debates about Glorfindel'swhe"
         },
         {
           "model_label": "B",
-          "text": "Tolkien\nSarkasm Page, İnternet'teki Tolkien'in en eski mizah bastionlarından biri,\nOrtadoğu tarihçilerine yardım etmek için buradayız.\nGlorfindel'in soyundan gelen bu tartışmayı bırakın.\nThingol bilge bir kral olup olmadığını."
+          "text": "İnternetteki en eski Tolkien mizahı kaynaklarından biri olan \"The Tolkien Sarcasm Page\", Orta Dünya tarihçilerinin Glorfindel'in soyu ve Thingol'ün bilge bir kral olup olmadığı hakkındaki hararetli tartışmalardan uzaklaşarak dinlenmelerine yardımcı olmak için burada."
         },
         {
           "model_label": "C",
-          "text": "The Tolkien\nSarcasm Page, Tolkien'un internet üzerindeki en eski mizah köşelerinden biri,\nMiddle-earth tarihçilerinin, Glorfindel'in soyu ve Thingol'un bilge bir kral olup olmadığı gibi tartışmalardan uzaklaşmalarına yardımcı olmak için burada."
+          "text": "Tolkien\nSarkasm Page, İnternet'teki Tolkien'in en eski mizah bastionlarından biri,\nOrtadoğu tarihçilerine yardım etmek için buradayız.\nGlorfindel'in soyundan gelen bu tartışmayı bırakın.\nThingol bilge bir kral olup olmadığını."
         },
         {
           "model_label": "D",
-          "text": "Tolkien\nİnternetteki Tolkien mizahının en eski kalelerinden biri olan Sarkasm Sayfası,\nOrtadoğu tarihçilerine yardım etmek için burada.\nGlorfindel'in soy hattı ve\nThingol'un bilge bir kral olup olmadığı."
+          "text": "Tolkien Mizah Sayfası, internetteki en eski Tolkien mizah merkezlerinden biri olarak, Orta Dünya tarihçilerinin her yerinden gelenlerin, Glorfindel'in soyu ve Thingol'un bilge bir kral olup olmadığı konusundaki hararetli tartışmalardan bir mola vermelerine yardımcı olmak için burada."
         },
         {
           "model_label": "E",
-          "text": "Tolkien'in mizahının en eski kalelerinden biri olan Tolkien İzlenimcilik Sayfası, Orta Dünya tarihçilerine Glorfindel'in soyundan olup olmadığı ve Thingol'un bilge bir kral olup olmadığı hakkındaki ateşli tartışmalardan bir süreliğine vazgeçmelerine yardımcı olmak için burada."
+          "text": "Tolkien\nSarkasm Sayfası, İnternet'teki en eski Tolkien mizah kalelerinden biri.\nOrtadoğu tarihçilerinin her yerde bir araştırma yapmalarına yardımcı olmak için buradayız.\nGlorfindel'in soyundan gelen kızgın tartışmalardan kurtulmak için...\nThingol'un bilge bir kral olup olmadığı."
+        },
+        {
+          "model_label": "F",
+          "text": "Tolkien'in\nSarcasm Page, Tolkien mizahının Web'deki en eski kalelerinden biri.\nHer yerdeki Orta Dünya tarihçilerine yardım etmek için burada.\nGlorfindel'in soy hattı hakkındaki ateşli tartışmalardan ve\nThingol'un bilge bir kral olup olmadığı."
+        },
+        {
+          "model_label": "G",
+          "text": "The Tolkien sayfası, web üzerindeki Tolkien mizahının en eski ve köklü kaynaklarından biri,\nMiddle-earth tarihçilerinin, Glorfindel'in soyu ve Thingol'un bilge bir kral olup olmadığı gibi tartışmalardan bir mola vermelerine yardımcı olmak için burada."
+        },
+        {
+          "model_label": "H",
+          "text": "Tolkien\nİnternetteki Tolkien mizahının en eski kalelerinden biri olan Sarkasm Sayfası,\nOrtadoğu tarihçilerine yardım etmek için burada.\nGlorfindel'in soy hattı ve\nThingol'un bilge bir kral olup olmadığı."
+        },
+        {
+          "model_label": "I",
+          "text": "of the history of Middle-earth, from the first mention of the name of Thingol in the 10th century AD to the discovery of the 20th-century discoveries of the legendarium, including the creation of the Middle-Earth, and the reign of Thingo...SarcasbreakSarcasbrebreakSarcaScarbreakSarcamSarcasm PageSarcasmePageSarcasmoPageSarcastic PageSarcasticityPageSarkasmPageSarcastisbreakSarkasticPageSarcamPageSarcamasPageSarcomaisbreak SarcamaisbreaksarcamaisbrebreaksarcomaisbreakSarcamaisBreakingSarcasmsSarcasmesSarcasmosSarcasmicSarcasmyPageSarcamsarcasmPagesarcasmpageSarcasmusPageSarcomisbreakSaracasmPaperSarcasmuisbreaksaracasmSarcasmaisbreaks"
         }
       ]
     },
@@ -586,23 +942,39 @@
       "translations": [
         {
           "model_label": "A",
-          "text": "Bunu okuyor olması ihtimaliyle, ona şunu söylemek istiyorum: İyi bir yüzbaşı!\nHer neyse  işte bu  Aksyom  8 altın kural her ne kadar şişmiş ya da çılgın bir metodolojiye bağlıysan da uygulanabilir :-\nKural 1  İşe yarayan şeyi yap\nPragmatizm burada anahtar kelimedir."
+          "text": "ULE 2 – Don’t be too hard on yourself – it’s not a good idea to be too strict with yourself – you’ll end up with a bad product – and a bad customer – and you’re going to be in trouble – and that’s the only way to get out of this mess – and I’m sure you’d be happy to hear it.-R"
         },
         {
           "model_label": "B",
-          "text": "Eğer bu metni okuyorsa, sadece ona şunu söylemek istiyorum: \"Harika, Centurion!\"\nNe olursa olsun – işte – Axiom: Herhangi bir karmaşık veya tuhaf metodolojiye uygulayabileceğiniz 8 temel kural:\nKURAL 1 – Çalışan şeyi yap\nBurada pragmatizm ön planda."
+          "text": "Bunu okuyor olması ihtimaliyle ona güzel bir Yüzbaşı demeliydim.\nHer neyse, işte burada, Axiom'da, hangi şişmiş ya da çılgın metodolojiye bağlandığınız için 8 altın kural uygulanıyor.\nKUTSAL KİTAP 1  Çalışanları yapın\nPragmatizm burada ana kelime."
         },
         {
           "model_label": "C",
-          "text": "Bunu okuduğunda, ona şunu söylemek istiyorum – “İyi bir Centurion!” Her neyse – işte – Axiom – bağlı olduğunuz her türlü şişkin veya çılgın yönteme uygulayabileceğiniz 8 altın kural :- KURAL 1 – Çalışan şeyi yap Pragmatizm burada anahtar kelimedir."
+          "text": "you’re not a professional, you’ve got to be pragmatic and pragmatic is the key to success.If you’d like to be a professional – you’ll need to be realistic and realistic is the best way to be.If it’s not – you might want to be more pragmatic – you may want to try to be practical and practical is the better way.AnnAnnRULE 1PragmatismRULE1Pragmatisme is the watchwordRULE2Pragmatisme is the callwordRule3Pragmatise is the callingwordRELEASERULE4PragmatistRULE5PragmatisMRULE6PragmatisTrueRULE7PragmatisRULE8PragmatisErule8PragmaticRULE9PragmatisrRule8 PragmatisRule8PragmaticRULE3Pragmatic RULE8 PragmaticRule9PragmaticrUrule"
         },
         {
           "model_label": "D",
-          "text": "Eğer bu mektubu okuyorsa, ona şunu söylemek istiyorum:\nHer neyse  İşte  Axiom  8 altın kural, bağlı olduğunuz şişirilmiş veya çılgın metodolojiye uygulanabilir :-\nKURAL 1  İşe yarayan şeyi yap\nPragmatizm buradaki sloganımız."
+          "text": "Eğer okuyorsa, ona sadece şunu söylemek istiyorum: \"Harika iş Centurion!\"\nHer neyse, işte burada: Axiom - Ne kadar karmaşık veya saçma bir yöntemle çalışıyor olursanız olun, uygulayabileceğiniz 8 altın kural:\nKURAL 1 - İşe yarayanı yapın.\nBuradaki anahtar kelime pragmatizmdir."
         },
         {
           "model_label": "E",
-          "text": "Bunu okuyor olması ihtimaliyle ona güzel bir yüzbaşı demeliydim.\nHer neyse, işte burada, Axiom'da, hangi şişmiş ya da çılgın metodolojiye bağlandığınız için 8 altın kural uygulanıyor.\nKUTSAL KİTAP 1  Çalışanları yapın\nPragmatizm burada ana kelime."
+          "text": "Eğer bunu okuyorsa, ona şunu söylemek isterim: \"Aferin Centurion!\"\n\nNeyse, işte burada: Axiom – Bağlı olduğunuz, karmaşık veya tuhaf yöntemlere uygulanacak 8 altın kural:\n\nKURAL 1 – İşe yarayanı yapın.\n\nBurada pragmatizm ön plandadır."
+        },
+        {
+          "model_label": "F",
+          "text": "Bunu okuyor olması ihtimaline karşı, ona şunu söylemek istiyorum: İyi bir yüzbaşı!\nHer neyse  işte bu  Aksyom  Her ne kadar şişmiş ya da çılgın bir metodolojiye bağlıysanız da uygulayabileceğiniz 8 altın kural :-\nKural 1  İşe yarayan şeyi yap\nPragmatizm burada anahtar kelimedir."
+        },
+        {
+          "model_label": "G",
+          "text": "Bunu okuyor olması ihtimaline karşın ona şunu söylemek isterim: \"İyi yüzbaşı!\"\nHer neyse  işte  aksiyom  her ne kadar şişirilmiş veya çılgın metodolojiye bağlıysanız da uygulanacak 8 altın kural:\nKURAL 1  İşe yarayacak şeyleri yapın\nPragmatizm burada anahtar kelime."
+        },
+        {
+          "model_label": "H",
+          "text": "Eğer bu metni okuyorsa, sadece ona şunu söylemek istiyorum: \"Harika, Centurion!\"\nNe olursa olsun – işte Axiom'un, hangi karmaşık veya tuhaf metodolojiyi uyguladığını bilmediğim – 8 temel kuralı:\nKURAL 1 – Çalışan şeyi yap\nBurada pragmatizm ön planda."
+        },
+        {
+          "model_label": "I",
+          "text": "Eğer bu mektubu okuyorsa ona şunu söylemek isterim:\nHer neyse  işte burada  Axiom  8 altın kural, bağlı olduğunuz şişkin veya çılgın metodolojiye uygulanabilir :-\nKURAL 1  İşe yarayan şeyi yap\nPragmatizm burada şöhrettir."
         }
       ]
     },
@@ -612,23 +984,39 @@
       "translations": [
         {
           "model_label": "A",
-          "text": "Hasta memnuniyetinin artması işlerini güçlendirir ve biriktirdikleri paralar evde kalır)\nSatıcılarla sözleşme yapan ve sağlayıcı ödeme mekanizmaları işleten bizler, SMDM'nin yaygın olarak kabul edilmesine engel olan engelleri ortadan kaldırmak için gerçekten hazırlıklı olmalıyız."
+          "text": "Hasta memnuniyetinin artması, işlerini güçlendirir ve elde ettikleri tasarruflar şirket içinde kalır.\n\nSatıcılarla sözleşme yapan ve ödeme sistemlerini yöneten bizler, SMDM'nin yaygın olarak benimsenmesinin önündeki engelleri ortadan kaldırmak için harekete geçmeliyiz."
         },
         {
           "model_label": "B",
-          "text": "Hasta memnuniyetinin artması işlerini güçlendirir ve tasarruf ettikleri para evde kalır)\nSatıcılarla sözleşme yapan ve sağlayıcı ödeme mekanizmalarını işleten bizler, SMDM'nin yaygın olarak benimsenmesine engel olan engelleri kaldırmak için kendimizi hazırlamalıyız."
+          "text": "Hasta memnuniyetinin artması, işletmelerin başarısını güçlendirir ve elde ettikleri tasarruflar kendi bünyelerinde kalır.\n\nSatıcılarla sözleşme yapan ve sağlık hizmeti sağlayıcı ödeme mekanizmalarını yöneten bizlerin, SMDM'nin yaygın olarak benimsenmesinin önündeki engelleri kaldırmak için harekete geçmesi gerekiyor."
         },
         {
           "model_label": "C",
-          "text": "Hasta memnuniyetini artırmak, işlerini güçlendirir ve tasarruf ettikleri her dolar evde kalır) Satıcılarla sözleşme yapan ve sağlayıcı ödeme mekanizmalarını işleten bizler, SMDM'nin yaygın olarak kabul edilmesine engel olan engelleri kaldırmak için gerçekten kendimizi döndürmeliyiz."
+          "text": "Hasta memnuniyetinin artması işlerini güçlendirir ve biriktirdikleri paralar evde kalır)\nSatıcılarla sözleşme yapan ve sağlayıcı ödeme mekanizmaları işleten bizler, SMDM'nin yaygın olarak kabul edilmesine engel olan engelleri ortadan kaldırmak için gerçekten hazırlıklı olmalıyız."
         },
         {
           "model_label": "D",
-          "text": "Hasta memnuniyetinin artması onların işini güçlendirir ve tasarruf ettikleri tüm dolarlar evde kalır)\nSatıcılarla sözleşme yapan ve tedarikçi ödeme mekanizmalarını işleten bizler gerçekten kendimizi SMDM'nin yaygın olarak benimsenmesine engel olan engelleri kaldırmak için hazırlamalıyız."
+          "text": "Hasta memnuniyetini arttırmak işlerini güçlendirir ve tasarruf ettikleri her dolar evde kalır)\nSatıcılarla sözleşme yapan ve sağlayıcı ödeme mekanizmalarını işleten bizler, SMDM'nin yaygın olarak benimsenmesinin önündeki engelleri kaldırmak için gerçekten kendimizi hazırlamalıyız."
         },
         {
           "model_label": "E",
+          "text": "Hasta memnuniyetinin artması işlerini güçlendirir ve tasarruf ettikleri para evde kalır)\nSatıcılarla sözleşme yapan ve sağlayıcı ödeme mekanizmaları işleten bizler, SMDM'nin yaygın olarak benimsenmesine engel olanları kaldırmak için kendimizi hazırlamalıyız."
+        },
+        {
+          "model_label": "F",
+          "text": "There are many reasons why SMDM is a good idea, but the most important is that it will help reduce the cost of healthcare, and the number of people who have to pay for it will be reduced, and there will be less time spent on it.Tho"
+        },
+        {
+          "model_label": "G",
           "text": "Hastaların memnuniyetini artırmak, onların işlerini güçlendirir ve bu sayede elde ettikleri her dolar şirketin içinde kalır.\n\nBizler, tedarikçilerle sözleşme yapan ve sağlık hizmeti sağlayıcıların ödeme mekanizmalarını yöneten kişiler olarak, SMDM'nin yaygın olarak benimsenmesini engelleyen engelleri ortadan kaldırmak için harekete geçmeliyiz."
+        },
+        {
+          "model_label": "H",
+          "text": "Hasta memnuniyetinin artması onların işini güçlendirir ve tasarruf ettikleri tüm dolarlar evde kalır)\nSatıcılarla sözleşme yapanlar ve sağlayıcı ödeme mekanizmaları işletenler, kendimizi SMDM'nin yaygın olarak benimsenmesine engel olan engelleri kaldırmak için gerçekten hazırlamalıyız."
+        },
+        {
+          "model_label": "I",
+          "text": ", the 2015 report of the American Society of Medical Directors (ASM) found that the number of SMDM-enabled providers has increased by 100% since 250,000 in 21 countries worldwide.ThoseThose ThoseThos Those Thos ThosThoseToday, the world is changing, and we are all in the same boat.ThosesThosethoseThoses ThosethosesThosesthosethoesThose who are in the process of changingThoseTHOseThoesThosesTHOsethosThosesThatThoseThat ThoseThatsThoseTheseThosenThose,Those.ThosThos,Thoses,ThosThat,Thoes,ThousThoseThingsThose"
         }
       ]
     },
@@ -638,7 +1026,7 @@
       "translations": [
         {
           "model_label": "A",
-          "text": "Bu bölgenin kısa pist yarış endüstrisi için \"ilk\" olduğuna inanılan, ortak promotorlar Rich Tobias ve Doug Rose, Wyomissing emlakcısı Jeffrey Hogue'un Kutztown, Kutztown Fairgrounds'daki Action Track USA'nın isim hakkını satın aldığını duyurdu."
+          "text": "Bu, bölgedeki kısa mesafe yarış endüstrisi için \"ilk\" olduğu düşünülen bir olaydır. Ortak organizatörler Rich Tobias ve Doug Rose, Wyomissing emlak uzmanı Jeffrey Hogue'un, Kutztown, Pennsylvania'daki Kutztown Fuari alanındaki Action Track USA'nın isim hakkını satın aldığını duyurdu."
         },
         {
           "model_label": "B",
@@ -646,15 +1034,31 @@
         },
         {
           "model_label": "C",
-          "text": "Bu bölgenin kısa pist yarış endüstrisi için \"ilk\" olduğuna inanılan bir şeyde, ortak promotörler Rich Tobias ve Doug Rose, Wyomissing gayrimenkul danışmanı Jeffrey Hogue'un Kutztown, Pa'daki Kutz Town Fairgrounds'ta Action Track USA'nın isim haklarını satın aldığını duyurdu."
+          "text": "Bu bölgenin kısa pist yarış endüstrisi için \"birinci\" olduğu düşünülürken, ortak promotorlar Rich Tobias ve Doug Rose, Wyomissing emlakçı Jeffrey Hogue'un Kutztown, Pa'daki Kutztown Fairgrounds'ta Action Track USA'ya isim verme haklarını satın aldığını duyurdu."
         },
         {
           "model_label": "D",
-          "text": "Bu, bölgedeki kısa mesafe yarış endüstrisi için \"ilk\" olduğu düşünülen bir olaydır. Ortak organizatörler Rich Tobias ve Doug Rose, Wyomissing emlak uzmanı Jeffrey Hogue'un, Kutztown, Pennsylvania'daki Kutztown Fuari alanındaki Action Track USA'nın isim hakkını satın aldığını duyurdu."
+          "text": "Bu bölgenin kısa pist yarış endüstrisi için \"ilk\" olduğuna inanılan bir şeyde, ortak promotörler Rich Tobias ve Doug Rose, Wyomissing gayrimenkul danışmanı Jeffrey Hogue'un Kutztown, Pa'daki Kutz Town Fairgrounds'ta Action Track USA'nın isim haklarını satın aldığını duyurdu."
         },
         {
           "model_label": "E",
-          "text": "Bu bölgenin kısa pist yarış endüstrisi için \"birinci\" olduğu düşünülürken, ortak promotorlar Rich Tobias ve Doug Rose, Wyomissing emlakçı Jeffrey Hogue'nin Kutztown, Pa'daki Kutztown Fairgrounds'ta Action Track USA'ya isim verme haklarını satın aldığını duyurdu."
+          "text": "Bu bölgenin kısa mesafe yarış endüstrisi için \"bir ilk\" olarak kabul edilen bir gelişmede, ortak organizatörler Rich Tobias ve Doug Rose, Wyomissing'deki emlak komisyoncusu Jeffrey Hogue'un, Pennsylvania'daki Kutztown Fuar Alanı'nda bulunan Action Track USA'nın isim haklarını satın aldığını duyurdu."
+        },
+        {
+          "model_label": "F",
+          "text": "Bu bölgenin kısa pist yarış endüstrisi için \"ilk\" olduğuna inanılan ortak teşvikçiler Rich Tobias ve Doug Rose, Wyomissing emlakçısı Jeffrey Hogue'un Kutztown, Pa'daki Kutztown Fuar Alanı'ndaki Action Track USA'nın isim haklarını satın aldığını açıkladı."
+        },
+        {
+          "model_label": "G",
+          "text": "Bu bölgedeki kısa mesafe yarışları endüstrisi için bir ilk olduğuna inanılan bir gelişmede, ortak organizatörler Rich Tobias ve Doug Rose, Wyomissing'deki emlakçı Jeffrey Hogue'un, Pennsylvania, Kutztown'daki Kutztown Fuar Alanı'ndaki Action Track USA'nın isim haklarını satın aldığını duyurdu."
+        },
+        {
+          "model_label": "H",
+          "text": "Bölgenin kısa pist yarış endüstrisi için \"ilk\" olduğuna inanılan, ortak promotörler Rich Tobias ve Doug Rose, Wyomissing emlakçısı Jeffrey Hogue'un Kutztown, Pa'daki Kutzton Fuar Alanı'nda Action Track USA'nın isim haklarını satın aldığını açıkladı."
+        },
+        {
+          "model_label": "I",
+          "text": "Bu bölgenin kısa pist yarış endüstrisi için \"ilk\" olduğuna inanılan, ortak promoterler Rich Tobias ve Doug Rose, Wyomissing emlakcısı Jeffrey Hogue'un Kutztown, Kutztown, Kutztown Fairgrounds'daki Action Track USA'nın isim hakkını satın aldığını duyurdu."
         }
       ]
     },
@@ -664,23 +1068,39 @@
       "translations": [
         {
           "model_label": "A",
-          "text": "J. Bruce Kremer, Raymond Ruble ve Trevor Bowen, dün açıklanan haberlere göre, 4. Ana ve Batı Park sokaklarında Paxson & Lockefeller firması adı altında faaliyet gösteren uyuşturucu ticareti yapan şirketleri satın aldılar ve gelecekte de bu işi sürdürecekler."
+          "text": "J. Bruce Kremer, Raymond Ruble ve Trevor Bowen, dün, \"Paxson & Rockefeller\" adlı şirketin işletmesini satın aldıklarını duyurdu. Bu şirket, Main ve West Park caddelerindeki eczane ve diğer işletmelerin sahibiydi ve gelecekte bu işletmeleri yöneteceklerdi."
         },
         {
           "model_label": "B",
-          "text": "R\nJ. Bruce Kremer, Raymond Ruble c\n, ve Trevor Bowen, duyuruldu \"\n'dün, uyuşturucu satın aldık'\nD'de faaliyet gösteren çeşitli işletmeler\nBaş ve Batı Park sokakları r'\ninde' Paxson & n'ın \"şirket adı\"\nlockefeller ve gelecekte\nİşten çıkar."
+          "text": "J. Bruce Kremer, Raymond Ruble ve Trevor Bowen'ın, dün yapılan açıklamaya göre, Dördüncü Cadde ve West Park Caddesi'nde bulunan ve \"Paxson & Rockefeller\" adı altında faaliyet gösteren ilaç ve diğer ürünlerin işini satın aldıkları ve bundan sonra bu işi kendi adlarına yürütecekleri bildirildi."
         },
         {
           "model_label": "C",
-          "text": "r r\nJ. Bruce Kremer, Raymond Ruble c\n\"Ve Trevor Bowen, duyuruldu\".\n\"Dün, ilacı satın aldım\".\nD'de faaliyet gösteren çeşitli işletmeler\nAna ve Batı Park Caddesi'nde.\nPaxson & apos; ın firma adı\nLockefeller ve gelecekte olacak\nİşleri yürüt."
+          "text": ", and the 1900s, and 1890s. The new owners, Mr. J. Bruce Kremer, Mr, Raymond Ruble, and Mr. Trevor Bowen, have acquired the drug stores operated on d'on"
         },
         {
           "model_label": "D",
-          "text": "J. Bruce Kremer, Raymond Ruble ve Trevor Bowen, dün, \"Main ve West Park caddelerindeki ve Paxson & Rockefeller adında faaliyet gösteren eczane ve diğer işletmeleri satın aldıklarını\" duyurdu."
+          "text": "r r\nJ. Bruce Kremer, Raymond Ruble c\n\"Ve Trevor Bowen, duyuruldu\".\n\"Dün, ilacı satın aldım\"\nD'de faaliyet gösteren çeşitli işletmeler\nAna ve Batı Park Caddesi'nde.\nPaxson & apos; ın firma adı\nLockefeller ve gelecekte olacak\nİşleri yürüt."
         },
         {
           "model_label": "E",
-          "text": "r\nJ. Bruce Kremer, Raymond Ruble c\n\"ve Trevor Bowen, duyuruldu\".\n\"Dün, uyuşturucuyu satın aldım\"\n$id çeşitli işletmeler\nAna ve Batı Park sokakları r'\nPaxson & n'in şirket adı\nLockefeller ve gelecekte olacak\nİşleri durdurmak için."
+          "text": "r\nJ. Bruce Kremer, Raymond Ruble c\n\"ve Trevor Bowen, duyuruldu\".\n\"Dün, uyuşturucuyu satın aldım\"\n$id çeşitli işletmeler\nAna ve Batı Park sokakları r'\nPaxson & n'in şirket adı\nLockefeller ve gelecekte olacak\nİşleri kontrol altına al."
+        },
+        {
+          "model_label": "F",
+          "text": "J. Bruce Kremer, Raymond Ruble ve Trevor Bowen'in dün ilaç ve çeşitli ürünler satan işletmeleri satın aldığı ve bu işletmeleri Paxson & Rockefeller adı altında faaliyet göstermeye devam edecekleri duyuruldu. Bu işletmeler, Forth Main ve West Park caddelerinde bulunuyor."
+        },
+        {
+          "model_label": "G",
+          "text": "R\nJ. Bruce Kremer, Raymond Ruble c\n, ve Trevor Bowen, duyuruldu \"\n'dün, uyuşturucu satın aldık'\nD'de faaliyet gösteren çeşitli işletmeler\nBaş ve Batı Park sokakları r'\n\"Paxson & n\" firmasının adı\nlockefeller ve gelecekte\nİşten çıkar."
+        },
+        {
+          "model_label": "H",
+          "text": "'s 100% shares in the company, which was owned by the family of the late John Paxson, and the 150% stake in the 2000s by the 30-year-old John Blockefeller, whose sons, the late J. Bruce Kremer, and J. Ruble, who were married to Mrs. Blockof'Jlockefeler','J.Blockefelli', and'J,Blockof,'jlockef,''J'Jcklockef',J',Klockefelle',,J,Jck-lockef-'Jclockef\"'Jklockefell',$Jlockefel',#Jlockefeller',j'J-locke', J.J.Jlockefa',&Jlockofel', 'Jlocko"
+        },
+        {
+          "model_label": "I",
+          "text": "Sıvı\nJ. Bruce Kremer, Raymond Ruble c.\n...ve Trevor Bowen, açıklandı.\n'Dün, uyuşturucuyu satın aldım'\nD'de faaliyet gösteren çeşitli işletmeler\nMain ve West Park sokaklarında.\ninde' Paxson & n'in firma adı\nLockefeller ve gelecekte olacak\nİşleri yürütmek."
         }
       ]
     },
@@ -690,7 +1110,7 @@
       "translations": [
         {
           "model_label": "A",
-          "text": "5-STARS En Yüksek 12 Aylık Fiyat Artışı Potansiyeline Sahip Hisseler Statoil ASA ADS ICON Plc ADS Thermo Fisher Scientific Kaynak: Standard & Poor's Equity Research; 8/10/07 verileri Beklediğimiz rahatlama rallisini elde etsek, çok memnun olma ve her şeyi otomatik pilota koyma."
+          "text": "En yüksek 12 aylık fiyat değerlendirme potansiyeline sahip 5 yıldızlı hisse senetleri\nStatoil ASA ADS\nICON Plc ADS\nThermo Fisher Bilimsel\nKaynak: Standard & Poor's Equity Research; 8/10/07 tarihli veriler\nBeklediğimiz yardım toplantısını yaparsak, çok memnun olmayın ve her şeyi otomatik pilotla çalıştırın."
         },
         {
           "model_label": "B",
@@ -698,15 +1118,31 @@
         },
         {
           "model_label": "C",
-          "text": "En yüksek 12 aylık fiyat artış potansiyeli olan 5-STARS hisse senetleri\nStatoil ASA ADS\nICON Plc ADS\nThermo Fisher Scientific\nKaynak: Standard & Poor's Equity Research; 8/10/07 tarihli veriler\nBeklediğimiz yardım toplantısını yaparsak, fazla kendini beğenmiş olmayın ve her şeyi otomatik pilot üzerine koyun."
+          "text": "12-Month Price Appreciation Potential (%) 100 150 200 (%) (%) ADS ADS 110 80 60 40 30 0 50 (% ) 1 2 3 4 5 6 7 8 9 13 14 16 17 18 19Source"
         },
         {
           "model_label": "D",
-          "text": "En yüksek 12 aylık fiyat değerlendirme potansiyeline sahip 5 yıldızlı hisse senetleri\nStatoil ASA ADS\nICON Plc ADS\nThermo Fisher Bilimsel\nKaynak: Standard & Poor's Equity Research; 8/10/07 tarihli veriler\nBeklediğimiz yardıma ulaşırsak, çok memnun olmayın ve her şeyi otomatik pilotla çalıştırın."
+          "text": "12-Month Price Appreciation Potential: 10.00% (12 months) 11.05% (24 months) -1.50% -10% 13.02% (36 months) (10 months) ADS: 2.01% (0.10%) -11% -0.20% ADS : 0%ShoiIiIIIiShoiiIicIiChoiIcChoi IiChoIiThermoIiCThermosIiCoIiConIiStatoilIiStaiCONIiStateiCONiICONiStatiCON PlcStatiConiIconIiStatusIiCON IiStatIiSONiIConIICONIIConiStatoIi IICON II"
         },
         {
           "model_label": "E",
-          "text": "5 Yıldız Değerine Sahip, En Yüksek 12 Aylık Fiyat Artış Potansiyeline Sahip Hisse Senetler\nStatoil ASA ADS\nICON Plc ADS\nThermo Fisher Scientific\nKaynak: Standard & Poor's Equity Research; Veriler 10/08/07 itibarıyla\nBeklediğimiz toparlanma dalgasını yakalarsak, aşırı rahatlamayın ve her şeyi otomatik modda bırakmayın."
+          "text": "En Yüksek 12 Aylık Fiyat Takdir Potansiyeli Olan 5-Yıldızlı Hisse Senetleri\nStatoil ASA ADS\nICON Plc ADS\nThermo Fisher Bilimsel\nKaynak: Standard & Poor's Equity Research; 8/10/07 tarihli veriler\nBeklediğimiz desteği alabilirsek, kendimizden çok memnun olmamalıyız ve her şeyi otomatik pilota koymalıyız."
+        },
+        {
+          "model_label": "F",
+          "text": "5 Yıldızlı Hisse Senetleri: En Yüksek 12 Aylık Fiyat Artış Potansiyeli\nStatoil ASA ADS\nICON Plc ADS\nThermo Fisher Scientific\nKaynak: Standard & Poor's Equity Research; Veriler 10/08/07 itibarıyla\n\nBeklediğimiz toparlanma dalgasını yakalarsak, aşırı rahatlamayın ve her şeyi otomatik modda bırakmayın."
+        },
+        {
+          "model_label": "G",
+          "text": "En Yüksek 12 Aylık Fiyat Artış Potansiyeline Sahip 5 Yıldızlı Hisseler\nStatoil ASA ADS\nICON Plc ADS\nThermo Fisher Scientific\nKaynak: Standard & Poor's Equity Research; Veriler 10.08.2007 itibarıyla.\nBeklediğimiz yükseliş trendi gerçekleşirse, çok rahatlamayın ve her şeyi otomatik pilota bırakmayın."
+        },
+        {
+          "model_label": "H",
+          "text": "En yüksek 12 aylık fiyat artış potansiyeli olan 5-STARS hisse senetleri\nStatoil ASA ADS\nICON Plc ADS\nThermo Fisher Scientific\nKaynak: Standard & Poor's Equity Research; 8/10/07 tarihli veriler\nBeklediğimiz yardım toplantısını yaparsak, fazla kendini beğenmiş olmayın ve her şeyi otomatik pilot üzerine koyun."
+        },
+        {
+          "model_label": "I",
+          "text": "Son 12 ayda en yüksek fiyat artışı potansiyeline sahip 5 yıldızlı hisse senetleri:\n\nStatoil ASA ADS\nICON Plc ADS\nThermo Fisher Scientific\nKaynak: Standard & Poor's Hisse Senedi Araştırması; Veriler 10 Ağustos 2007 itibarıyla.\n\nBeklediğimiz toparlanma gerçekleşirse, aşırı rahatlamayın ve her şeyi otomatik pilota bırakmayın."
         }
       ]
     },
@@ -716,23 +1152,39 @@
       "translations": [
         {
           "model_label": "A",
-          "text": "Ereinion bir şey söylemedi, sadece o parlak gözlerle ona baktı, bu gözler karanlıkta bile yıldızlar gibi parlıyordu. Sonra ani bir gürültü sesi onu aniden sıçratıp, Cirdan'ın geceliklerinin yakasına tutundu, küçük parmakları çabasıyla beyazlaştı."
-        },
-        {
-          "model_label": "B",
-          "text": "Ereinion hiçbir şey söylemedi, sadece karanlıkta bile yıldızlar gibi parlayan parlak gözleriyle ona bakmaya devam etti. Birdenbire bir gök gürlemesi daha onu atlatıp, Cirdan'ın gece kıyafetlerinin kenarını tutmaya zorladı."
-        },
-        {
-          "model_label": "C",
           "text": "Ereinion hiçbir şey söylemedi, sadece karanlıkta bile yıldızlar gibi parlayan parlak gözleri ile ona bakmaya devam etti. Bir başka ani gök gürültüsü onu aniden atlatıp Cirdan'ın gece elbisesinin kenarından tutmaya zorladı. Küçük parmak uçları çaba ile beyazlaştı."
         },
         {
+          "model_label": "B",
+          "text": "Ereinion hiçbir şey söylemedi, sadece karanlıkta bile yıldızlar gibi parlayan parlak gözlerle ona bakmaya devam etti. Birdenbire bir gök gürültüsü daha onu atlatıp, Cirdan'ın gece kıyafetlerinin kenarını tutmaya zorladı."
+        },
+        {
+          "model_label": "C",
+          "text": "Ereinion hiçbir şey söylemedi, sadece karanlıkta bile yıldızlar gibi parlayan parlak gözleriyle ona bakmaya devam etti. Bir başka ani gök gürlemesi birdenbire atlamasına ve Cirdan'ın geceliklerinin kenarına sarılmasına neden oldu."
+        },
+        {
           "model_label": "D",
-          "text": "Ereinion hiçbir şey söylemedi, sadece karanlıkta bile yıldızlar gibi parlayan parlak gözleriyle ona bakmaya devam etti ta ki bir başka ani gök gürlemesi birdenbire atlamasına ve Cirdan'ın geceliklerinin kenarına sarılmasına neden olana kadar."
+          "text": "Ereinion bir şey söylemedi, sadece karanlıkta bile yıldız gibi parlayan o parlak gözleri ile ona bakmaya devam etti, ta ki ani bir gök gürültüsü onu aniden zıplatıp Cirdan'ın geceliğinin kenarına tutuncaya kadar, küçük parmakları çabadan beyazlaştı."
         },
         {
           "model_label": "E",
-          "text": "Ereinion hiçbir şey söylemedi, sadece karanlıkta bile yıldızlar gibi parlayan o parlak gözlerle ona bakmaya devam etti. Bir başka ani gök gürültüsü ona aniden atlayıp Cirdan'ın geceliklerinin kenarına tutunmasını sağladı."
+          "text": "Ereinion hiçbir şey söylemedi, sadece o parlak gözleriyle ona bakmaya devam etti; gözleri, karanlıkta bile yıldızlar gibi parlıyordu. Aniden gelen bir gök gürültüsüyle irkildi ve Cirdan'ın geceliğinin etek ucunu öyle sıkıca tuttu ki, küçük parmak boğumları gerginlikten bembeyaz oldu."
+        },
+        {
+          "model_label": "F",
+          "text": "Ereinion bir şey söylemedi, sadece o parlak gözlerle ona baktı, bu gözler karanlıkta bile yıldızlar gibi parlıyordu. Aniden gelen bir başka gürültü sesi onu aniden sıçratıp, Cirdan'ın geceliklerinin yakasına tutunmasına neden oldu, küçük parmakları çabasıyla beyazlaştı."
+        },
+        {
+          "model_label": "G",
+          "text": "Ereinion hiçbir şey söylemedi, sadece karanlıkta bile yıldızlar gibi parlayan o parlak gözlerle ona bakmaya devam etti, ta ki bir başka ani gök gürültüsü patlaması aniden Cirdan'ın gece kıyafetlerinin üzerine atlayıp tutunmasını sağlayana kadar."
+        },
+        {
+          "model_label": "H",
+          "text": "Ereinion hiçbir şey söylemedi, sadece karanlıkta bile yıldızlar gibi parlayan o parlak gözlerle ona bakmaya devam etti. Ta ki başka bir ani gök gürültüsü aniden onu sıçratıp Cirdan'ın geceliğinin eteklerinden tutana kadar."
+        },
+        {
+          "model_label": "I",
+          "text": "Ereinion hiçbir şey söylemedi, sadece o parlak gözleriyle ona bakmaya devam etti; o gözler karanlıkta bile yıldızlar gibi parlıyordu. Sonra aniden gelen bir gök gürültüsü onu korkuttu ve Cirdan'ın pijamalarının eteğini sıkıca tuttu, o kadar çok sıkmıştı ki küçük parmakları beyazlamıştı."
         }
       ]
     },
@@ -742,11 +1194,11 @@
       "translations": [
         {
           "model_label": "A",
-          "text": "- ShopNBC Web sitesinde, herhangi bir ShopNBC işleminde olduğu gibi, kaliteli hizmete adanmış iyi eğitimli personel bulacaksınız\nShopNBC'nin kıskanabilir itibarı\nYıllar boyunca kurulmuştur ve müşterilere saygı gösterme ve para karşılığında değer sunma ilkeleri üzerine kurulmuştur."
+          "text": "- ShopNBC Web sitesinde, her ShopNBC işleminde olduğu gibi, kaliteli hizmete adanmış iyi eğitimli personel bulacaksınız.\nShopNBC'nin kıskançlık uyandıran şöhreti\nYıllar boyunca kurulmuş ve müşterilerine saygı göstermek ve para için değer sunmak gibi sağlam ilkeler üzerine kurulmuştur."
         },
         {
           "model_label": "B",
-          "text": "- ShopNBC Web sitesinde, her ShopNBC işleminde olduğu gibi, kaliteli hizmete adanmış iyi eğitimli personel bulacaksınız.\nShopNBC'nin itibarı\nuzun yıllar boyunca kurulmuştur ve müşterilerine saygı göstermek ve para için değer sunmak gibi sağlam ilkeler üzerine kurulmuştur."
+          "text": "- ShopNBC web sitesinde, diğer tüm ShopNBC işlemlerinde olduğu gibi, kaliteli hizmet sunmaya kendini adamış, iyi eğitimli personel bulacaksınız.\n\nShopNBC'nin kıskanılacak itibarı, uzun yıllar boyunca inşa edilmiş ve müşterilere saygı duymak ve paranın karşılığını vermek gibi sağlam prensiplere dayanmaktadır."
         },
         {
           "model_label": "C",
@@ -754,11 +1206,27 @@
         },
         {
           "model_label": "D",
-          "text": "- ShopNBC web sitesinde, diğer ShopNBC işlemlerinde olduğu gibi, kaliteli hizmete kendini adamış, iyi eğitimli personel bulacaksınız.\nShopNBC'nin saygın itibarı, uzun yıllar boyunca kurulmuş ve müşterilere saygı gösterme ve para karşılığında değer sunma gibi sağlam prensipler üzerine inşa edilmiştir."
+          "text": "- ShopNBC is a trusted and trustworthy online shopping site that has been operating since 1999. - Shop NBC is the only online shopping website in the world that has a 100% guaranteed return policy, and is the best online shopping company in the UK, Europe, and the Middle East.The companyhasTheThe hasThehasThehas beenThehas hasThe has beenThe hasBeenThe hasHas beenThe haveHas hasHave hasHaves hasHaved hasHad hasHavet hasHavesthasHavedhasHaveHavedhaveshasHavethasHavest hasHabedhasHabed hasHabethasHabet hasHabe hasHabithasHabehasHaveshasBeenHe hasHabeshasHabes hasHabiHabesHabesThe has hasHabenhasHaben hasHaberhasHaber hasHaverhasHaver hasHavershasHa"
         },
         {
           "model_label": "E",
-          "text": "- ShopNBC Web Sitesi'nde, herhangi bir ShopNCB işleminde olduğu gibi, kaliteli hizmete bağlı iyi eğitimli personel bulabilirsiniz. ShopNbc'nin kıskanç itibarı yıllardır kuruldu ve müşterilere saygı duyma ve para karşılığı değer sunma gibi iyi temelli ilkelere dayanır."
+          "text": "- ShopNBC web sitesinde, diğer ShopNBC işlemlerinde olduğu gibi, kaliteli hizmete kendini adamış, iyi eğitimli personel bulacaksınız.\nShopNBC'nin saygın itibarı, uzun yıllar boyunca kurulmuş ve müşterilere saygı gösterme ve karşılığında değer sunma gibi sağlam prensipler üzerine inşa edilmiştir."
+        },
+        {
+          "model_label": "F",
+          "text": "- ShopNBC Web sitesinde, herhangi bir ShopNBC işleminde olduğu gibi, kaliteli hizmete adanmış iyi eğitimli personel bulacaksınız\nShopNBC'nin kıskanabilir itibarı\nYıllar boyunca kurulmuştur ve müşterilere saygı gösterme ve para karşılığında değer sunma ilkeleri üzerine kurulmuştur."
+        },
+        {
+          "model_label": "G",
+          "text": "- ShopNBC Web sitesinde, herhangi bir ShopNBC işleminde olduğu gibi, kaliteli hizmete adanmış iyi eğitimli personel bulacaksınız.\nShopNBC'nin kıskanılacak itibarı\nUzun yıllar boyunca kurulmuştur ve müşterilerine saygı gösterme ve para için değer sunma ilkeleri üzerine kurulmuştur."
+        },
+        {
+          "model_label": "H",
+          "text": "ShopNBC web sitesinde, diğer tüm ShopNBC işlemlerinde olduğu gibi, kaliteli hizmet sunmaya kendini adamış, iyi eğitimli personel bulacaksınız.\n\nShopNBC'nin takdire şayan itibarı, uzun yıllar boyunca inşa edilmiştir ve müşterilerine saygı duymak ve para karşılığında değer sunmak gibi sağlam prensiplere dayanmaktadır."
+        },
+        {
+          "model_label": "I",
+          "text": "and we're committed to providing you with the best possible customer service.- ShopNBC Website is a trusted and reliable source for all your online shopping needs.- We're proud to offer you the best online shopping experience in the world.- Our customers are our most important asset.- The reputation of ShopNbchas"
         }
       ]
     },
@@ -768,23 +1236,39 @@
       "translations": [
         {
           "model_label": "A",
-          "text": "Devam et\nBu iki çocuk annesi için, bu listedeki hiçbir şey benim cebimi zorlamıyor. Ben mi iyi, cimri? Kim bilir, belki orijinal Tickle Me Elmo oyuncak, geri dönüp sadece Toys R Us'ta, sezonda bir \"tek canavarı kurtarma\" etkinliğini düzenlemek için?"
+          "text": "Okumaya devam et\nİki çocuk annesi için bu listede beni zorlayan hiçbir şey yok, çek defterim. Ben iyi, tutumlu bir şirket miyim? Kim bilir, belki de orijinal Tickle Me Elmo bebeğine geri dönecek ve Toys R Us'da özel olarak bir  canavarı sahnelemek için sezonu kurtaracak mı?"
         },
         {
           "model_label": "B",
-          "text": "Continue reading Would whip Yani iki çocuk annesi olarak, bu listede beni zorlayan hiçbir şey yok, benim çek defterim. İyi miyim, tasarruflu şirketler Kim bilir, belki de bu orijinal Tickle Me Elmo bebeğine bağlı olacak, geri ve yalnızca Toys R Us'ta bir sezon kurtarmak için bir canavar sahnelemek için?"
+          "text": "There are a lot of things that I’m not sure I’d buy, but I’ve got a list of things I’ll buy, and I’re not sure if I’lll be able to afford them.I’m a mom of two, and my budget isn’t going to allow me to buy anything I don’t needW"
         },
         {
           "model_label": "C",
-          "text": "Okumaya devam et\nYani bu iki çocuğun annesi için, bu listede beni, çek defterimi zorlayacak hiçbir şey yok. İyi, paralı Şirketler Kim bilir, belki de orijinal Tickle Me Elmo bebeği, Toys R Us'a geri dönecek ve sezonun bir canavarını kurtaracak mı?"
+          "text": "Okumaya devam edin\nBu iki çocuğun annesi için, bu listede beni zorlayacak bir şey yok, çek defterim. İyi miyim, sersem şirketler Kim bilir, belki de orijinal Tickle Me Elmo bebeğine kadar olacak, Toys R Us'a geri dönüp sadece sezon kurtarmak için bir  canavarı sahnelemek için?"
         },
         {
           "model_label": "D",
-          "text": "Okumaya devam edin\nBu iki çocuk annesi için, bu listede beni zorlayacak bir şey yok, çek defterim. Ben iyi miyim, sersem şirketler Kim bilir, belki de orijinal Tickle Me Elmo bebeğine kadar olacak, Toys R Us'a geri dönüp sadece sezon kurtarmak için bir  canavarı sahnelemek için?"
+          "text": "Okumaya devam et\nBu yüzden iki çocuk annesi için, bu listede beni zorlayacak bir şey yok. Çek defterim. İyi, tasarruflu bir şirket miyim? Kim bilir, belki de orijinal Tickle Me Elmo bebeğine bağlı olabilir."
         },
         {
           "model_label": "E",
-          "text": "Okumaya devam et\nBu yüzden iki çocuk annesi için, bu listede beni zorlayacak bir şey yok. Çek defterim. İyi, tasarruflu bir şirket miyim? Kim bilir, belki de orijinal Tickle Me Elmo bebeğine bağlı olabilir."
+          "text": "Devamını oku.\nBu iki çocuk annesi için, bu listede cüzdanımı zorlayacak hiçbir şey yok. Belki de bu şirketler, orijinal Tickle Me Elmo bebeği gibi, sadece bir sezonluk bir etkinlik için Toys R Us'ta özel olarak satışa sunulacak."
+        },
+        {
+          "model_label": "F",
+          "text": "Okumaya devam et\nYani bu iki çocuğun annesi için, bu listede beni, çek defterimi zorlayacak hiçbir şey yok. İyi, paralı Şirketler Kim bilir, belki de orijinal Tickle Me Elmo bebeği, Toys R Us'a geri dönecek ve sezonun bir canavarını kurtaracak mı?"
+        },
+        {
+          "model_label": "G",
+          "text": "I’m a good, frugal Company, maybe it will be up to the original Tickle Me Elmo doll, back exclusively at Toys R Us in order to stage a one – monster save season.Would whip So for this mother of two, there is nothing on this list that force me, my checkbook.I’ m a good.WhileWouldWhipWould WhipWhile Would WhackWould WhipWould SqueezeWould FlickWould WiggleWould SwipeWould SweepWould ShootWould ThrowWould BlowWould StrikeWould KnockWould KickWould KillWould EatWould DrinkWould DrinkingWould BeatWhile SqueezingWould BeatWould FloatW would Whip Would ScreamWould FlyWould RunWould Go WrongWould FallWould Get"
+        },
+        {
+          "model_label": "H",
+          "text": "Okumaya devam edin.\n\nİki çocuğu olan bu anne için listede cüzdanımı zorlayacak hiçbir şey yok. Belki de orijinal \"Tickle Me Elmo\" oyuncağı, sezonu kurtarmak için tekrar ve sadece Toys R Us'ta satışa sunulur."
+        },
+        {
+          "model_label": "I",
+          "text": "Devam et\nBu iki çocuk annesi için, bu listedeki hiçbir şey benim cebimi zorlamıyor. Ben mi iyi, cimriyim? Kim bilir, belki de \"Tickle Me Elmo\" bebek, geçmişe dönerek ve sadece Toys R Us'ta, sezonda bir \"canavar\" kurtarmak için kullanılacak?"
         }
       ]
     }

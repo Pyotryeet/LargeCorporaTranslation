@@ -1,0 +1,17 @@
+{
+  "model": "TranslateGemma-4B",
+  "model_path": "google/translategemma-4b-it",
+  "backend_type": "auto",
+  "mean_tps": 35.9,
+  "median_tps": 35.9,
+  "p95_tps": 37.8,
+  "mean_latency_ms": 14296.8,
+  "batches_completed": 9,
+  "total_tokens_translated": 4608,
+  "run_duration_seconds": 183.0,
+  "batch_size": 4,
+  "load_seconds": 7.2,
+  "bertscore": 0.6171,
+  "quality_num_refs": 32,
+  "platform": "mps"
+}

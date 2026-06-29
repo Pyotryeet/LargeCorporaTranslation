@@ -1,0 +1,13 @@
+{"timestamp": "2026-06-21T09:58:05.401Z", "level": "INFO", "logger": "benchmark.hardware.backend", "message": "MPS backend: Apple Silicon, 48.0 GB unified memory"}
+{"timestamp": "2026-06-21T09:58:05.402Z", "level": "WARNING", "logger": "benchmark.utils.env_check", "message": "Reference set not found: data/references/golden_en_tr.jsonl — quality benchmark will be skipped"}
+{"timestamp": "2026-06-21T09:58:05.402Z", "level": "INFO", "logger": "benchmark.utils.env_check", "message": "Pre-flight checks passed"}
+{"timestamp": "2026-06-21T09:58:05.402Z", "level": "INFO", "logger": "benchmark.hardware.parallelism", "message": "Tensor parallelism disabled (1 GPU(s))"}
+{"timestamp": "2026-06-21T09:58:05.402Z", "level": "INFO", "logger": "benchmark.inference.engine", "message": "Loading model from google/translategemma-4b-it (backend=mps, TP=1)"}
+{"timestamp": "2026-06-21T09:58:05.402Z", "level": "INFO", "logger": "benchmark.hardware.precision", "message": "Precision: backend=mps preferred=auto master=torch.bfloat16 compute=torch.bfloat16 fp8=False"}
+{"timestamp": "2026-06-21T09:58:06.752Z", "level": "INFO", "logger": "benchmark.inference.engine", "message": "Tokenizer: vocab_size=262144"}
+{"timestamp": "2026-06-21T09:58:12.865Z", "level": "INFO", "logger": "benchmark.inference.engine", "message": "MPS unified memory: 24.3GB / 48.0GB"}
+{"timestamp": "2026-06-21T09:58:12.865Z", "level": "INFO", "logger": "benchmark.inference.engine", "message": "Model loaded in 7.5s"}
+{"timestamp": "2026-06-21T09:58:12.866Z", "level": "INFO", "logger": "benchmark.inference.batch_tuner", "message": "Tuning batch size for mps (cap=32)"}
+{"timestamp": "2026-06-21T09:58:35.094Z", "level": "INFO", "logger": "benchmark.inference.batch_tuner", "message": "Tuned batch size: 27 (max viable: 32)"}
+{"timestamp": "2026-06-21T09:58:35.094Z", "level": "INFO", "logger": "benchmark.inference.engine", "message": "Warm-up: 10 batches..."}
+{"timestamp": "2026-06-21T09:58:44.530Z", "level": "INFO", "logger": "benchmark.inference.engine", "message": "Warm-up done in 9.4s"}

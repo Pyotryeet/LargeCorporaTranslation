@@ -133,10 +133,10 @@ for mid, mpath in [
     for e in output:
         prompt = (
             f"<start_of_turn>user\n"
-            f"Translate the following English text to Turkish. "
-            f"Do not include any explanations, introduction, markdown formatting, or surrounding quote marks. "
-            f"Strictly output only the clean translation text.\n\n"
-            f"Text to translate:\n{e['source_text']}"
+            f"Aşağıdaki İngilizce metni Türkçe'ye çevir. "
+            f"Herhangi bir açıklama, giriş, markdown biçimlendirmesi veya çevreleyen tırnak işaretleri ekleme. "
+            f"Kesinlikle sadece temiz çeviri metnini çıktı olarak ver.\n\n"
+            f"Çevrilecek metin:\n{e['source_text']}"
             f"<end_of_turn>\n<start_of_turn>model\n"
         )
         inp = tok(prompt, return_tensors="pt")

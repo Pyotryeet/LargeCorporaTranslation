@@ -1,62 +1,110 @@
 [
   {
+    "model_id": "madlad_10b",
+    "metrics": {
+      "comet_kiwi": 0.5437,
+      "comet": 0.6382,
+      "metricx_24": 9.3083,
+      "bertscore": 0.765,
+      "chrf": 61.5,
+      "spbleu": 39.8,
+      "morph_bleu": 20.2
+    }
+  },
+  {
     "model_id": "madlad_3b",
     "metrics": {
-      "comet_kiwi": 0.7507,
-      "comet": 0.801,
-      "metricx_24": 7.0067,
-      "bertscore": 0.8616,
+      "comet_kiwi": 0.5206,
+      "comet": 0.6028,
+      "metricx_24": 9.9229,
+      "bertscore": 0.7446,
       "chrf": 62.1,
-      "spbleu": 48.7,
+      "spbleu": 47.7,
       "morph_bleu": 20.0
     }
   },
   {
     "model_id": "nllb_1.3b",
     "metrics": {
-      "comet_kiwi": 0.7203,
-      "comet": 0.7681,
-      "metricx_24": 7.9264,
-      "bertscore": 0.8365,
-      "chrf": 77.9,
-      "spbleu": 73.3,
+      "comet_kiwi": 0.7263,
+      "comet": 0.7705,
+      "metricx_24": 7.8042,
+      "bertscore": 0.8372,
+      "chrf": 72.2,
+      "spbleu": 71.0,
       "morph_bleu": 61.5
     }
   },
   {
     "model_id": "nllb_3.3b",
     "metrics": {
-      "comet_kiwi": 0.7385,
-      "comet": 0.7761,
-      "metricx_24": 7.4564,
-      "bertscore": 0.8513,
-      "chrf": 67.4,
-      "spbleu": 55.2,
-      "morph_bleu": 31.7
+      "comet_kiwi": 0.7342,
+      "comet": 0.7721,
+      "metricx_24": 7.6833,
+      "bertscore": 0.8433,
+      "chrf": 61.7,
+      "spbleu": 47.0,
+      "morph_bleu": 21.4
     }
   },
   {
     "model_id": "nllb_600m",
     "metrics": {
-      "comet_kiwi": 0.7036,
-      "comet": 0.7441,
-      "metricx_24": 8.3029,
-      "bertscore": 0.8371,
+      "comet_kiwi": 0.7035,
+      "comet": 0.745,
+      "metricx_24": 8.3292,
+      "bertscore": 0.8378,
       "chrf": 47.0,
-      "spbleu": 32.3,
+      "spbleu": 31.5,
       "morph_bleu": 18.8
+    }
+  },
+  {
+    "model_id": "nllb_moe_54b",
+    "metrics": {
+      "comet_kiwi": 0.7495,
+      "comet": 0.7999,
+      "metricx_24": 6.4146,
+      "bertscore": 0.8589,
+      "chrf": 64.2,
+      "spbleu": 50.9,
+      "morph_bleu": 25.5
+    }
+  },
+  {
+    "model_id": "translategemma_12b",
+    "metrics": {
+      "comet_kiwi": 0.7801,
+      "comet": 0.8447,
+      "metricx_24": 5.2279,
+      "bertscore": 0.8471,
+      "chrf": 59.4,
+      "spbleu": 42.1,
+      "morph_bleu": 17.6
+    }
+  },
+  {
+    "model_id": "translategemma_27b",
+    "metrics": {
+      "comet_kiwi": 0.7831,
+      "comet": 0.8453,
+      "metricx_24": 4.4663,
+      "bertscore": 0.8528,
+      "chrf": 57.3,
+      "spbleu": 30.0,
+      "morph_bleu": 14.7
     }
   },
   {
     "model_id": "translategemma_4b",
     "metrics": {
-      "comet_kiwi": 0.7377,
-      "comet": 0.8005,
-      "metricx_24": 6.4527,
-      "bertscore": 0.834,
+      "comet_kiwi": 0.7511,
+      "comet": 0.8162,
+      "metricx_24": 6.1961,
+      "bertscore": 0.835,
       "chrf": 56.3,
-      "spbleu": 34.3,
-      "morph_bleu": 18.6
+      "spbleu": 33.5,
+      "morph_bleu": 12.2
     }
   }
 ]
