@@ -75,7 +75,7 @@ def compute_spbleu(hyps, refs):
     import sacrebleu
     sp_tok = AutoTokenizer.from_pretrained("google/translategemma-4b-it")
     hyp_tok = [" ".join(sp_tok.convert_ids_to_tokens(sp_tok.encode(h, add_special_tokens=False))) for h in hyps]
-    ref_tok = [[" ".join(sp_tok.convert_ids_to_tokens(sp_tok.encode(refs[i], add_special_tokens=False)))] for i in range(len(refs))]
+    ref_tok = [[" ".join(sp_tok.convert_ids_to_tokens(sp_tok.encode(r, add_special_tokens=False))) for r in refs]]
     result = sacrebleu.corpus_bleu(hyp_tok, ref_tok, tokenize="none")
     return round(result.score, 1)
 
@@ -97,7 +97,7 @@ def compute_morph_bleu(hyps, refs):
                 return lower[:-len(s)]
         return lower
     hyp_stripped = [" ".join(strip_suffixes(w) for w in h.split()) for h in hyps]
-    ref_stripped = [[" ".join(strip_suffixes(w) for w in refs[i].split())] for i in range(len(refs))]
+    ref_stripped = [[" ".join(strip_suffixes(w) for w in r.split()) for r in refs]]
     result = sacrebleu.corpus_bleu(hyp_stripped, ref_stripped, tokenize="intl")
     return round(result.score, 1)
 

@@ -88,7 +88,7 @@ def compute_spbleu(hyps, refs):
     except Exception:
         return {"score": None, "error": "tokenizer not available"}
     hyp_tok = [" ".join(sp_tok.convert_ids_to_tokens(sp_tok.encode(h, add_special_tokens=False))) for h in hyps]
-    ref_tok = [[" ".join(sp_tok.convert_ids_to_tokens(sp_tok.encode(refs[i], add_special_tokens=False)))] for i in range(len(refs))]
+    ref_tok = [[" ".join(sp_tok.convert_ids_to_tokens(sp_tok.encode(r, add_special_tokens=False))) for r in refs]]
     result = sacrebleu.corpus_bleu(hyp_tok, ref_tok, tokenize="none")
     return {"score": round(result.score, 1)}
 
@@ -114,7 +114,7 @@ def compute_morph_bleu(hyps, refs):
         return lower
 
     hyp_stripped = [" ".join(strip_suffixes(w) for w in h.split()) for h in hyps]
-    ref_stripped = [[" ".join(strip_suffixes(w) for w in refs[i].split())] for i in range(len(refs))]
+    ref_stripped = [[" ".join(strip_suffixes(w) for w in r.split()) for r in refs]]
     result = sacrebleu.corpus_bleu(hyp_stripped, ref_stripped, tokenize="intl")
     return {"score": round(result.score, 1)}
 
@@ -209,7 +209,7 @@ def main():
         # 5. chrF++ — character+word n-gram
         try:
             from benchmark.quality.metrics_chrf import compute_chrf
-            c = compute_chrf(matched_hyp, [[r] for r in matched_ref])
+            c = compute_chrf(matched_hyp, [matched_ref])
             result["metrics"]["chrf"] = c.get("score")
             print(f"  chrF++:        {c.get('score', 'N/A')}")
         except Exception as e:
