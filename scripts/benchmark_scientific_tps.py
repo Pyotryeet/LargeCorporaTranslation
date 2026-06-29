@@ -13,12 +13,14 @@ Output: data/output/scientific_tps_matrix.csv
 Usage:
     python3 scripts/benchmark_scientific_tps.py
 """
-import json, csv, os, sys, time, tempfile, atexit, subprocess
+import json, csv, os, sys, time, tempfile, atexit, subprocess, fcntl
 from pathlib import Path
 from datetime import datetime, timezone
 
 ROOT = Path(__file__).resolve().parent.parent
-OUTPUT = ROOT / "data" / "output" / "scientific_tps_matrix.csv"
+TIMESTAMP = datetime.now().strftime("%Y%m%d_%H%M%S")
+OUTPUT = ROOT / "data" / "output" / f"scientific_tps_matrix_{TIMESTAMP}.csv"
+DEFAULT_OUTPUT = ROOT / "data" / "output" / "scientific_tps_matrix.csv"
 
 # ── Models to benchmark ──────────────────────────────────────────
 # Format: (model_id, huggingface_path, architecture_type)
@@ -75,6 +77,17 @@ EXPERIMENTS = [
         "continuous": False,
         "safe_mode": False,  # Changed to False so we only measure attention delta, not cudaMallocAsync
         "description": "Baseline (BF16, Flash SDPA disabled, eager attention)",
+    },
+    {
+        "label": "eager_safe_mode",
+        "fp8": False,
+        "compile": False,
+        "flash": False,
+        "speculative": False,
+        "paged": False,
+        "continuous": False,
+        "safe_mode": True,  # Disables both Flash attention and cudaMallocAsync for a true unaccelerated baseline
+        "description": "Safe-mode baseline (BF16, eager attention, cudaMallocAsync disabled)",
     },
     {
         "label": "fp8_plus_compile",
@@ -285,57 +298,87 @@ def run_experiment(
         env["TR_SKIP_FP8"] = "1"
         env["TR_SKIP_SMOOTHQUANT"] = "1"
 
-    # ── Build command ──
-    cmd = [
-        sys.executable, "-m", "benchmark",
-        "--config", config_path,
-        "--translate-only",
-        "--duration", str(DURATION_SECONDS),
-    ]
-
-    if not experiment["compile"]:
-        cmd.append("--no-compile")
-
-    if experiment.get("safe_mode"):
-        cmd.append("--safe-mode")
-
     # Force batch sizes explicitly to bypass the BatchSizeTuner search
     # This prevents tuner time-waste and CUDA/MPS OOMs during exploration runs.
-    if experiment.get("continuous"):
-        cmd.extend(["--batch-size", "16"])
-    else:
-        # To measure scaling efficiency correctly, keep per-GPU batch size constant.
-        # DP=2 processes double the total workload (256 vs 128) so each GPU gets exactly 128.
-        bs = "256" if num_gpus == 2 else "128"
-        cmd.extend(["--batch-size", bs])
+    base_bs = 16 if experiment.get("continuous") else (256 if num_gpus == 2 else 128)
+    current_bs = base_bs
 
-    # For NLLB/MADLAD, tell the CLI it's an encoder-decoder model
-    if model_type in ("nllb", "madlad"):
-        cmd.append("--nllb")
+    while True:
+        # ── Build command ──
+        cmd = [
+            sys.executable, "-m", "benchmark",
+            "--config", config_path,
+            "--translate-only",
+            "--duration", str(DURATION_SECONDS),
+        ]
 
-    print(f"  CMD: {' '.join(cmd)}")
-    print(f"  FP8={'ON' if experiment['fp8'] else 'OFF'} | "
-          f"Compile={'ON' if experiment['compile'] else 'OFF'} | "
-          f"Flash={'ON' if experiment['flash'] else 'OFF'} | "
-          f"DP={dp}")
+        if not experiment["compile"]:
+            cmd.append("--no-compile")
 
-    # ── Execute ──
-    t_start = time.time()
-    try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=600,  # 10 min hard timeout
-            env=env,
-            cwd=str(ROOT),
-        )
-    except subprocess.TimeoutExpired:
-        print("  ⚠ TIMEOUT (10 min) — skipping this cell")
-        return None
+        if experiment.get("safe_mode"):
+            cmd.append("--safe-mode")
 
-    elapsed = time.time() - t_start
-    print(f"  Completed in {elapsed:.0f}s (exit={result.returncode})")
+        cmd.extend(["--batch-size", str(current_bs)])
+
+        # For NLLB/MADLAD, tell the CLI it's an encoder-decoder model
+        if model_type in ("nllb", "madlad"):
+            cmd.append("--nllb")
+
+        print(f"  CMD: {' '.join(cmd)}")
+        print(f"  FP8={'ON' if experiment['fp8'] else 'OFF'} | "
+              f"Compile={'ON' if experiment['compile'] else 'OFF'} | "
+              f"Flash={'ON' if experiment['flash'] else 'OFF'} | "
+              f"DP={dp} | BatchSize={current_bs}")
+
+        # ── Execute ──
+        t_start = time.time()
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=600,  # 10 min hard timeout
+                env=env,
+                cwd=str(ROOT),
+            )
+        except subprocess.TimeoutExpired:
+            print("  ⚠ TIMEOUT (10 min) — skipping this cell")
+            return None
+
+        elapsed = time.time() - t_start
+        print(f"  Completed in {elapsed:.0f}s (exit={result.returncode})")
+
+        # Check for CUDA OOM / OutOfMemoryError in stdout or stderr
+        is_oom = False
+        if result.returncode != 0:
+            output_for_oom_check = (result.stdout or "") + (result.stderr or "")
+            if any(kw in output_for_oom_check for kw in ["OutOfMemoryError", "out of memory", "OOM"]):
+                is_oom = True
+
+        if is_oom:
+            next_bs = current_bs // 2
+            if next_bs >= 8:
+                print(f"  ⚠ CUDA OOM detected at batch size {current_bs}! Retrying with batch size {next_bs}...")
+                current_bs = next_bs
+                continue
+            else:
+                print(f"  ⚠ CUDA OOM detected at batch size {current_bs}, but cannot reduce batch size further (minimum is 8).")
+                print("--- STDOUT ---")
+                print(result.stdout)
+                print("--- STDERR ---")
+                print(result.stderr)
+                return None
+
+        if result.returncode != 0:
+            print(f"  ⚠ Subprocess failed with exit code {result.returncode}")
+            print("--- STDOUT ---")
+            print(result.stdout)
+            print("--- STDERR ---")
+            print(result.stderr)
+            return None
+
+        # Successfully ran. Break out to parse results.
+        break
 
     # Parse exact run directory from stdout to avoid race conditions or picking up old reports
     report_dir = None
@@ -355,7 +398,12 @@ def run_experiment(
         print(result.stderr)
         return None
 
-    report_path = ROOT / report_dir / "report" / "benchmark_report.json"
+    # Support both relative and absolute report directory paths
+    if report_dir.is_absolute():
+        report_path = report_dir / "report" / "benchmark_report.json"
+    else:
+        report_path = ROOT / report_dir / "report" / "benchmark_report.json"
+
     if not report_path.exists():
         print(f"  ⚠ Report file does not exist: {report_path}")
         return None
@@ -410,25 +458,32 @@ def run_experiment(
 
 
 def _write_csv_row(row: dict):
-    """Append a single row to the CSV file incrementally.
+    """Append a single row to the CSV file incrementally in a concurrency-safe, race-free manner.
 
-    Uses a temporary file and atomic replacement (or falls back to direct append if NFS is detected)
-    to guarantee crash safety while maintaining O(N) total I/O cost.
+    Uses POSIX fcntl.flock to acquire an exclusive write lock on the file.
+    Checks if the file is empty inside the lock to safely decide whether to write the header.
     Writes with UTF-8-SIG (BOM) for correct rendering in Windows Excel.
     """
     OUTPUT.parent.mkdir(parents=True, exist_ok=True)
-    write_header = not OUTPUT.exists()
     
-    # Check if we can write atomically
     try:
-        # Open in append mode with UTF-8-SIG to automatically insert the BOM on creation
-        with open(OUTPUT, "a", newline="", encoding="utf-8-sig") as f:
-            w = csv.DictWriter(f, fieldnames=FIELD_NAMES)
-            if write_header:
-                w.writeheader()
-            w.writerow(row)
+        # Open in read/write/append mode to check size and append safely
+        with open(OUTPUT, "a+", newline="", encoding="utf-8-sig") as f:
+            # Acquire exclusive lock (blocks until acquired)
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+            try:
+                # Seek to start to check size, then seek to end to append
+                f.seek(0, os.SEEK_END)
+                is_empty = f.tell() == 0
+                w = csv.DictWriter(f, fieldnames=FIELD_NAMES)
+                if is_empty:
+                    w.writeheader()
+                w.writerow(row)
+            finally:
+                # Release lock
+                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
     except Exception as e:
-        print(f"  ⚠ Failed incremental write to CSV: {e}")
+        print(f"  ⚠ Failed incremental write to CSV with lock: {e}")
 
 
 def _get_active_runs() -> list[tuple]:
@@ -492,8 +547,25 @@ def main() -> int:
             print("  ⚠ Failed cell run recorded as None")
             failures += 1
 
+        # Thermal cooldown: pause to prevent cumulative GPU heat and thermal throttling
+        # between consecutive runs, ensuring scientific accuracy of TPS measurements.
+        if completed < total:
+            print("  Cooldown: sleeping for 5s to allow GPU temperature to stabilize...")
+            time.sleep(5)
+
+    # Copy the final timestamped CSV results to the default unversioned file path
+    if OUTPUT.exists():
+        try:
+            import shutil
+            shutil.copyfile(OUTPUT, DEFAULT_OUTPUT)
+            print(f"  → Copied versioned results to: {DEFAULT_OUTPUT}")
+        except Exception as e:
+            print(f"  ⚠ Failed to copy versioned CSV: {e}")
+
     print(f"\n{'=' * 72}")
-    print(f"DONE — {len(rows)}/{total} experiments completed (failures={failures}) → {OUTPUT}")
+    print(f"DONE — {len(rows)}/{total} experiments completed (failures={failures})")
+    print(f"  - Versioned results: {OUTPUT}")
+    print(f"  - Default symlink:    {DEFAULT_OUTPUT}")
     print(f"{'=' * 72}")
 
     return 1 if failures > 0 or len(rows) == 0 else 0
