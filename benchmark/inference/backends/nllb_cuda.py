@@ -170,6 +170,17 @@ class NLLBCUDABackend(InferenceBackend):
 
         self.model.eval()
 
+        # Apply Static FP8 weight-only quantization if enabled
+        _safe_mode = self.config.extra.get("safe_mode", False)
+        if os.environ.get("TR_SKIP_FP8") != "1" and not _safe_mode:
+            try:
+                from benchmark.hardware.precision import apply_static_fp8_to_model
+                replaced = apply_static_fp8_to_model(self.model, skip_lm_head=True)
+                if replaced > 0:
+                    logger.info("FP8 ACTIVE — %d layers via StaticFP8Linear (NLLB CUDA)", replaced)
+            except Exception as e:
+                logger.warning("Failed to apply Static FP8 to NLLB model: %s", e)
+
         if self.use_torch_compile:
             try:
                 self.model = torch.compile(self.model, mode="reduce-overhead")

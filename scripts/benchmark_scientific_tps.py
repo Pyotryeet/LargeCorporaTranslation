@@ -436,22 +436,21 @@ def _get_active_runs() -> list[tuple]:
 
     Filters experiments based on architectural compatibility:
       - Gemma (Causal): supports all experiments.
-      - NLLB/MADLAD (Enc-Dec): only evaluates baseline vs eager (safe mode).
-        Compiles and FP8 quantizations are excluded to avoid DynamicCache crashes
-        and misleading labels.
+      - NLLB/MADLAD (Enc-Dec): supports baseline, eager attention, and FP8 weight quantization.
+        torch.compile is skipped to avoid DynamicCache shape crashes, and causal-only
+        optimizations (speculative, paged, continuous) are excluded.
     """
     runs = []
     for model_id, model_path, model_type in MODELS:
         for experiment in EXPERIMENTS:
             # Skip invalid optimizations for encoder-decoder models
-            is_causal_opt = (
-                experiment["fp8"] or
+            is_invalid_for_enc_dec = (
                 experiment["compile"] or
                 experiment.get("speculative") or
                 experiment.get("paged") or
                 experiment.get("continuous")
             )
-            if is_causal_opt and model_type != "gemma":
+            if is_invalid_for_enc_dec and model_type != "gemma":
                 continue
 
             for num_gpus in GPU_COUNTS:
