@@ -17,6 +17,8 @@ import json, csv, os, sys, time, tempfile, atexit, subprocess, shutil
 from pathlib import Path
 from datetime import datetime, timezone
 
+from typing import Any
+
 try:
     import fcntl
 except ImportError:
@@ -24,16 +26,15 @@ except ImportError:
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_OUTPUT = ROOT / "data" / "output" / "scientific_tps_matrix.csv"
-OUTPUT = None  # Populated dynamically at run time in main() using UTC timestamp
 
 # ── Models to benchmark ──────────────────────────────────────────
 # Format: (model_id, huggingface_path, architecture_type)
 MODELS = [
-    ("nllb_600m",    "facebook/nllb-200-distilled-600M", "nllb"),
-    ("nllb_1.3b",    "facebook/nllb-200-distilled-1.3B", "nllb"),
-    ("nllb_3.3b",    "facebook/nllb-200-3.3B",           "nllb"),
-    ("madlad_3b",    "google/madlad400-3b-mt",           "madlad"),
-    ("gemma_4b",     "google/translategemma-4b-it",      "gemma"),
+    ("nllb_600m",    "facebook/nllb-200-distilled-600M", "encoder_decoder"),
+    ("nllb_1.3b",    "facebook/nllb-200-distilled-1.3B", "encoder_decoder"),
+    ("nllb_3.3b",    "facebook/nllb-200-3.3B",           "encoder_decoder"),
+    ("madlad_3b",    "google/madlad400-3b-mt",           "encoder_decoder"),
+    ("gemma_4b",     "google/translategemma-4b-it",      "autoregressive"),
 ]
 
 # ── Optimization Matrix Definitions ──────────────────────────────
@@ -82,17 +83,7 @@ EXPERIMENTS = [
         "safe_mode": False,  # Changed to False so we only measure attention delta, not cudaMallocAsync
         "description": "Baseline (BF16, Flash SDPA disabled, eager attention)",
     },
-    {
-        "label": "eager_safe_mode",
-        "fp8": False,
-        "compile": False,
-        "flash": False,
-        "speculative": False,
-        "paged": False,
-        "continuous": False,
-        "safe_mode": True,  # Disables both Flash attention and cudaMallocAsync for a true unaccelerated baseline
-        "description": "Safe-mode baseline (BF16, eager attention, cudaMallocAsync disabled)",
-    },
+
     {
         "label": "fp8_plus_compile",
         "fp8": True,
@@ -181,7 +172,7 @@ FIELD_NAMES = [
     "mean_tps", "median_tps", "std_tps",
     "total_tokens", "output_tokens", "batches", "duration_s",
     "mean_latency_ms",
-    "flash_sdpa", "torch_compile", "fp8_smoothquant",
+    "flash_sdpa", "torch_compile", "fp8_quantized",
     "speculative", "paged_attention", "continuous_batching",
     "batch_size",
 ]
@@ -216,9 +207,11 @@ def _build_config(
     model_type: str,
     experiment: dict,
     num_gpus: int,
+    output_dir: str,
 ) -> dict:
     """Build a benchmark config dict for one experiment cell."""
-    backend_type = "encoder_decoder" if model_type in ("nllb", "madlad") else "autoregressive"
+    # model_type matches the actual backend name (encoder_decoder or autoregressive)
+    backend_type = model_type
 
     cfg = {
         "backend": "auto",
@@ -257,7 +250,7 @@ def _build_config(
         },
         "data": {
             "input_paths": ["./data/input/*.jsonl.gz"],
-            "output_dir": "./output/scientific",
+            "output_dir": output_dir,
             "reference_set_path": "./data/references/golden_en_tr.jsonl",
             "prefetch_workers": 4,
             "shuffle": False,
@@ -280,6 +273,7 @@ def run_experiment(
     num_gpus: int,
 ) -> dict | None:
     """Run one benchmark cell. Returns a dict row for the CSV, or None on failure."""
+    import uuid
     exp_label = experiment["label"]
     dp = num_gpus
 
@@ -288,7 +282,13 @@ def run_experiment(
     print(f"  {experiment['description']}")
     print(f"{'=' * 72}")
 
-    cfg = _build_config(model_path, model_type, experiment, num_gpus)
+    # Generate a completely unique output directory for this cell execution to guarantee
+    # zero parallel run directory contamination or glob sorting race conditions.
+    unique_id = uuid.uuid4().hex[:8]
+    cell_output_dir = ROOT / "output" / "scientific" / f"{model_id}_{exp_label}_{num_gpus}gpu_{unique_id}"
+    cell_output_dir.mkdir(parents=True, exist_ok=True)
+
+    cfg = _build_config(model_path, model_type, experiment, num_gpus, str(cell_output_dir))
     config_path = _write_temp_config(cfg)
 
     # ── Build environment ──
@@ -326,7 +326,7 @@ def run_experiment(
         cmd.extend(["--batch-size", str(current_bs)])
 
         # For NLLB/MADLAD, tell the CLI it's an encoder-decoder model
-        if model_type in ("nllb", "madlad"):
+        if model_type == "encoder_decoder":
             cmd.append("--nllb")
 
         print(f"  CMD: {' '.join(cmd)}")
@@ -385,38 +385,24 @@ def run_experiment(
         # Successfully ran. Break out to parse results.
         break
 
-    # Parse exact run directory from stdout to avoid race conditions
+    # Locate report directory by listing the unique cell output directory.
+    # Harness creates a single timestamped subdirectory inside cell_output_dir.
     report_dir = None
-    if result.stdout:
-        for line in result.stdout.split("\n"):
-            if "Run dir:" in line:
-                parts = line.split("Run dir:")
-                if len(parts) > 1:
-                    report_dir = Path(parts[1].strip())
-                    break
+    if cell_output_dir.exists():
+        subdirs = [d for d in cell_output_dir.iterdir() if d.is_dir()]
+        if subdirs:
+            # Pick the single timestamped subdirectory created by the harness run
+            report_dir = subdirs[0]
 
     if not report_dir:
-        print("  ⚠ Could not parse Run dir from stdout. Falling back to glob search...")
-        output_base = ROOT / "output" / "scientific"
-        if output_base.exists():
-            subdirs = [d for d in output_base.iterdir() if d.is_dir()]
-            if subdirs:
-                report_dir = max(subdirs, key=lambda d: d.stat().st_mtime)
-
-    if not report_dir:
-        print("  ⚠ Could not resolve Run dir")
+        print(f"  ⚠ Could not resolve Run dir inside {cell_output_dir}")
         print("--- STDOUT ---")
         print(result.stdout)
         print("--- STDERR ---")
         print(result.stderr)
         return None
 
-    # Support both relative and absolute report directory paths
-    if report_dir.is_absolute():
-        report_path = report_dir / "report" / "benchmark_report.json"
-    else:
-        report_path = ROOT / report_dir / "report" / "benchmark_report.json"
-
+    report_path = report_dir / "report" / "benchmark_report.json"
     if not report_path.exists():
         print(f"  ⚠ Report file does not exist: {report_path}")
         return None
@@ -470,7 +456,7 @@ def run_experiment(
         "mean_latency_ms": batch_metrics.get("mean_latency_ms"),
         "flash_sdpa": "✓" if experiment["flash"] else "✗",
         "torch_compile": "✓" if experiment["compile"] else "✗",
-        "fp8_smoothquant": "✓" if experiment["fp8"] else "✗",
+        "fp8_quantized": "✓" if experiment["fp8"] else "✗",
         "speculative": "✓" if experiment.get("speculative") else "✗",
         "paged_attention": "✓" if experiment.get("paged") else "✗",
         "continuous_batching": "✓" if experiment.get("continuous") else "✗",
@@ -478,33 +464,22 @@ def run_experiment(
     }
 
 
-def _write_csv_row(row: dict):
-    """Append a single row to the CSV file incrementally in a concurrency-safe, race-free manner.
+def _write_csv_row(row: dict[str, Any], output_path: Path):
+    """Append a single row to the CSV file incrementally.
 
-    Uses POSIX fcntl.flock to acquire an exclusive write lock on the file.
-    Checks if the file is empty inside the lock to safely decide whether to write the header.
     Writes with UTF-8-SIG (BOM) for correct rendering in Windows Excel.
     """
-    OUTPUT.parent.mkdir(parents=True, exist_ok=True)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    write_header = not output_path.exists()
     
     try:
-        # Open in read/write/append mode to check size and append safely
-        with open(OUTPUT, "a+", newline="", encoding="utf-8-sig") as f:
-            # Acquire exclusive lock (blocks until acquired)
-            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
-            try:
-                # Seek to start to check size, then seek to end to append
-                f.seek(0, os.SEEK_END)
-                is_empty = f.tell() == 0
-                w = csv.DictWriter(f, fieldnames=FIELD_NAMES)
-                if is_empty:
-                    w.writeheader()
-                w.writerow(row)
-            finally:
-                # Release lock
-                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+        with open(output_path, "a", newline="", encoding="utf-8-sig") as f:
+            w = csv.DictWriter(f, fieldnames=FIELD_NAMES)
+            if write_header:
+                w.writeheader()
+            w.writerow(row)
     except Exception as e:
-        print(f"  ⚠ Failed incremental write to CSV with lock: {e}")
+        print(f"  ⚠ Failed incremental write to CSV: {e}")
 
 
 def _get_active_runs() -> list[tuple]:
@@ -526,7 +501,7 @@ def _get_active_runs() -> list[tuple]:
                 experiment.get("paged") or
                 experiment.get("continuous")
             )
-            if is_invalid_for_enc_dec and model_type != "gemma":
+            if is_invalid_for_enc_dec and model_type != "autoregressive":
                 continue
 
             for num_gpus in GPU_COUNTS:
@@ -535,10 +510,9 @@ def _get_active_runs() -> list[tuple]:
 
 
 def main() -> int:
-    global OUTPUT
     # Timestamp dynamically at start of execution using UTC to prevent import-time freeze or NTP drift
     utc_now_str = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%SZ")
-    OUTPUT = ROOT / "data" / "output" / f"scientific_tps_matrix_{utc_now_str}.csv"
+    output_path = ROOT / "data" / "output" / f"scientific_tps_matrix_{utc_now_str}.csv"
 
     active_runs = _get_active_runs()
     total = len(active_runs)
@@ -549,10 +523,10 @@ def main() -> int:
     print(f"  GPU counts:  {GPU_COUNTS}")
     print(f"  Total cells: {total}")
     print(f"  Duration:    {DURATION_SECONDS}s per cell")
-    print(f"  Output:      {OUTPUT}")
+    print(f"  Output:      {output_path}")
     print()
 
-    rows: list[dict] = []
+    rows: list[dict[str, Any]] = []
     completed = 0
     failures = 0
 
@@ -567,7 +541,7 @@ def main() -> int:
 
         if row:
             rows.append(row)
-            _write_csv_row(row)
+            _write_csv_row(row, output_path)
             print(f"  → Saved ({len(rows)} rows so far)")
         else:
             print("  ⚠ Failed cell run recorded as None")
@@ -580,18 +554,17 @@ def main() -> int:
             time.sleep(5)
 
     # Copy the final timestamped CSV results to the default unversioned file path
-    if OUTPUT.exists():
+    if output_path.exists():
         try:
-            import shutil
-            shutil.copyfile(OUTPUT, DEFAULT_OUTPUT)
+            shutil.copyfile(output_path, DEFAULT_OUTPUT)
             print(f"  → Copied versioned results to: {DEFAULT_OUTPUT}")
         except Exception as e:
             print(f"  ⚠ Failed to copy versioned CSV: {e}")
 
     print(f"\n{'=' * 72}")
     print(f"DONE — {len(rows)}/{total} experiments completed (failures={failures})")
-    print(f"  - Versioned results: {OUTPUT}")
-    print(f"  - Default symlink:    {DEFAULT_OUTPUT}")
+    print(f"  - Versioned results:   {output_path}")
+    print(f"  - Default output file: {DEFAULT_OUTPUT}")
     print(f"{'=' * 72}")
 
     return 1 if failures > 0 or len(rows) == 0 else 0

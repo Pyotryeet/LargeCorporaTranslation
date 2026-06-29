@@ -329,12 +329,14 @@ class NLLBCUDABackend(InferenceBackend):
         max_new = self.max_new_tokens
         eos_id = self.tokenizer.eos_token_id
         pad_id = self.tokenizer.pad_token_id or 0
-        bos_id = (
-            self._forced_bos_id
-            or getattr(self.model.config, "decoder_start_token_id", None)
-            or self.tokenizer.bos_token_id
-            or 0
-        )
+        bos_id = self._forced_bos_id
+        if bos_id is None:
+            if "madlad" in self.tokenizer_path.lower():
+                # For MADLAD/T5, the config's decoder_start_token_id is 0, which corresponds to <unk>.
+                # We must start decoding with pad_token_id (1) to generate valid translations.
+                bos_id = self.tokenizer.pad_token_id or 1
+            else:
+                bos_id = getattr(self.model.config, "decoder_start_token_id", None) or self.tokenizer.bos_token_id or 0
 
         # ── Encoder (once) ──
         encoder = self.model.get_encoder()
