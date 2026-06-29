@@ -39,13 +39,16 @@ MODELS = [
 
 # ── Experiment matrix ────────────────────────────────────────────
 # Each experiment is a dict describing which optimizations are ON.
-# Every model is tested under every experiment × every GPU count.
+# Causal-only optimizations are skipped for encoder-decoder models.
 EXPERIMENTS = [
     {
         "label": "baseline_bf16",
         "fp8": False,
         "compile": False,
         "flash": True,
+        "speculative": False,
+        "paged": False,
+        "continuous": False,
         "description": "BF16 baseline with Flash SDPA, no compile, no FP8",
     },
     {
@@ -53,6 +56,9 @@ EXPERIMENTS = [
         "fp8": True,
         "compile": False,
         "flash": True,
+        "speculative": False,
+        "paged": False,
+        "continuous": False,
         "description": "SmoothQuant + static FP8, no compile",
     },
     {
@@ -60,6 +66,9 @@ EXPERIMENTS = [
         "fp8": False,
         "compile": True,
         "flash": True,
+        "speculative": False,
+        "paged": False,
+        "continuous": False,
         "description": "torch.compile only, BF16, Flash SDPA on",
     },
     {
@@ -67,6 +76,9 @@ EXPERIMENTS = [
         "fp8": False,
         "compile": False,
         "flash": False,
+        "speculative": False,
+        "paged": False,
+        "continuous": False,
         "description": "BF16, Flash SDPA disabled (eager attention)",
     },
     {
@@ -74,13 +86,19 @@ EXPERIMENTS = [
         "fp8": True,
         "compile": True,
         "flash": True,
-        "description": "FP8 + torch.compile + Flash SDPA (all optimizations)",
+        "speculative": False,
+        "paged": False,
+        "continuous": False,
+        "description": "FP8 + torch.compile + Flash SDPA (all core optimizations)",
     },
     {
         "label": "fp8_no_flash",
         "fp8": True,
         "compile": False,
         "flash": False,
+        "speculative": False,
+        "paged": False,
+        "continuous": False,
         "description": "FP8 + eager attention (isolate FP8 without Flash SDPA)",
     },
     {
@@ -88,6 +106,9 @@ EXPERIMENTS = [
         "fp8": False,
         "compile": True,
         "flash": False,
+        "speculative": False,
+        "paged": False,
+        "continuous": False,
         "description": "torch.compile + eager attention (isolate compile without Flash SDPA)",
     },
     {
@@ -95,7 +116,40 @@ EXPERIMENTS = [
         "fp8": True,
         "compile": True,
         "flash": False,
+        "speculative": False,
+        "paged": False,
+        "continuous": False,
         "description": "FP8 + torch.compile, Flash SDPA off (all opts except flash)",
+    },
+    {
+        "label": "speculative_decoding",
+        "fp8": False,
+        "compile": False,
+        "flash": True,
+        "speculative": True,
+        "paged": False,
+        "continuous": False,
+        "description": "Speculative decoding (K=3, self-speculative draft layers)",
+    },
+    {
+        "label": "paged_attention",
+        "fp8": False,
+        "compile": False,
+        "flash": True,
+        "speculative": False,
+        "paged": True,
+        "continuous": False,
+        "description": "PagedAttention KV-cache optimization",
+    },
+    {
+        "label": "continuous_batching",
+        "fp8": False,
+        "compile": False,
+        "flash": True,
+        "speculative": False,
+        "paged": True,
+        "continuous": True,
+        "description": "Continuous Batching (with PagedAttention)",
     },
 ]
 
@@ -109,6 +163,7 @@ FIELD_NAMES = [
     "mean_tps", "median_tps", "std_tps",
     "total_tokens", "batches", "duration_s",
     "flash_sdpa", "torch_compile", "fp8_smoothquant",
+    "speculative", "paged_attention", "continuous_batching",
     "batch_size",
 ]
 
@@ -163,13 +218,13 @@ def _build_config(
             "backend_type": backend_type,
             "plugin_name": "",
             "plugin_config": {},
-            "use_speculative": False,
+            "use_speculative": experiment.get("speculative", False),
             "speculative_mode": "self",
             "speculative_num_tokens": 3,
             "speculative_draft_model": "",
             "speculative_num_draft_layers": 0,
-            "use_paged_attention": False,
-            "use_continuous_batching": False,
+            "use_paged_attention": experiment.get("paged", False),
+            "use_continuous_batching": experiment.get("continuous", False),
             "quantization": "bf16",
             "data_parallel_size": num_gpus,
             "nllb_source_lang": "eng_Latn",
@@ -177,6 +232,7 @@ def _build_config(
         },
         "runtime": {
             "target_duration_seconds": DURATION_SECONDS,
+            "batch_size": 16 if experiment.get("continuous", False) else 0, # Force batch size >= 2 for continuous batching
             "checkpoint_interval_seconds": 300,
             "heartbeat_interval_seconds": 30,
             "metrics_sample_rate_hz": 1,
@@ -359,6 +415,9 @@ def run_experiment(
         "flash_sdpa": "✓" if experiment["flash"] else "✗",
         "torch_compile": "✓" if experiment["compile"] else "✗",
         "fp8_smoothquant": "✓" if experiment["fp8"] else "✗",
+        "speculative": "✓" if experiment.get("speculative") else "✗",
+        "paged_attention": "✓" if experiment.get("paged") else "✗",
+        "continuous_batching": "✓" if experiment.get("continuous") else "✗",
         "batch_size": batch_metrics.get("batch_size", ""),
     }
 
@@ -375,21 +434,35 @@ def _write_csv(rows: list[dict]):
 
 
 def main():
+    # Calculate precise total number of cells to run
+    total = 0
+    for model_id, model_path, model_type in MODELS:
+        for experiment in EXPERIMENTS:
+            for num_gpus in GPU_COUNTS:
+                if experiment.get("speculative") or experiment.get("paged") or experiment.get("continuous"):
+                    if model_type != "gemma":
+                        continue
+                total += 1
+
     print(f"Scientific TPS Benchmark Matrix")
     print(f"  Models:      {len(MODELS)}")
-    print(f"  Experiments: {len(EXPERIMENTS)}")
+    print(f"  Experiments: {len(EXPERIMENTS)} (some causal-only)")
     print(f"  GPU counts:  {GPU_COUNTS}")
-    print(f"  Total cells: {len(MODELS) * len(EXPERIMENTS) * len(GPU_COUNTS)}")
+    print(f"  Total cells: {total}")
     print(f"  Duration:    {DURATION_SECONDS}s per cell")
     print(f"  Output:      {OUTPUT}")
     print()
 
     rows: list[dict] = []
     completed = 0
-    total = len(MODELS) * len(EXPERIMENTS) * len(GPU_COUNTS)
 
     for model_id, model_path, model_type in MODELS:
         for experiment in EXPERIMENTS:
+            # Skip causal-only experiments for encoder-decoder models
+            if experiment.get("speculative") or experiment.get("paged") or experiment.get("continuous"):
+                if model_type != "gemma":
+                    continue
+
             for num_gpus in GPU_COUNTS:
                 completed += 1
                 print(f"\n[{completed}/{total}]", end="")
