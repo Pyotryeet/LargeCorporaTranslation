@@ -174,7 +174,7 @@ FIELD_NAMES = [
     "mean_latency_ms",
     "flash_sdpa", "torch_compile", "fp8_quantized",
     "speculative", "paged_attention", "continuous_batching",
-    "batch_size",
+    "batch_size", "initial_batch_size", "oom_retries",
 ]
 
 # Track temp files for cleanup
@@ -265,6 +265,18 @@ def _build_config(
     return cfg
 
 
+def _safe_get(d: dict, *keys: str, default=None) -> Any:
+    """Safely traverse a nested dictionary to prevent AttributeError on None values."""
+    curr = d
+    for k in keys:
+        if not isinstance(curr, dict):
+            return default
+        curr = curr.get(k)
+        if curr is None:
+            return default
+    return curr
+
+
 def run_experiment(
     model_id: str,
     model_path: str,
@@ -276,6 +288,7 @@ def run_experiment(
     import uuid
     exp_label = experiment["label"]
     dp = num_gpus
+    oom_retries = 0
 
     print(f"\n{'=' * 72}")
     print(f"  {model_id} | {exp_label} | dp={dp} ({num_gpus} GPU(s))")
@@ -356,8 +369,17 @@ def run_experiment(
         # Check for CUDA OOM / OutOfMemoryError in stdout or stderr
         is_oom = False
         if result.returncode != 0:
-            output_for_oom_check = (result.stdout or "") + (result.stderr or "")
-            if any(kw in output_for_oom_check for kw in ["OutOfMemoryError", "out of memory", "OOM"]):
+            output_lower = ((result.stdout or "") + (result.stderr or "")).lower()
+            oom_keywords = [
+                "outofmemory",
+                "out of memory",
+                "oom",
+                "cuda_out_of_memory",
+                "out of gpu memory",
+                "allocation failed",
+                "device-side assert",
+            ]
+            if any(kw in output_lower for kw in oom_keywords):
                 is_oom = True
 
         if is_oom:
@@ -365,6 +387,7 @@ def run_experiment(
             if next_bs >= 8:
                 print(f"  ⚠ CUDA OOM detected at batch size {current_bs}! Retrying with batch size {next_bs}...")
                 current_bs = next_bs
+                oom_retries += 1
                 continue
             else:
                 print(f"  ⚠ CUDA OOM detected at batch size {current_bs}, but cannot reduce batch size further (minimum is 8).")
@@ -391,8 +414,8 @@ def run_experiment(
     if cell_output_dir.exists():
         subdirs = [d for d in cell_output_dir.iterdir() if d.is_dir()]
         if subdirs:
-            # Pick the single timestamped subdirectory created by the harness run
-            report_dir = subdirs[0]
+            # Sort by modification time to pick the newest one (the successful run)
+            report_dir = max(subdirs, key=lambda d: d.stat().st_mtime)
 
     if not report_dir:
         print(f"  ⚠ Could not resolve Run dir inside {cell_output_dir}")
@@ -412,10 +435,10 @@ def run_experiment(
     with open(report_path) as f:
         report = json.load(f)
 
-    # Extract TPS metrics
-    batch_metrics = report.get("metrics", {}).get("batch", {}) or {}
-    extrapolation = report.get("extrapolation", {}) or {}
-    runtime = report.get("runtime", {}) or {}
+    # Extract TPS metrics using safe helper to prevent AttributeError on None values
+    batch_metrics = _safe_get(report, "metrics", "batch") or {}
+    extrapolation = _safe_get(report, "extrapolation") or {}
+    runtime = _safe_get(report, "runtime") or {}
 
     mean_tps = batch_metrics.get("mean_tps")
     if mean_tps is None:
@@ -461,6 +484,8 @@ def run_experiment(
         "paged_attention": "✓" if experiment.get("paged") else "✗",
         "continuous_batching": "✓" if experiment.get("continuous") else "✗",
         "batch_size": current_bs,
+        "initial_batch_size": base_bs,
+        "oom_retries": oom_retries,
     }
 
 
