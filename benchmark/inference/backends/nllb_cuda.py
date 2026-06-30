@@ -133,6 +133,11 @@ class NLLBCUDABackend(InferenceBackend):
 
         model_cls = T5ForConditionalGeneration if _is_madlad else AutoModelForSeq2SeqLM
 
+        # T5ForConditionalGeneration/MADLAD does not support SDPA in transformers yet.
+        # Always use eager attention for MADLAD to avoid ValueError.
+        is_sdpa = self.config.use_flash_attention and not _is_madlad
+        attn_impl = "sdpa" if is_sdpa else "eager"
+
         if single_gpu or n_devs == 1:
             self.model = model_cls.from_pretrained(
                 self.model_path,
@@ -140,7 +145,7 @@ class NLLBCUDABackend(InferenceBackend):
                 trust_remote_code=False,
                 low_cpu_mem_usage=True,
                 device_map=None,
-                attn_implementation="sdpa" if self.config.use_flash_attention else "eager",
+                attn_implementation=attn_impl,
                 **_local_kwargs(self.model_path),
             )
             self.model = self.model.to(self.devices[0])
@@ -160,7 +165,7 @@ class NLLBCUDABackend(InferenceBackend):
                 low_cpu_mem_usage=True,
                 device_map="auto",
                 max_memory=max_memory,
-                attn_implementation="sdpa" if self.config.use_flash_attention else "eager",
+                attn_implementation=attn_impl,
                 **_local_kwargs(self.model_path),
             )
 

@@ -92,13 +92,18 @@ class NLLBMPSBackend(InferenceBackend):
 
         model_cls = T5ForConditionalGeneration if _is_madlad else AutoModelForSeq2SeqLM
 
+        # T5ForConditionalGeneration/MADLAD does not support SDPA in transformers yet.
+        # Always use eager attention for MADLAD to avoid ValueError.
+        is_sdpa = self.config.use_flash_attention and not _is_madlad
+        attn_impl = "sdpa" if is_sdpa else "eager"
+
         try:
             self.model = model_cls.from_pretrained(
                 self.model_path,
                 torch_dtype=dtype,
                 trust_remote_code=False,
                 device_map={"": "mps"},
-                attn_implementation="sdpa" if self.config.use_flash_attention else "eager",
+                attn_implementation=attn_impl,
                 **_local_kwargs(self.model_path),
             )
         except (ImportError, ValueError, RuntimeError) as e:
@@ -108,7 +113,7 @@ class NLLBMPSBackend(InferenceBackend):
                 torch_dtype=dtype,
                 trust_remote_code=False,
                 low_cpu_mem_usage=True,
-                attn_implementation="sdpa" if self.config.use_flash_attention else "eager",
+                attn_implementation=attn_impl,
                 **_local_kwargs(self.model_path),
             )
             self.model = self.model.to(self.devices[0])

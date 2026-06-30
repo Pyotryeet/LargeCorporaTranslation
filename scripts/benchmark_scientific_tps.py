@@ -369,21 +369,24 @@ def run_experiment(
         elapsed = time.time() - t_start
         print(f"  Completed in {elapsed:.0f}s (exit={result.returncode})")
 
-        # Check for CUDA OOM / OutOfMemoryError in stdout or stderr
+        # Check for CUDA OOM / OutOfMemoryError or kernel SIGKILL/SIGSEGV (negative exit codes)
         is_oom = False
         if result.returncode != 0:
-            output_lower = ((result.stdout or "") + (result.stderr or "")).lower()
-            oom_keywords = [
-                "outofmemory",
-                "out of memory",
-                "oom",
-                "cuda_out_of_memory",
-                "out of gpu memory",
-                "allocation failed",
-                "device-side assert",
-            ]
-            if any(kw in output_lower for kw in oom_keywords):
+            if result.returncode in (-9, 137, -11, 139):
                 is_oom = True
+            else:
+                output_lower = ((result.stdout or "") + (result.stderr or "")).lower()
+                oom_keywords = [
+                    "outofmemory",
+                    "out of memory",
+                    "oom",
+                    "cuda_out_of_memory",
+                    "out of gpu memory",
+                    "allocation failed",
+                    "device-side assert",
+                ]
+                if any(kw in output_lower for kw in oom_keywords):
+                    is_oom = True
 
         if is_oom:
             next_bs = current_bs // 2
@@ -540,24 +543,51 @@ def main() -> int:
     output_path = ROOT / "data" / "output" / f"scientific_tps_matrix_{utc_now_str}.csv"
 
     active_runs = _get_active_runs()
+
+    # Load completed keys from DEFAULT_OUTPUT if it exists to allow resuming failed cells
+    completed_keys = set()
+    if DEFAULT_OUTPUT.exists():
+        try:
+            # Copy existing default CSV to the new versioned output path so we preserve it and append to it
+            shutil.copyfile(DEFAULT_OUTPUT, output_path)
+            with open(DEFAULT_OUTPUT, "r", encoding="utf-8-sig") as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    m_id = row.get("model_id")
+                    exp = row.get("experiment")
+                    gps = row.get("gpus")
+                    if m_id and exp and gps:
+                        completed_keys.add((m_id, exp, int(gps)))
+            print(f"  → Found {len(completed_keys)} completed cells in {DEFAULT_OUTPUT.name}.")
+        except Exception as e:
+            print(f"  ⚠ Failed to load/copy default CSV for resume: {e}")
+
+    # Filter out completed cells
+    runs_to_execute = [
+        run for run in active_runs
+        if (run[0], run[3]["label"], run[4]) not in completed_keys
+    ]
     total = len(active_runs)
+    to_run_count = len(runs_to_execute)
 
     print(f"Scientific TPS Benchmark Matrix")
     print(f"  Models:      {len(MODELS)}")
     print(f"  Experiments: {len(EXPERIMENTS)} (some causal-only)")
     print(f"  GPU counts:  {GPU_COUNTS}")
     print(f"  Total cells: {total}")
+    print(f"  Completed:   {len(completed_keys)} (skipped)")
+    print(f"  To execute:  {to_run_count}")
     print(f"  Duration:    {DURATION_SECONDS}s per cell")
     print(f"  Output:      {output_path}")
     print()
 
     rows: list[dict[str, Any]] = []
-    completed = 0
+    completed = len(completed_keys)
     failures = 0
 
     write_header = not output_path.exists()
 
-    for model_id, model_path, model_type, experiment, num_gpus in active_runs:
+    for model_id, model_path, model_type, experiment, num_gpus in runs_to_execute:
         completed += 1
         print(f"\n[{completed}/{total}]", end="")
 
@@ -570,7 +600,7 @@ def main() -> int:
             rows.append(row)
             _write_csv_row(row, output_path, write_header)
             write_header = False
-            print(f"  → Saved ({len(rows)} rows so far)")
+            print(f"  → Saved ({len(completed_keys) + len(rows)} rows so far)")
         else:
             print("  ⚠ Failed cell run recorded as None")
             failures += 1

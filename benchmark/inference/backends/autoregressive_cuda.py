@@ -1028,6 +1028,12 @@ class AutoregressiveCUDABackend(InferenceBackend):
         if self.backend_name == "cuda":
             n_devs = self.device_info.num_devices if self.device_info else 1
 
+            # Continuous batching uses dynamic batch sizes and padding that cause
+            # RuntimeError shape mismatches with PyTorch SDPA (Flash attention).
+            # Force fall back to eager attention for continuous batching runs.
+            is_sdpa = self.use_flash_attention and not self._use_continuous_batching
+            attn_impl = "sdpa" if is_sdpa else "eager"
+
             # ── Single-GPU vs multi-GPU dispatch ──
             # device_map="auto" splits even a 1.7B-param model across 2 GPUs,
             # adding NCCL cross-device overhead for every attention layer.
@@ -1066,7 +1072,7 @@ class AutoregressiveCUDABackend(InferenceBackend):
                     torch_dtype=dtype, trust_remote_code=False,
                     low_cpu_mem_usage=True,
                     device_map=None,  # no sharding → single GPU
-                    attn_implementation="sdpa" if self.use_flash_attention else "eager",
+                    attn_implementation=attn_impl,
                     **_local_kwargs(self.model_path),
                 )
                 self.model = self.model.to(self.devices[0])
@@ -1081,7 +1087,7 @@ class AutoregressiveCUDABackend(InferenceBackend):
                     torch_dtype=dtype, trust_remote_code=False,
                     low_cpu_mem_usage=True,
                     device_map="auto", max_memory=max_memory,
-                    attn_implementation="sdpa" if self.use_flash_attention else "eager",
+                    attn_implementation=attn_impl,
                     **_local_kwargs(self.model_path),
                 )
         elif self.backend_name == "mps":
@@ -1118,11 +1124,13 @@ class AutoregressiveCUDABackend(InferenceBackend):
                     **_local_kwargs(self.model_path),
                 )
         else:
+            is_sdpa = self.use_flash_attention and not self._use_continuous_batching
+            attn_impl = "sdpa" if is_sdpa else "eager"
             self.model = AutoModelForCausalLM.from_pretrained(
                 self.model_path,
                 dtype=dtype, trust_remote_code=False,
                 low_cpu_mem_usage=True,
-                attn_implementation="sdpa" if self.use_flash_attention else "eager",
+                attn_implementation=attn_impl,
                 **_local_kwargs(self.model_path),
             )
 
